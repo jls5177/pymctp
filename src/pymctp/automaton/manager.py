@@ -4,15 +4,15 @@ import threading
 from dataclasses import field
 from enum import Enum
 from threading import Thread
-from typing import Union, Optional, Dict, Any, Protocol, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, Union, runtime_checkable
 
 from mashumaro import DataClassDictMixin, field_options
 from mashumaro.config import BaseConfig
 from scapy.supersocket import SuperSocket
 
 from pymctp.automaton import EndpointSession, SimpleEndpointAM
-from pymctp.exerciser import QemuI2CNetDevSocket, AardvarkI2CSocket, QemuI3CCharDevSocket
-from pymctp.layers.mctp import Smbus7bitAddress, EndpointContext
+from pymctp.exerciser import AardvarkI2CSocket, QemuI2CNetDevSocket, QemuI3CCharDevSocket
+from pymctp.layers.mctp import EndpointContext, Smbus7bitAddress
 
 
 class ConfigTypes(str, Enum):
@@ -41,7 +41,7 @@ class CharDevSocketConfig(DataClassDictMixin):
     mrl: int = 256
     dynamic_addr: int = 0
 
-    socket: Optional[QemuI3CCharDevSocket] = field(default=None, init=False,
+    socket: QemuI3CCharDevSocket | None = field(default=None, init=False,
                                                    metadata={'serialize': pickle.dumps, 'deserialize': pickle.loads})
 
     def __post_init__(self):
@@ -60,7 +60,7 @@ class UdpSocketConfig(DataClassDictMixin):
     name: str
     iface: str = "localhost"
 
-    socket: Optional[QemuI2CNetDevSocket] = field(default=None, init=False,
+    socket: QemuI2CNetDevSocket | None = field(default=None, init=False,
                                                   metadata={'serialize': pickle.dumps, 'deserialize': pickle.loads})
 
     def __post_init__(self):
@@ -84,7 +84,7 @@ class AardvarkConfig(DataClassDictMixin):
     serial_number: str
     name: str
 
-    socket: Optional[AardvarkI2CSocket] = field(default=None, init=False,
+    socket: AardvarkI2CSocket | None = field(default=None, init=False,
                                                 metadata={'serialize': pickle.dumps, 'deserialize': pickle.loads})
 
     class Config(BaseConfig):
@@ -105,7 +105,7 @@ class AardvarkConfig(DataClassDictMixin):
         self.socket.close()
 
 
-def deserialize_supersocket(value: Dict) -> Union[AardvarkConfig, UdpSocketConfig, CharDevSocketConfig]:
+def deserialize_supersocket(value: dict) -> AardvarkConfig | UdpSocketConfig | CharDevSocketConfig:
     config_type = value.get("type")
     if config_type == ConfigTypes.Socket:
         return UdpSocketConfig.from_dict(value)
@@ -114,14 +114,15 @@ def deserialize_supersocket(value: Dict) -> Union[AardvarkConfig, UdpSocketConfi
     elif config_type == ConfigTypes.CharDev:
         return CharDevSocketConfig.from_dict(value)
     else:
-        raise ValueError(f"Unknown config type {config_type}")
+        msg = f"Unknown config type {config_type}"
+        raise ValueError(msg)
 
 
 @dataclasses.dataclass()
 class EndpointConfig(DataClassDictMixin):
     context: EndpointContext
-    config: Union[AardvarkConfig, UdpSocketConfig, CharDevSocketConfig]
-    thread_kwargs: Dict[str, Any] = field(default_factory=lambda: dict())
+    config: AardvarkConfig | UdpSocketConfig | CharDevSocketConfig
+    thread_kwargs: dict[str, Any] = field(default_factory=dict)
 
     class Config(BaseConfig):
         serialization_strategy = {
@@ -139,7 +140,7 @@ class EndpointManager:
     thread: Thread
 
     @classmethod
-    def from_config(cls, config: Dict[Any, Any], start_thread=True):
+    def from_config(cls, config: dict[Any, Any], start_thread=True):
         cfg = EndpointConfig.from_dict(config)
         print(f"DEBUG: {cfg or 'None'}")
         socket = cfg.config.socket

@@ -1,25 +1,25 @@
 from collections import OrderedDict, defaultdict
+from collections import OrderedDict as OrderedDictType
 from pathlib import Path
-from typing import List, Optional, Dict
-from typing import OrderedDict as OrderedDictType
+from typing import Dict, List, Optional
 
 import crc8
 from scapy.compat import raw
 from scapy.layers.l2 import CookedLinux, CookedLinuxV2
 from scapy.utils import rdpcap
 
-from .transport import TransportHdrPacket
-from .types import AnyPacketType, EndpointContext, MsgTypes, MctpResponseList, MctpResponse
 from .control import ControlHdrPacket
-from .pldm import PldmHdrPacket, PldmTypeCodes, PldmControlCmdCodes, PldmPlatformMonitoringCmdCodes
+from .pldm import PldmControlCmdCodes, PldmHdrPacket, PldmPlatformMonitoringCmdCodes, PldmTypeCodes
+from .transport import TransportHdrPacket
+from .types import AnyPacketType, EndpointContext, MctpResponse, MctpResponseList, MsgTypes
 
 
-def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext) -> Optional[MctpResponseList]:
+def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext) -> MctpResponseList | None:
     if not resp_file.name.endswith(".dump") and not resp_file.name.endswith(".pcap"):
         return
-    pending_reqs: List[AnyPacketType] = list()
+    pending_reqs: list[AnyPacketType] = []
     responses: OrderedDictType[int, MctpResponse] = OrderedDict()
-    responseList: Dict[MsgTypes, List[MctpResponse]] = defaultdict(list)
+    responseList: dict[MsgTypes, list[MctpResponse]] = defaultdict(list)
     for packet in rdpcap(str(resp_file.resolve())):
         tx_packet = packet.pkttype == 4
         # prefix = '<TX<' if tx_packet else '>RX>'
@@ -38,7 +38,7 @@ def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext)
                 continue
             if packet.to == req.to:
                 continue
-            if req.dst != packet.src and req.dst != 0:
+            if req.dst not in (packet.src, 0):
                 continue
             original_req = req
             break
@@ -53,7 +53,8 @@ def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext)
             req = raw(original_req.getlayer(ControlHdrPacket))[1:]
             rsp = raw(packet.getlayer(ControlHdrPacket))[1:]
             if req in responses:
-                raise SystemExit("Found a duplicate request, stop and fix...")
+                msg = "Found a duplicate request, stop and fix..."
+                raise SystemExit(msg)
             mctp_resp = MctpResponse(request=list(req), response=list(rsp), processing_delay=0,
                                      description=original_req.getlayer(ControlHdrPacket).summary())
             responses[req] = mctp_resp
@@ -62,7 +63,8 @@ def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext)
             req = raw(original_req.getlayer(PldmHdrPacket))[1:]
             rsp = raw(packet.getlayer(PldmHdrPacket))[1:]
             if req in responses and responses[req].response == rsp:
-                raise SystemExit("Found a duplicate request, stop and fix...")
+                msg = "Found a duplicate request, stop and fix..."
+                raise SystemExit(msg)
             type_code = PldmTypeCodes(original_req.pldm_type)
             if original_req.pldm_type == PldmTypeCodes.CONTROL:
                 cmd_code_str = PldmControlCmdCodes(original_req.cmd_code).name

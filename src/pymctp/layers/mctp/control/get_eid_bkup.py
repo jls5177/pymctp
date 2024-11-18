@@ -1,11 +1,11 @@
 import dataclasses
 from enum import Enum
-from typing import Type, Optional
+from typing import Optional, Type
 
 from scapy.fields import BitEnumField, BitField, XByteField
 from scapy.packet import Packet
 
-from .control import ContrlCmdCodes, AutobindControlMsg, RqBit
+from .control import AutobindControlMsg, ContrlCmdCodes, RqBit
 
 
 @AutobindControlMsg(ContrlCmdCodes.GetEndpointID, RqBit.REQUEST)
@@ -26,15 +26,15 @@ class EndpointIDType(Enum):
     """The endpoint uses a dynamic EID only"""
 
     STATIC_EID_SUPPORTED = 1
-    """The EID returned by this command reflects the present setting and may or 
+    """The EID returned by this command reflects the present setting and may or
     may not match the static EID value."""
 
     STATIC_EID_MATCH = 2
-    """The endpoint has been configured with a static EID. The present value is 
+    """The endpoint has been configured with a static EID. The present value is
     the same as the static value."""
 
     STATIC_EID_MISMATCH = 3
-    """ Endpoint has been configured with a static EID. The present value is 
+    """ Endpoint has been configured with a static EID. The present value is
     different than the static value"""
 
 
@@ -43,16 +43,16 @@ from dataclasses import (  # type: ignore
     _FIELD,
     _FIELD_INITVAR,
     _FIELDS,
+    _HAS_DEFAULT_FACTORY,
     _POST_INIT_NAME,
-    _get_field,
+    MISSING,
+    _create_fn,
     _field_init,
+    _get_field,
     _init_fn,
     _init_param,
-    _set_new_attribute,
-    MISSING,
-    _HAS_DEFAULT_FACTORY,
-    _create_fn,
     _process_class,
+    _set_new_attribute,
 )
 
 
@@ -68,7 +68,7 @@ def get_class_fields(cls, /, *, kw_only=False):
 def datapacketclass_wrapper(cls=None, /, *, init=True, repr=True, eq=True, order=False,
                             unsafe_hash=False, frozen=False, match_args=True,
                             kw_only=False, slots=False, weakref_slot=False):
-    print(f"DC2 decorator called")
+    print("DC2 decorator called")
 
     def wrap(cls):
         # convert all fields to initvars to prevent trying to set the value in the generated init method
@@ -92,7 +92,7 @@ def datapacketclass_wrapper(cls=None, /, *, init=True, repr=True, eq=True, order
 
 
 def datapacketclass(cls=None, /, *, kw_only=False):
-    print(f"DC decorator called")
+    print("DC decorator called")
 
     def wrap(cls):
         return add_custom_init_fn(cls)
@@ -102,8 +102,8 @@ def datapacketclass(cls=None, /, *, kw_only=False):
     return wrap(cls)
 
 
-def datapacketclass3(cls=None, /, *, packet_cls_name: str = None):
-    print(f"DC3 decorator called")
+def datapacketclass3(cls=None, /, *, packet_cls_name: str | None = None):
+    print("DC3 decorator called")
 
     def wrap(cls):
         return add_new_fn(cls, packet_cls_name=packet_cls_name)
@@ -113,7 +113,7 @@ def datapacketclass3(cls=None, /, *, packet_cls_name: str = None):
     return wrap(cls)
 
 
-def add_post_init_fn(cls: Type[Packet], /, *, kw_only=False):
+def add_post_init_fn(cls: type[Packet], /, *, kw_only=False):
     fields = get_class_fields(cls, kw_only=kw_only)
     globals_ = sys.modules[cls.__module__].__dict__
     # setattr(cls, _FIELDS, fields)
@@ -128,7 +128,7 @@ def add_post_init_fn(cls: Type[Packet], /, *, kw_only=False):
     })
 
     body_lines = ['vals = list(args)']
-    for idx, f in enumerate(fields):
+    for _idx, f in enumerate(fields):
         line = f'kwargs["{f.name}"] = vals.pop(0) if len(vals) else None'
         if line:
             body_lines.append(line)
@@ -139,14 +139,14 @@ def add_post_init_fn(cls: Type[Packet], /, *, kw_only=False):
     _set_new_attribute(
         cls,
         "__original_init__",
-        getattr(cls, "__init__")
+        cls.__init__
     )
 
     _set_new_attribute(
         cls,
         "__post_init__",
         _create_fn('__post_init__',
-                   [self_name, '*args'] + _init_params + ['**kwargs'],
+                   [self_name, '*args', *_init_params, '**kwargs'],
                    body_lines,
                    locals=locals,
                    globals=globals_,
@@ -158,7 +158,7 @@ def add_post_init_fn(cls: Type[Packet], /, *, kw_only=False):
     return cls
 
 
-def add_custom_init_fn(cls: Type[Packet]):
+def add_custom_init_fn(cls: type[Packet]):
     # fields = [
     #     _get_field(cls, f.name, type(f), True) for f in cls.fields_desc
     # ]
@@ -191,14 +191,14 @@ def add_custom_init_fn(cls: Type[Packet]):
     _set_new_attribute(
         cls,
         "__dataclass_init__",
-        getattr(cls, "__init__")
+        cls.__init__
     )
 
     _set_new_attribute(
         cls,
         "__init__",
         _create_fn('__init__',
-                   [self_name, '*args'] + _init_params + ['**kwargs'],
+                   [self_name, '*args', *_init_params, '**kwargs'],
                    body_lines,
                    locals=locals,
                    globals=globals_,
@@ -210,7 +210,7 @@ def add_custom_init_fn(cls: Type[Packet]):
     return cls
 
 
-def add_new_fn(cls: Type[Packet], /, *, packet_cls_name: str = None):
+def add_new_fn(cls: type[Packet], /, *, packet_cls_name: str | None = None):
     # fields = [
     #     _get_field(cls, f.name, type(f), True) for f in cls.fields_desc
     # ]
@@ -243,7 +243,7 @@ def add_new_fn(cls: Type[Packet], /, *, packet_cls_name: str = None):
         cls,
         "__new__",
         _create_fn('__new__',
-                   [self_name, '*args'] + _init_params + ['**kwargs'],
+                   [self_name, '*args', *_init_params, '**kwargs'],
                    body_lines,
                    locals=locals,
                    globals=globals_,
@@ -396,9 +396,9 @@ class GetEndpointIDResponseV9b(Packet):
     # medium_specific: int = dataclasses.field(init=True)
 
     eid: dataclasses.InitVar[int]
-    endpoint_type: dataclasses.InitVar[Optional[EndpointType]]
-    endpoint_id_type: dataclasses.InitVar[Optional[EndpointIDType]]
-    medium_specific: dataclasses.InitVar[Optional[int]]
+    endpoint_type: dataclasses.InitVar[EndpointType | None]
+    endpoint_id_type: dataclasses.InitVar[EndpointIDType | None]
+    medium_specific: dataclasses.InitVar[int | None]
 
     fields_desc = [
         XByteField("eid", 0),
@@ -423,9 +423,9 @@ class GetEndpointIDResponseV9b(Packet):
 # @datapacketclass3(packet_cls_name='GetEndpointIDResponsePacket')
 class GetEndpointIDResponseV9c:
     eid: int
-    endpoint_type: Optional[EndpointType]
-    endpoint_id_type: Optional[EndpointIDType]
-    medium_specific: Optional[int]
+    endpoint_type: EndpointType | None
+    endpoint_id_type: EndpointIDType | None
+    medium_specific: int | None
 
     class GetEndpointIDResponsePacket(Packet):
         fields_desc = [
@@ -466,9 +466,9 @@ class GetEndpointIDResponseV9d:
         ]
 
     def __new__(cls, eid: int,
-                endpoint_type: Optional[EndpointType] = None,
-                endpoint_id_type: Optional[EndpointIDType] = None,
-                medium_specific: Optional[int] = None):
+                endpoint_type: EndpointType | None = None,
+                endpoint_id_type: EndpointIDType | None = None,
+                medium_specific: int | None = None):
         return GetEndpointIDResponseV9c.GetEndpointIDResponsePacket(eid=eid,
                                                                     endpoint_type=endpoint_type,
                                                                     endpoint_id_type=endpoint_id_type,
@@ -482,10 +482,10 @@ class GetEndpointIDResponseV5(Packet):
     endpoint_id_type: EndpointIDType
     medium_specific: int
 
-    def __init__(self, *args, eid: int = None,
+    def __init__(self, *args, eid: int | None = None,
                  endpoint_type: EndpointType = None,
                  endpoint_id_type: EndpointIDType = None,
-                 medium_specific: int = None,
+                 medium_specific: int | None = None,
                  **kwargs):
         super().__init__(*args, **kwargs)
     # self.__post_init__(*args, **kwargs)

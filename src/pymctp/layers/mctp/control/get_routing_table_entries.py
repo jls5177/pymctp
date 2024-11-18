@@ -1,16 +1,19 @@
-from typing import Tuple, Union, Dict, Any, List
+from typing import Any, Dict, List, Tuple, Union
 
-from scapy.fields import XByteField, FieldLenField, FieldListField, BitEnumField, BitField, PacketListField
+from scapy.fields import BitEnumField, BitField, FieldLenField, FieldListField, PacketListField, XByteField
 from scapy.packet import Packet
 
-from .control import (
-    AutobindControlMsg,
-    set_control_fields, ControlHdr, ControlHdrPacket, RqBit,
-)
-from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
+from ...helpers import AllowRawSummary
 from .. import EndpointContext
 from ..types import AnyPacketType, EntryType, RoutingTableEntry
-from ...helpers import AllowRawSummary
+from .control import (
+    AutobindControlMsg,
+    ControlHdr,
+    ControlHdrPacket,
+    RqBit,
+    set_control_fields,
+)
+from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
 class RoutingTableEntryPacket(AllowRawSummary, Packet):
@@ -33,7 +36,7 @@ class RoutingTableEntryPacket(AllowRawSummary, Packet):
         """Required to ensure remaining bytes are properly transferred into next entry"""
         return b"", p
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data = {}
         for f in self.fields_desc:
             value = getattr(self, f.name)
@@ -65,16 +68,16 @@ class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
         ]
     )
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         # if we made it hear then the msg_type is unsupported
         # 0x80: message type number not supported
         if not ctx.routing_table_ready:
             return CompletionCodes.ERROR_NOT_READY, None
-        
+
         rt_entries = [NewRoutingTableEntry(e) for e in ctx.routing_table]
         return CompletionCodes.SUCCESS, GetRoutingTableEntriesResponse(next_entry_handle=0xFF, entries=rt_entries)
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} ("
         if self.underlayer.getfieldval('rq') == RqBit.REQUEST.value:
             summary += f"hdl=0x{self.entry_handle:02X})"
@@ -84,7 +87,7 @@ class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
                 summary += f" [0x{entry.starting_eid:02X}:{entry.eid_range}]"
         return summary, [ControlHdrPacket]
 
-def GetRoutingTableEntries(_pkt: Union[bytes, bytearray] = b"", /, *,
+def GetRoutingTableEntries(_pkt: bytes | bytearray = b"", /, *,
                            entry_handle: int = 0) -> GetRoutingTableEntriesPacket:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.GetRoutingTableEntries)
     if _pkt:
@@ -95,9 +98,9 @@ def GetRoutingTableEntries(_pkt: Union[bytes, bytearray] = b"", /, *,
     )
 
 
-def GetRoutingTableEntriesResponse(_pkt: Union[bytes, bytearray] = b"", /, *,
+def GetRoutingTableEntriesResponse(_pkt: bytes | bytearray = b"", /, *,
                                    next_entry_handle: int,
-                                   entries: List[int] = None) -> GetRoutingTableEntriesPacket:
+                                   entries: list[int] | None = None) -> GetRoutingTableEntriesPacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetRoutingTableEntries)
     if _pkt:
         return GetRoutingTableEntriesPacket(_pkt, _underlayer=hdr)

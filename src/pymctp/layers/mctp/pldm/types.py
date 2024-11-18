@@ -30,29 +30,29 @@ class CompletionCodes(IntEnum):
     """The Request was accepted and completed normally."""
 
     ERROR = 1
-    """This is a generic failure message. (It should not be used 
+    """This is a generic failure message. (It should not be used
     when a more specific result code applies.)"""
 
     ERROR_INVALID_DATA = 2
-    """The packet payload contained invalid data or an illegal 
+    """The packet payload contained invalid data or an illegal
     parameter value."""
 
     ERROR_INVALID_LENGTH = 3
-    """The message length was invalid. (The Message body 
-    was larger or smaller than expected for the particular 
+    """The message length was invalid. (The Message body
+    was larger or smaller than expected for the particular
     request.)"""
 
     ERROR_NOT_READY = 4
-    """The Receiver is in a transient state where it is not ready 
+    """The Receiver is in a transient state where it is not ready
     to receive the corresponding message."""
 
     ERROR_UNSUPPORTED_CMD = 5
-    """The command field in the control type of the received 
-    message is unspecified or not supported on this 
-    endpoint. This completion code shall be returned for any 
-    unsupported command values received in MCTP control 
+    """The command field in the control type of the received
+    message is unspecified or not supported on this
+    endpoint. This completion code shall be returned for any
+    unsupported command values received in MCTP control
     Request messages."""
 
     ERROR_INVALID_PLDM_TYPE = 32
-    """The PLDM Type field value in the PLDM request 
+    """The PLDM Type field value in the PLDM request
     message is invalid or unsupported."""

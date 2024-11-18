@@ -1,8 +1,7 @@
-from typing import Protocol, runtime_checkable, TypeVar
+from typing import Protocol, TypeVar, runtime_checkable
 
 from scapy.packet import Packet
 from scapy.plist import PacketList
-
 
 AnyPacketType = TypeVar('AnyPacketType', Packet, PacketList, None)
 

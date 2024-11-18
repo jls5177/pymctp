@@ -1,42 +1,39 @@
 from enum import IntEnum
-from typing import Tuple, Union, List
+from typing import List, Tuple, Union
 
 from scapy.fields import BitEnumField, BitField, XByteField
 from scapy.packet import Packet
 
-from .control import (
-    AutobindControlMsg,
-    ControlHdr, set_control_fields, ControlHdrPacket
-)
-from .types import CompletionCodes, CompletionCode, ContrlCmdCodes
 from .. import EndpointContext, TransportHdrPacket
 from ..types import AnyPacketType
+from .control import AutobindControlMsg, ControlHdr, ControlHdrPacket, set_control_fields
+from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
 class SetEndpointIDOperation(IntEnum):
     SetEID = 0
-    """Submit an EID for assignment. The given EID will be accepted conditional upon which bus the device received 
-    the EID from (see preceding text). A device where the endpoint is only reached through one bus shall always 
+    """Submit an EID for assignment. The given EID will be accepted conditional upon which bus the device received
+    the EID from (see preceding text). A device where the endpoint is only reached through one bus shall always
     accept this operation (provided the EID value is legal)."""
 
     ForceEID = 1
-    """Force EID assignment. The given EID will be accepted regardless of whether the EID was already assigned 
-    through another bus. Note that if the endpoint is forcing, the EID assignment changes which bus is being tracked 
-    as the originator of the Set Endpoint ID command. A device where the endpoint is only reached through one bus 
-    shall always accept this operation (provided the EID value is legal), in which case the Set EID and Force EID 
+    """Force EID assignment. The given EID will be accepted regardless of whether the EID was already assigned
+    through another bus. Note that if the endpoint is forcing, the EID assignment changes which bus is being tracked
+    as the originator of the Set Endpoint ID command. A device where the endpoint is only reached through one bus
+    shall always accept this operation (provided the EID value is legal), in which case the Set EID and Force EID
     operations are equivalent."""
 
     ResetEID = 2
-    """This option only applies to endpoints that support static EIDs. If static EIDs are supported, the endpoint 
-    shall restore the EID to the statically configured EID value. The EID value in byte 2 shall be ignored. An 
+    """This option only applies to endpoints that support static EIDs. If static EIDs are supported, the endpoint
+    shall restore the EID to the statically configured EID value. The EID value in byte 2 shall be ignored. An
     ERROR_INVALID_DATA completion code shall be returned if this operation is not supported."""
 
     SetDiscoveredFlag = 3
-    """Set Discovered flag to the “discovered” state only. Do not change present EID setting. The EID value in byte 2 
-    shall be ignored. 
-    
-    Note that Discovered flag is only used for some physical transport bindings. An 
-    ERROR_INVALID_DATA completion code shall be returned if this operation is selected and the particular transport 
+    """Set Discovered flag to the “discovered” state only. Do not change present EID setting. The EID value in byte 2
+    shall be ignored.
+
+    Note that Discovered flag is only used for some physical transport bindings. An
+    ERROR_INVALID_DATA completion code shall be returned if this operation is selected and the particular transport
     binding does not support a Discovered flag."""
 
 
@@ -66,16 +63,16 @@ class SetEndpointIDPacket(Packet):
             BitEnumField("eid_allocation_status", 0, 2, SetEndpointIDAllocationStatus),
             XByteField("eid_setting", 0),
             XByteField("eid_pool_size", 0),
-        ]
+        ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} ("
-        if self.underlayer.getfieldval('rq') == 0:
-            summary += f"assign_status: "
+        if self.underlayer.getfieldval("rq") == 0:
+            summary += "assign_status: "
             summary += "accepted, " if self.eid_assignment_status == 0 else "rejected, "
 
-            summary += f"eid_alloc_status: "
+            summary += "eid_alloc_status: "
             if self.eid_allocation_status == SetEndpointIDAllocationStatus.NO_EID_POOL_REQUIRED.value:
                 summary += "no_pool, "
             elif self.eid_allocation_status == SetEndpointIDAllocationStatus.EID_POOL_REQUIRED.value:
@@ -94,16 +91,16 @@ class SetEndpointIDPacket(Packet):
                 summary += "reset"
             elif self.op == SetEndpointIDOperation.SetDiscoveredFlag.value:
                 summary += "set_disc"
-        summary += f")"
+        summary += ")"
         return summary, [ControlHdrPacket, TransportHdrPacket]
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         cmplt_code = CompletionCodes.SUCCESS
         op: SetEndpointIDOperation = self.op
         eid: int = self.eid
 
         assignment_status = SetEndpointIDAssignmentStatus.REJECTED
-        if op == SetEndpointIDOperation.SetEID or op == SetEndpointIDOperation.ForceEID:
+        if op in (SetEndpointIDOperation.SetEID, SetEndpointIDOperation.ForceEID):
             ctx.assigned_eid = eid
             ctx.discovered = True
             assignment_status = SetEndpointIDAssignmentStatus.ACCEPTED
@@ -140,11 +137,13 @@ def SetEndpointID(*args, op: SetEndpointIDOperation, eid: int) -> Packet:
     )
 
 
-def SetEndpointIDResponse(*args,
-                          eid_assignment_status: SetEndpointIDAssignmentStatus,
-                          eid_allocation_status: SetEndpointIDAllocationStatus,
-                          eid_setting: int,
-                          eid_pool_size: int) -> Packet:
+def SetEndpointIDResponse(
+    *args,
+    eid_assignment_status: SetEndpointIDAssignmentStatus,
+    eid_allocation_status: SetEndpointIDAllocationStatus,
+    eid_setting: int,
+    eid_pool_size: int,
+) -> Packet:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.SetEndpointID)
     if len(args):
         return SetEndpointIDPacket(*args, _underlayer=hdr)

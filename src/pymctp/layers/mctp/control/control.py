@@ -1,24 +1,26 @@
+from collections.abc import Callable
 from enum import IntEnum
-from typing import Type, Optional, Union, Any, List, Callable, Tuple
+from typing import Any, List, Optional, Tuple, Type, Union
 
 from scapy.config import conf
 from scapy.fields import (
+    AnyField,
     BitEnumField,
     BitField,
     ByteEnumField,
     ConditionalField,
+    Emph,
     Field,
     XBitField,
     XByteField,
-    AnyField, Emph
 )
 from scapy.packet import Packet, bind_layers
 
-from . import IControlMsgCanReply, ContrlCmdCodes
-from .. import EndpointContext
-from ..transport import AutobindMessageType, MsgTypes, TransportHdrPacket, SmbusTransportPacket
-from ..types import AnyPacketType
 from ...helpers import AllowRawSummary
+from .. import EndpointContext
+from ..transport import AutobindMessageType, MsgTypes, SmbusTransportPacket, TransportHdrPacket
+from ..types import AnyPacketType
+from . import ContrlCmdCodes, IControlMsgCanReply
 
 
 class RqBit(IntEnum):
@@ -41,13 +43,13 @@ class ControlHdrPacket(AllowRawSummary, Packet):
         ),
     ]
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         rqType = 'REQ' if self.rq == RqBit.REQUEST.value else 'RSP'
         summary = f"CONTROL {rqType} (instance_id: {self.instance_id}, cmd_code={self.cmd_code}"
         if self.rq == RqBit.RESPONSE.value:
             summary += f", completion_code={self.completion_code})"
         else:
-            summary += f")"
+            summary += ")"
         return summary, [TransportHdrPacket, SmbusTransportPacket]
 
     def answers(self, other: Packet) -> int:
@@ -85,11 +87,11 @@ class ControlHdrPacket(AllowRawSummary, Packet):
 
 
 def ControlHdr(*args,
-               rq: Union[bool | RqBit] = RqBit.RESPONSE,
+               rq: bool | RqBit = RqBit.RESPONSE,
                d: bool = False,
                instance_id: int = 0,
                cmd_code: ContrlCmdCodes = ContrlCmdCodes.GetEndpointID,
-               completion_code: Optional[int] = 0) -> ControlHdrPacket:
+               completion_code: int | None = 0) -> ControlHdrPacket:
     if len(args):
         return ControlHdrPacket(*args)
     return ControlHdrPacket(rq=0 if not rq or rq in [False, RqBit.RESPONSE, 0] else 1,
@@ -103,7 +105,7 @@ class AutobindControlMsg:
     def __init__(self, cmd_code: ContrlCmdCodes):
         self.cmd_code = cmd_code
 
-    def __call__(self, cls: Type[Packet]):
+    def __call__(self, cls: type[Packet]):
         cmd_code = self.cmd_code
         # print(f"Binding cls {cls} to cmd_code {cmd_code}:{self.is_request}")
         bind_layers(ControlHdrPacket, cls,
@@ -115,13 +117,14 @@ class AutobindControlMsg:
         return cls
 
 
-def set_control_fields(rq_fields: Optional[List[AnyField]] = None,
-                       rsp_fields: Optional[List[AnyField]] = None) -> List[AnyField]:
+def set_control_fields(rq_fields: list[AnyField] | None = None,
+                       rsp_fields: list[AnyField] | None = None) -> list[AnyField]:
     rq_fields = rq_fields or []
     rsp_fields = rsp_fields or []
 
     def gen_conditional_field(fld: AnyField, cond: Callable[[Packet], bool]):
-        default_cond = lambda pkt: False
+        def default_cond(pkt):
+            return False
         if isinstance(fld, ConditionalField):
             # unwrap the conditional field
             default_cond = fld.cond
@@ -141,7 +144,7 @@ def set_control_fields(rq_fields: Optional[List[AnyField]] = None,
     return fields
 
 
-def response_fields(fields: List[AnyField]) -> List[AnyField]:
+def response_fields(fields: list[AnyField]) -> list[AnyField]:
     """Wraps the list of Fields in a ConditionalField that checks if 'rq==0'"""
     return [ResponseField(fld) for fld in fields]
 

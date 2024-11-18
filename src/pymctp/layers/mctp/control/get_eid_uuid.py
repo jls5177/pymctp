@@ -4,14 +4,14 @@ from typing import Tuple
 from scapy.fields import UUIDField
 from scapy.packet import Packet
 
+from .. import EndpointContext
+from ..types import AnyPacketType
 from .control import (
     AutobindControlMsg,
     ControlHdr,
     set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
-from .. import EndpointContext
-from ..types import AnyPacketType
 
 
 @AutobindControlMsg(ContrlCmdCodes.GetEndpointUUID)
@@ -25,7 +25,7 @@ class GetEndpointUUIDPacket(Packet):
         ]
     )
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.endpoint_uuid:
             return CompletionCodes.ERROR_UNSUPPORTED_CMD, None
         return CompletionCodes.SUCCESS, GetEndpointUUIDResponse(
@@ -41,7 +41,7 @@ def GetEndpointUUID(*args) -> GetEndpointUUIDPacket:
 
 
 def GetEndpointUUIDResponse(*args,
-                            uuid: uuid.UUID = None) -> GetEndpointUUIDPacket:
+                            uuid: uuid.UUID | None = None) -> GetEndpointUUIDPacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetEndpointUUID)
     if len(args):
         return GetEndpointUUIDPacket(*args, _underlayer=hdr)

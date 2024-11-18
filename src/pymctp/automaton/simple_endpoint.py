@@ -1,16 +1,17 @@
 import random
 import time
-from typing import Optional, Union, Callable, cast
+from collections.abc import Callable
+from typing import Optional, Union, cast
 
 from scapy.ansmachine import AnsweringMachine
 from scapy.packet import Packet
-from scapy.plist import _PacketIterable, PacketList  # imported for type hinting on overloaded methods
+from scapy.plist import PacketList, _PacketIterable  # imported for type hinting on overloaded methods
 from scapy.sendrecv import AsyncSniffer
 from scapy.supersocket import SuperSocket
 
-from .sessions import EndpointSession
 from ..layers.mctp.control import ControlHdrPacket
 from ..layers.mctp.types import EndpointContext, ICanReply
+from .sessions import EndpointSession
 
 
 class SimpleEndpointAM(AnsweringMachine):
@@ -44,10 +45,10 @@ class SimpleEndpointAM(AnsweringMachine):
     # removed the "socket" option to allow it to be passed to "parse_options"
     send_options_list = ["iface", "inter", "loop", "verbose"]
 
-    def __init__(self, session: Optional[EndpointSession] = None,
-                 socket: Optional[SuperSocket] = None,
-                 context: Optional[EndpointContext] = None,
-                 timeout: Optional[Union[int, float]] = None,
+    def __init__(self, session: EndpointSession | None = None,
+                 socket: SuperSocket | None = None,
+                 context: EndpointContext | None = None,
+                 timeout: int | float | None = None,
                  **kwargs):
         """
         Overloaded the AnsweringMachine.__init__() to add type hints for class specific parameters.
@@ -64,10 +65,10 @@ class SimpleEndpointAM(AnsweringMachine):
         if self.session:
             self.session.am = self
 
-        self.sniffer: Optional[AsyncSniffer] = None
+        self.sniffer: AsyncSniffer | None = None
         super().__init__(timeout=timeout, **kwargs)
 
-    def sniff(self) -> Optional[PacketList]:
+    def sniff(self) -> PacketList | None:
         """
         Overloaded the AnsweringMachine.sniff() method to always capture the sniffer in an instance attribute
         """
@@ -76,9 +77,9 @@ class SimpleEndpointAM(AnsweringMachine):
         return cast(PacketList, self.sniffer.results)
 
     def parse_options(self,
-                      session: Optional[EndpointSession] = None,
-                      socket: Optional[SuperSocket] = None,
-                      timeout: Optional[Union[int, float]] = None) -> None:
+                      session: EndpointSession | None = None,
+                      socket: SuperSocket | None = None,
+                      timeout: int | float | None = None) -> None:
         """
         Sets up any additional sniffing/sending options that are not part of the
         standard AnsweringMachine.
@@ -103,7 +104,7 @@ class SimpleEndpointAM(AnsweringMachine):
             return req.is_request()
         return req.haslayer(ControlHdrPacket) and req.getlayer(ControlHdrPacket).rq == 1
 
-    def make_reply(self, req: Union[Packet, ICanReply]) -> _PacketIterable:
+    def make_reply(self, req: Packet | ICanReply) -> _PacketIterable:
         """
         Creates a reply to the incoming request (pre-confirmed by is_request())
 
@@ -116,7 +117,7 @@ class SimpleEndpointAM(AnsweringMachine):
         # TODO: add any custom responses here
         return rsp
 
-    def send_reply(self, reply: _PacketIterable, send_function: Optional[Callable[..., None]] = None) -> None:
+    def send_reply(self, reply: _PacketIterable, send_function: Callable[..., None] | None = None) -> None:
         """
         Sends the reply packets (sequentially) on the socket or using the "send_function" (if specified).
 

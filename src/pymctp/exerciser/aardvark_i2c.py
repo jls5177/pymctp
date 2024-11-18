@@ -1,6 +1,7 @@
+import contextlib
 import threading
-from operator import itemgetter
 import time
+from operator import itemgetter
 from typing import List, Optional
 
 from scapy.compat import raw
@@ -9,11 +10,12 @@ from scapy.packet import Packet
 from scapy.supersocket import SuperSocket
 from scapy.utils import hexdump
 
-from pymctp.layers.mctp import SmbusTransport, Smbus7bitAddress
+from pymctp.layers.mctp import Smbus7bitAddress, SmbusTransport
 
 try:
-    import pyaardvark
     from array import array
+
+    import pyaardvark
 except RuntimeError:
     # ignore the missing library as this might not be needed in all deployments
     pyaardvark = None
@@ -24,26 +26,28 @@ class AardvarkI2CSocket(SuperSocket):
 
     def __init__(self,
                  slave_address: Smbus7bitAddress,
-                 port: Optional[int] = None,
-                 serial_number: Optional[str] = None,
+                 port: int | None = None,
+                 serial_number: str | None = None,
                  enable_i2c_pullups: bool = False,
                  enable_target_power: bool = False,
                  slave_only: bool = False,
                  **kwargs):
         if pyaardvark is None:
-            raise RuntimeError("Failed to load pyaardvark library. Confirm if environment is bootstrapped.")
+            msg = "Failed to load pyaardvark library. Confirm if environment is bootstrapped."
+            raise RuntimeError(msg)
 
         self._slave_address = slave_address
         self._port = port
         self._serial_number = serial_number
         self._enable_i2c_pullups = enable_i2c_pullups
         self._enable_target_power = enable_target_power
-        self._dev: Optional[pyaardvark.Aardvark] = None
+        self._dev: pyaardvark.Aardvark | None = None
         self._lock = threading.Lock()
         self._slave_only = slave_only
 
         if not self.connect():
-            raise RuntimeError(f"Failed to open connection to Aardvark adapter: {slave_address}, {port}")
+            msg = f"Failed to open connection to Aardvark adapter: {slave_address}, {port}"
+            raise RuntimeError(msg)
 
     def connect(self) -> bool:
         """
@@ -77,10 +81,8 @@ class AardvarkI2CSocket(SuperSocket):
         Overloaded Packet.send() method to send data using Aardvark APIs
         """
         sx = raw(x)
-        try:
+        with contextlib.suppress(AttributeError):
             x.sent_time = time.time()
-        except AttributeError:
-            pass
 
         hexdump(sx)
 
@@ -102,13 +104,13 @@ class AardvarkI2CSocket(SuperSocket):
                 # the return value is not checked, just raise the exception
                 pass
             raise
-        except IOError as ioerr:
+        except OSError as ioerr:
             print(f"Aardvark write failed: {ioerr}")
             raise
 
         return len(sx)
 
-    def recv(self, x: int = MTU) -> Optional[Packet]:
+    def recv(self, x: int = MTU) -> Packet | None:
         """
         Receives any pending data written to the slave address. Callers should first call "select()" to wait
         for data to be available to be received. This API call will sleep waiting for data if the buffer is
@@ -135,7 +137,7 @@ class AardvarkI2CSocket(SuperSocket):
             return pkt
 
     @staticmethod
-    def select(sockets: List[SuperSocket], remain: Optional[float] = None) -> List[SuperSocket]:
+    def select(sockets: list[SuperSocket], remain: float | None = None) -> list[SuperSocket]:
         """
         This function is called during sendrecv() routine to select
         the available sockets.
@@ -147,7 +149,8 @@ class AardvarkI2CSocket(SuperSocket):
         """
         aardvark_socks = [sock for sock in sockets if isinstance(sock, AardvarkI2CSocket)]
         if len(aardvark_socks) != 1:
-            raise RuntimeError("AardvarkI2C can only monitor a single socket at a time")
+            msg = "AardvarkI2C can only monitor a single socket at a time"
+            raise RuntimeError(msg)
         self = aardvark_socks[0]
 
         # convert timeout to milliseconds

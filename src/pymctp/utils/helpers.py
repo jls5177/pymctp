@@ -4,12 +4,12 @@ Note: these should not be used internally within the PyMCTP package to prevent
       circular dependencies.
 """
 import binascii
-import crc8
 
+import crc8
 from scapy.config import conf
 from scapy.packet import Raw
 
-from ..layers import mctp, ipmi
+from ..layers import ipmi, mctp
 
 ALL_1s_BLOCK = bytes([0xff] * 4096)
 
@@ -33,8 +33,7 @@ class PrintableRawPacket(Raw):
             else:
                 summary = f"Raw ${crc.hexdigest().upper()} [{len(self.load)}] {binascii.hexlify(self.load, b' ', -2).decode()}"
         if hasattr(self, "_mysummary_cls"):
-            return summary, self._mysummary_cls + [mctp.SmbusTransportPacket, mctp.TransportHdrPacket,
-                                                   ipmi.TransportHdrPacket]
+            return summary, [*self._mysummary_cls, mctp.SmbusTransportPacket, mctp.TransportHdrPacket, ipmi.TransportHdrPacket]
         return summary, [mctp.SmbusTransportPacket, mctp.TransportHdrPacket, ipmi.TransportHdrPacket]
 
 

@@ -8,7 +8,7 @@ from .interfaces import (
 )
 
 
-class AllowRawSummary(object):
+class AllowRawSummary:
     def do_dissect_payload(self, s: bytes) -> None:
         if not s:
             return
@@ -18,9 +18,8 @@ class AllowRawSummary(object):
         except KeyboardInterrupt:
             raise
         except Exception as err:
-            if conf.debug_dissector:
-                if cls is not None:
-                    raise
+            if conf.debug_dissector and cls is not None:
+                raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
         self.add_payload(p)
         if isinstance(p, ICanSetMySummaryClasses):
@@ -49,10 +48,7 @@ class AllowRawSummary(object):
             impf = []
             for f in self.fields_desc:
                 if f in conf.emph:
-                    impf.append("%s=%s" % (f.name, f.i2repr(self, self.getfieldval(f.name))))  # noqa: E501
-            ret = "%s [%s]" % (ret, " ".join(impf))
-        if ret and s:
-            ret = "%s / %s" % (ret, s)
-        else:
-            ret = "%s%s" % (ret, s)
+                    impf.append(f"{f.name}={f.i2repr(self, self.getfieldval(f.name))}")
+            ret = "{} [{}]".format(ret, " ".join(impf))
+        ret = f"{ret} / {s}" if ret and s else f"{ret}{s}"
         return found, ret, needed

@@ -1,21 +1,22 @@
 import time
 from enum import IntEnum
-from typing import Union, Tuple, List, Type
+from typing import List, Tuple, Type, Union
 
 from scapy.config import conf
-from scapy.fields import (
-    BitEnumField,
-    BitField,
-    XByteField, ShortEnumField
-)
+from scapy.fields import BitEnumField, BitField, ShortEnumField, XByteField
 from scapy.packet import Packet, Raw, bind_layers
 
-from .types import VdPCIVendorIds
-from .. import EndpointContext
-from ..transport import AutobindMessageType, MsgTypes, TransportHdrPacket, SmbusTransportPacket, \
-    TrimmedSmbusTransportPacket
-from ..types import AnyPacketType, ICanSetMySummaryClasses, ICanReply
 from ...interfaces import ICanVerifyIfRequest
+from .. import EndpointContext
+from ..transport import (
+    AutobindMessageType,
+    MsgTypes,
+    SmbusTransportPacket,
+    TransportHdrPacket,
+    TrimmedSmbusTransportPacket,
+)
+from ..types import AnyPacketType, ICanReply, ICanSetMySummaryClasses
+from .types import VdPCIVendorIds
 
 
 class RqBit(IntEnum):
@@ -37,7 +38,7 @@ class VdPciHdrPacket(Packet):
         XByteField("vdm_cmd_code", 0)
     ]
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         rqType = 'REQ' if self.is_request() else 'RSP'
         summary = f"{self.name} {rqType} (VID: {self.vendor_id:04X}, cmd_code: 0x{self.vdm_cmd_code:02X}, rq: {self.rq})"
         return summary, [TransportHdrPacket, SmbusTransportPacket, TrimmedSmbusTransportPacket]
@@ -51,9 +52,8 @@ class VdPciHdrPacket(Packet):
         except KeyboardInterrupt:
             raise
         except Exception:
-            if conf.debug_dissector:
-                if cls is not None:
-                    raise
+            if conf.debug_dissector and cls is not None:
+                raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
         self.add_payload(p)
         if isinstance(p, ICanSetMySummaryClasses):
@@ -99,8 +99,7 @@ class VdPciHdrPacket(Packet):
                 delay = resp_info.processing_delay
                 if delay:
                     time.sleep(delay / 1000.0)
-                resp = Raw(bytes([hdr_data[0], hdr_data[1], 0, hdr_data[3]])) / resp_data
-                return resp
+                return Raw(bytes([hdr_data[0], hdr_data[1], 0, hdr_data[3]])) / resp_data
 
         rsp = VdPciHdr(
             rq=False,
@@ -111,7 +110,7 @@ class VdPciHdrPacket(Packet):
 
 
 def VdPciHdr(*args,
-             rq: Union[bool | RqBit] = RqBit.RESPONSE,
+             rq: bool | RqBit = RqBit.RESPONSE,
              vendor_id: int = 0,
              vdm_cmd_code: int = 0) -> VdPciHdrPacket:
     if len(args):
@@ -125,7 +124,7 @@ class AutobindVDMMsg:
         self.vdm_cmd_code = vdm_cmd_code
         self.vid = vid
 
-    def __call__(self, cls: Type[Packet]):
+    def __call__(self, cls: type[Packet]):
         vid = self.vid
         cmd_code = self.vdm_cmd_code
         bind_layers(VdPciHdrPacket, cls,

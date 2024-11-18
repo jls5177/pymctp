@@ -1,3 +1,4 @@
+import contextlib
 import socket
 import time
 from typing import Optional, Tuple
@@ -5,9 +6,9 @@ from typing import Optional, Tuple
 from scapy.compat import raw
 from scapy.config import conf
 from scapy.data import MTU
-from scapy.interfaces import network_name, _GlobInterfaceType
+from scapy.interfaces import _GlobInterfaceType, network_name
 from scapy.packet import Packet
-from scapy.plist import SndRcvList, PacketList
+from scapy.plist import PacketList, SndRcvList
 from scapy.sendrecv import sndrcv
 from scapy.supersocket import SuperSocket
 from scapy.utils import linehexdump
@@ -22,7 +23,7 @@ class QemuI2CNetDevSocket(SuperSocket):
                  family: int = socket.AF_INET,
                  type: int = socket.SOCK_DGRAM,
                  proto: int = 0,
-                 iface: Optional[_GlobInterfaceType] = None,
+                 iface: _GlobInterfaceType | None = None,
                  in_port=0, out_port=None, id_str="", **kwargs):
         self.id_str = id_str
         fd = socket.socket(family, type, proto)
@@ -46,10 +47,8 @@ class QemuI2CNetDevSocket(SuperSocket):
         before sending the packet.
         """
         sx = raw(x)
-        try:
+        with contextlib.suppress(AttributeError):
             x.sent_time = time.time()
-        except AttributeError:
-            pass
 
         if not self.outs:
             return 0
@@ -64,7 +63,7 @@ class QemuI2CNetDevSocket(SuperSocket):
                 raise
         return self.outs.send(sx)
 
-    def recv(self, x: int = MTU) -> Optional[Packet]:
+    def recv(self, x: int = MTU) -> Packet | None:
         raw_bytes = self.ins.recv(x)
         print(f"{self.id_str}<RX< {linehexdump(raw_bytes, onlyhex=1, dump=True)}")
         if len(raw_bytes) < 7:
@@ -77,7 +76,7 @@ class QemuI2CNetDevSocket(SuperSocket):
 
 
 @conf.commands.register
-def srqemu(address, pkts, inter=0.1, *args, in_port=0, out_port=None, **kwargs) -> Tuple[SndRcvList, PacketList]:
+def srqemu(address, pkts, inter=0.1, *args, in_port=0, out_port=None, **kwargs) -> tuple[SndRcvList, PacketList]:
     """Send and receive using a QEMU I2C socket"""
     s = QemuI2CNetDevSocket(iface=address, in_port=in_port, out_port=out_port)
     a, b = sndrcv(s, pkts, inter=inter, *args, **kwargs)
@@ -91,3 +90,4 @@ def srqemu1(address, pkts, inter=0.1, *args, in_port=0, out_port=None, **kwargs)
     a, b = srqemu(address, pkts, inter=inter, *args, in_port=in_port, out_port=out_port, **kwargs)
     if len(a) > 0:
         return a[0][1]
+    return None

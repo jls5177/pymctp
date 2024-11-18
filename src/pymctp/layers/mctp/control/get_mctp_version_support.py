@@ -1,17 +1,17 @@
-from typing import Tuple, Union, List
+from typing import List, Tuple, Union
 
-from scapy.fields import XByteField, FieldLenField, FieldListField, XLEIntField
+from scapy.fields import FieldLenField, FieldListField, XByteField, XLEIntField
 from scapy.packet import Packet
 
+from .. import EndpointContext, TransportHdrPacket
+from ..types import AnyPacketType
 from .control import (
     AutobindControlMsg,
     ControlHdr,
-    set_control_fields, ControlHdrPacket,
+    ControlHdrPacket,
+    set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
-from .. import EndpointContext, TransportHdrPacket
-from ..types import AnyPacketType
-
 
 MCTP_BASE_SPEC_VERSION_1_3_1 = 0xF1F3F100
 MCTP_CONTROL_VERSION_1_3_1 = 0xF1F3F100
@@ -33,18 +33,18 @@ class GetMctpVersionSupportPacket(Packet):
         ]
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} ("
         if self.underlayer.getfieldval('rq') == 0:
             if self.version_number_entry_count != 0:
                 summary += ", ".join(f"0x{x:08X}" for x in self.version_number_list)
         else:
             summary += f"msg_type_number: {self.msg_type_number}"
-        summary += f")"
+        summary += ")"
         return summary, [ControlHdrPacket, TransportHdrPacket]
 
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         msg_type_number = self.msg_type_number
 
         version_numbers = []
@@ -63,7 +63,7 @@ class GetMctpVersionSupportPacket(Packet):
         return 0x80, None
 
 
-def GetMctpVersionSupport(_pkt: Union[bytes, bytearray] = b"", /, *,
+def GetMctpVersionSupport(_pkt: bytes | bytearray = b"", /, *,
                           msg_type_number: int = 0) -> GetMctpVersionSupportPacket:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.GetMCTPVersionSupport)
     if _pkt:
@@ -74,8 +74,8 @@ def GetMctpVersionSupport(_pkt: Union[bytes, bytearray] = b"", /, *,
     )
 
 
-def GetMctpVersionSupportResponse(_pkt: Union[bytes, bytearray] = b"", /, *,
-                                  version_number_list: List[int] = None) -> GetMctpVersionSupportPacket:
+def GetMctpVersionSupportResponse(_pkt: bytes | bytearray = b"", /, *,
+                                  version_number_list: list[int] | None = None) -> GetMctpVersionSupportPacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetMCTPVersionSupport)
     if _pkt:
         return GetMctpVersionSupportPacket(_pkt, _underlayer=hdr)

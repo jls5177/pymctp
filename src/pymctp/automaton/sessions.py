@@ -1,18 +1,27 @@
 import threading
-from typing import Optional, List, Callable, Tuple, Dict, Type, NamedTuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Type
 
-from scapy.ansmachine import AnsweringMachine
 from scapy.packet import Packet
-from scapy.plist import PacketList
 from scapy.sendrecv import sndrcv
 from scapy.sessions import DefaultSession
 from scapy.supersocket import SuperSocket
 from scapy.utils import hexdump
 
-from ..layers.mctp import EndpointContext, TransportHdr, AnyPhysicalAddress, Smbus7bitAddress, SmbusTransport, \
-    TransportHdrPacket
-from ..layers.mctp.control import ControlHdrPacket, IControlMsgPacket, ControlHdr
+from ..layers.mctp import (
+    AnyPhysicalAddress,
+    EndpointContext,
+    Smbus7bitAddress,
+    SmbusTransport,
+    TransportHdr,
+    TransportHdrPacket,
+)
+from ..layers.mctp.control import ControlHdr, ControlHdrPacket, IControlMsgPacket
 from ..layers.mctp.types import AnyPacketType, MsgTypes
+
+if TYPE_CHECKING:
+    from scapy.ansmachine import AnsweringMachine
+    from scapy.plist import PacketList
 
 
 class HandlerResponse(NamedTuple):
@@ -34,18 +43,18 @@ class EndpointSession(DefaultSession):
         super().__init__(*args, **kwargs)
         self.context = context
         self.socket = socket
-        self.pending_rqs: List[Tuple[Packet, Callable[[Packet], None]]] = []
+        self.pending_rqs: list[tuple[Packet, Callable[[Packet], None]]] = []
         self._next_tag_number = 0
         self._next_instance_id = 0
         self._responder_lock = threading.Lock()
 
         # Not allowed during init due to the AnsweringMachine needing the session to initialize properly.
         # Instead, the AnsweringMachine will register itself during initialization.
-        self.am: Optional[AnsweringMachine] = None
-        self.default_handlers: Dict[Type, Callable[[Packet, EndpointContext], Optional[HandlerResponse]]] = {}
+        self.am: AnsweringMachine | None = None
+        self.default_handlers: dict[type, Callable[[Packet, EndpointContext], HandlerResponse | None]] = {}
 
-    def register_handler(self, layer_cls: Type,
-                         handler: Callable[[Packet, EndpointContext], Optional[HandlerResponse]]):
+    def register_handler(self, layer_cls: type,
+                         handler: Callable[[Packet, EndpointContext], HandlerResponse | None]):
         """
         Registers the specified handler to allow the handler to be invoked anytime a msg is received that
         contains the specified layer class.
@@ -75,7 +84,7 @@ class EndpointSession(DefaultSession):
         self._next_instance_id = (next_id + 1) % 32
         return next_id
 
-    def on_packet_received(self, rq_pkt: Optional[Packet]) -> None:
+    def on_packet_received(self, rq_pkt: Packet | None) -> None:
         """
         Will be called by sniff() for each received packet (that passes the filters).
 
@@ -92,7 +101,8 @@ class EndpointSession(DefaultSession):
 
         if som and not eom:
             # TODO: handle packet fragments (see ISOTPSession for an example)
-            raise RuntimeError("TODO: handle receiving fragemented packets")
+            msg = "TODO: handle receiving fragemented packets"
+            raise RuntimeError(msg)
 
         # Lock the session to prevent another thread trying to send a request on the bus before we finish replying
         with self._responder_lock:
@@ -109,7 +119,7 @@ class EndpointSession(DefaultSession):
 
             # 2) Check if we have a handler registered for this type of packet
             stop_processing = False
-            response_pkts: PacketList = list()
+            response_pkts: PacketList = []
             for cls, handler in self.default_handlers.items():
                 if cls in rq_pkt:
                     resp: HandlerResponse = handler(rq_pkt, self.context)
@@ -138,9 +148,9 @@ class EndpointSession(DefaultSession):
                            dst_eid: int,
                            dst_phy_addr: AnyPhysicalAddress,
                            *,
-                           instance_id: Optional[int] = None,
-                           timeout_s: float = None,
-                           threaded: bool = False) -> Optional[Packet]:
+                           instance_id: int | None = None,
+                           timeout_s: float | None = None,
+                           threaded: bool = False) -> Packet | None:
         """
         Sends the specified MCTP Control Payload to the destination and waits for a
         response. This method will detect if the ControlHdrPacket, TransportHdrPacket,
@@ -159,7 +169,8 @@ class EndpointSession(DefaultSession):
         :return: the received packet or None
         """
         if not isinstance(pkt, IControlMsgPacket):
-            raise AttributeError(f"Packet is malformed, does not implement the IControlMsgPacket protocol")
+            msg = "Packet is malformed, does not implement the IControlMsgPacket protocol"
+            raise AttributeError(msg)
         cmd_code = pkt.cmd_code
 
         if not pkt.haslayer(ControlHdrPacket):
@@ -177,9 +188,9 @@ class EndpointSession(DefaultSession):
                         dst_phy_addr: AnyPhysicalAddress,
                         *,
                         msg_type: MsgTypes = MsgTypes.CTRL,
-                        msg_tag: Optional[int] = None,
-                        timeout_s: Optional[float] = None,
-                        threaded: bool = False) -> Optional[Packet]:
+                        msg_tag: int | None = None,
+                        timeout_s: float | None = None,
+                        threaded: bool = False) -> Packet | None:
 
         # TODO: handle packet fragments
         pkt = TransportHdr(
@@ -194,7 +205,8 @@ class EndpointSession(DefaultSession):
         if isinstance(dst_phy_addr, Smbus7bitAddress) and isinstance(src_phy_addr, Smbus7bitAddress):
             pkt = SmbusTransport(dst_addr=dst_phy_addr, src_addr=src_phy_addr) / pkt
         else:
-            raise AttributeError(f"Only Smbus7bitAddress are supported: {type(dst_phy_addr)}")
+            msg = f"Only Smbus7bitAddress are supported: {type(dst_phy_addr)}"
+            raise AttributeError(msg)
 
         # hexdump(pkt)
         # if drop_pec:
@@ -205,7 +217,7 @@ class EndpointSession(DefaultSession):
             return self.sr1threaded(pkt=pkt, timeout_s=timeout_s)
         return self.sr1(pkt=pkt, timeout_s=timeout_s)
 
-    def sr1(self, pkt: Packet, timeout_s: float = None) -> Optional[Packet]:
+    def sr1(self, pkt: Packet, timeout_s: float | None = None) -> Packet | None:
         """
         Sends and receives one packet on the socket. This method will stall
         the main thread until a response is received or the timeout is reached.
@@ -220,7 +232,7 @@ class EndpointSession(DefaultSession):
                 return a[0][1]
         return None
 
-    def sr1threaded(self, pkt: Packet, timeout_s: float = None) -> Optional[Packet]:
+    def sr1threaded(self, pkt: Packet, timeout_s: float | None = None) -> Packet | None:
         """
         Sends and receives on packet on the socket. This method will queue the response
         handler (callback) and start a timer to handle no response. This method is meant
@@ -234,7 +246,7 @@ class EndpointSession(DefaultSession):
         :return: The received packet or None
         """
         completed = threading.Event()
-        rsp: List[Packet] = []
+        rsp: list[Packet] = []
 
         # print(f"Sending request using threading")
 

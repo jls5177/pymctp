@@ -5,12 +5,12 @@ import uuid
 from dataclasses import field
 from enum import IntEnum
 from pathlib import Path
-from typing import Protocol, runtime_checkable, TypeVar, List, Optional, Dict, Any
+from typing import Any, Optional, Protocol, TypeVar, runtime_checkable
 
 from mashumaro import DataClassDictMixin, field_options
 from mashumaro.config import BaseConfig
 
-from ..interfaces import AnyPacketType, ICanSetMySummaryClasses  # noqa
+from ..interfaces import AnyPacketType, ICanSetMySummaryClasses
 
 
 class MsgTypes(IntEnum):
@@ -33,12 +33,12 @@ class MsgTypes(IntEnum):
 
 class VendorIdFormat(IntEnum):
     PCI_VENDOR_ID = 0x0
-    """16-bit Unsigned Integer that identifies the manufacturer 
-    of the device. Valid vendor identifiers are allocated by the 
+    """16-bit Unsigned Integer that identifies the manufacturer
+    of the device. Valid vendor identifiers are allocated by the
     PCI SIG to ensure uniqueness."""
 
     IANA_ENT_NUMBER = 0x1
-    """The IANA enterprise number for the organization or vendor 
+    """The IANA enterprise number for the organization or vendor
     expressed as a 32-bit unsigned binary number."""
 
 
@@ -50,40 +50,40 @@ class VendorCapabilitySet(DataClassDictMixin):
 
 
 class PhysicalTransportBindingId(IntEnum):
-    Reserved = 0x0,
-    MCTPoverSMBus = 0x01,
-    MCTPoverPcieVdm = 0x02,
-    MCTPoverKCS = 0x04,
-    MCTPoverSerial = 0x05,
-    MCTPoverI3C = 0x06,
-    VendorDefined = 0xff,
+    Reserved = 0x0
+    MCTPoverSMBus = 0x01
+    MCTPoverPcieVdm = 0x02
+    MCTPoverKCS = 0x04
+    MCTPoverSerial = 0x05
+    MCTPoverI3C = 0x06
+    VendorDefined = 0xff
 
 
 class PhysicalMediumIdentifiers(IntEnum):
-    Unspecified = 0x0,
-    SMBUS_2_0_100khz = 0x1,
-    SMBUS_2_0_I2C_100khz = 0x2,
-    I2C_100khz = 0x3,
-    SMBUS_3_0_I2C_400khz = 0x4,
-    SMBUS_3_0_I2C_1mhz = 0x5,
-    I2C_3_4mhz = 0x6,
-    PCIeRev_1_1 = 0x8,
-    PCIeRev_2_0 = 0x9,
-    PCIeRev_2_1 = 0xA,
-    PCIeRev_3 = 0xB,
-    PCIeRev_4 = 0xC,
-    PCIeRev_5 = 0xD,
-    PCICompatible = 0xF,
-    USB_1_1 = 0x10,
-    USB_2 = 0x11,
-    USB_3 = 0x12,
-    NCSIOverRBT = 0x18,
-    KCSLegacy = 0x20,
-    KCSPCI = 0x21,
-    SerialHostLegacy = 0x22,
-    SerialHostPCI = 0x23,
-    AsyncSerial = 0x24,
-    I3CBasic = 0x30,
+    Unspecified = 0x0
+    SMBUS_2_0_100khz = 0x1
+    SMBUS_2_0_I2C_100khz = 0x2
+    I2C_100khz = 0x3
+    SMBUS_3_0_I2C_400khz = 0x4
+    SMBUS_3_0_I2C_1mhz = 0x5
+    I2C_3_4mhz = 0x6
+    PCIeRev_1_1 = 0x8
+    PCIeRev_2_0 = 0x9
+    PCIeRev_2_1 = 0xA
+    PCIeRev_3 = 0xB
+    PCIeRev_4 = 0xC
+    PCIeRev_5 = 0xD
+    PCICompatible = 0xF
+    USB_1_1 = 0x10
+    USB_2 = 0x11
+    USB_3 = 0x12
+    NCSIOverRBT = 0x18
+    KCSLegacy = 0x20
+    KCSPCI = 0x21
+    SerialHostLegacy = 0x22
+    SerialHostPCI = 0x23
+    AsyncSerial = 0x24
+    I3CBasic = 0x30
 
 
 class EntryType(IntEnum):
@@ -97,7 +97,7 @@ class EntryType(IntEnum):
 class RoutingTableEntry(DataClassDictMixin):
     starting_eid: int
     port_number: int
-    phy_address: List[int]
+    phy_address: list[int]
     phys_transport_binding_id: PhysicalTransportBindingId = PhysicalTransportBindingId.MCTPoverSMBus
     phy_media_type_id: PhysicalMediumIdentifiers = PhysicalMediumIdentifiers.I2C_100khz
     entry_type: EntryType = EntryType.SINGLE_ENDPOINT
@@ -111,7 +111,8 @@ class Smbus7bitAddress(DataClassDictMixin):
 
     def __post_init__(self):
         if self.address > 0x7F:
-            raise ValueError(f"SMBUS address {hex(self.address)} is more than 7 bits.")
+            msg = f"SMBUS address {hex(self.address)} is more than 7 bits."
+            raise ValueError(msg)
 
     def read(self) -> int:
         return self.address << 1 | 0x01
@@ -126,7 +127,8 @@ class Smbus10bitAddress(DataClassDictMixin):
 
     def __post_init__(self):
         if self.address > 0x3FF:
-            raise ValueError(f"SMBUS address {hex(self.address)} is more than 10 bits.")
+            msg = f"SMBUS address {hex(self.address)} is more than 10 bits."
+            raise ValueError(msg)
 
 
 AnyPhysicalAddress = TypeVar('AnyPhysicalAddress', Smbus7bitAddress, Smbus10bitAddress)
@@ -134,8 +136,8 @@ AnyPhysicalAddress = TypeVar('AnyPhysicalAddress', Smbus7bitAddress, Smbus10bitA
 
 @dataclasses.dataclass(frozen=True)
 class MctpResponse(DataClassDictMixin):
-    request: List[int]
-    response: List[int]
+    request: list[int]
+    response: list[int]
     processing_delay: int = field(metadata=field_options(alias="processing-delay"))
     key: bytes = field(init=False)
     data: bytes = field(init=False)
@@ -158,12 +160,13 @@ class MctpResponse(DataClassDictMixin):
 
 @dataclasses.dataclass(frozen=True)
 class MctpResponseList(DataClassDictMixin):
-    responses: Dict[MsgTypes, List[MctpResponse] | Dict[str, Dict[str, List[MctpResponse]]]]
+    responses: dict[MsgTypes, list[MctpResponse] | dict[str, dict[str, list[MctpResponse]]]]
 
 
-def deserialize_msg_types(values: List[MsgTypes] | List[str]) -> List[MsgTypes]:
+def deserialize_msg_types(values: list[MsgTypes] | list[str]) -> list[MsgTypes]:
     if not isinstance(values, list):
-        raise ValueError(f"Unknown msg type: {type(values)}")
+        msg = f"Unknown msg type: {type(values)}"
+        raise ValueError(msg)
     if all(isinstance(y, MsgTypes) for y in values):
         return values
     msg_types = []
@@ -171,30 +174,31 @@ def deserialize_msg_types(values: List[MsgTypes] | List[str]) -> List[MsgTypes]:
         if type(mt) == str and hasattr(MsgTypes, mt):
             msg_types += [MsgTypes[mt]]
             continue
-        raise ValueError(f"Unknown msg type: {mt}")
+        msg = f"Unknown msg type: {mt}"
+        raise ValueError(msg)
     return msg_types
 
 
 @dataclasses.dataclass
 class EndpointContext(DataClassDictMixin):
     physical_address: Smbus7bitAddress
-    static_eid: int = None
+    static_eid: int | None = None
     assigned_eid: int = 0
     discovered: bool = False
     is_bus_owner: bool = False
     pool_size: int = 0
     mtu_size: int = 240
-    allocated_pool: Optional[List[int]] = None
-    endpoint_uuid: uuid.UUID = field(default_factory=lambda: uuid.uuid4())
-    supported_msg_types: List[MsgTypes] = field(default_factory=lambda: [MsgTypes.CTRL])
-    supported_vdm_msg_types: List[VendorCapabilitySet] = field(default_factory=list)
-    mctp_responses: Optional[MctpResponseList] = None
+    allocated_pool: list[int] | None = None
+    endpoint_uuid: uuid.UUID = dataclasses.field(default_factory=lambda: uuid.uuid4())
+    supported_msg_types: list[MsgTypes] = dataclasses.field(default_factory=lambda: [MsgTypes.CTRL])
+    supported_vdm_msg_types: list[VendorCapabilitySet] = dataclasses.field(default_factory=list)
+    mctp_responses: MctpResponseList | None = None
     routing_table_ready: bool = False
-    routing_table: List[RoutingTableEntry] = field(default_factory=list)
+    routing_table: list[RoutingTableEntry] = dataclasses.field(default_factory=list)
 
     class Config(BaseConfig):
         serialization_strategy = {
-            List[MsgTypes]: {
+            list[MsgTypes]: {
                 "deserialize": deserialize_msg_types
             }
         }
@@ -210,12 +214,12 @@ class EndpointContext(DataClassDictMixin):
 
     def import_json_responses(self, resp_file: Path):
         with resp_file.open("r") as f:
-            data: Dict[str, Any] = json.load(f)
+            data: dict[str, Any] = json.load(f)
             data = {MsgTypes[k]: v for k, v in data.items() if MsgTypes[k] in self.supported_msg_types}
-            self.mctp_responses = MctpResponseList.from_dict(dict(responses=data))
+            self.mctp_responses = MctpResponseList.from_dict({"responses": data})
 
     def get_response(self, msg_type: MsgTypes, req_bytes: bytes, vendor_id: str = "",
-                     vdm_cmd_code: str = "") -> Optional[MctpResponse]:
+                     vdm_cmd_code: str = "") -> MctpResponse | None:
         if msg_type not in MsgTypes:
             return None
         if msg_type not in self.mctp_responses.responses:
@@ -227,10 +231,10 @@ class EndpointContext(DataClassDictMixin):
                     return resp
         else:
             responses = self.mctp_responses.responses[msg_type]
-            if vendor_id not in responses.keys():
+            if vendor_id not in responses:
                 return None
             responses = responses[vendor_id]
-            if vdm_cmd_code not in responses.keys():
+            if vdm_cmd_code not in responses:
                 return None
             for resp in responses[vdm_cmd_code]:
                 if resp.key == key:

@@ -2,20 +2,17 @@ from typing import Tuple
 
 from scapy.packet import Packet
 
-from .control import (
-    AutobindControlMsg,
-    ControlHdr
-)
-from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 from .. import EndpointContext
 from ..types import AnyPacketType
+from .control import AutobindControlMsg, ControlHdr
+from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
 @AutobindControlMsg(ContrlCmdCodes.DiscoveryNotify)
 class DiscoveryNotifyPacket(Packet):
     fields_desc = []
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         return CompletionCodes.SUCCESS, DiscoveryNotifyResponse()
 
 

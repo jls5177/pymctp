@@ -1,16 +1,16 @@
-from typing import Tuple, List, Union
+from typing import List, Tuple, Union
 
-from scapy.fields import FieldLenField, FieldListField, ByteField
+from scapy.fields import ByteField, FieldLenField, FieldListField
 from scapy.packet import Packet
 
+from .. import EndpointContext
+from ..types import AnyPacketType, MsgTypes
 from .control import (
     AutobindControlMsg,
     ControlHdr,
     set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
-from .. import EndpointContext
-from ..types import AnyPacketType, MsgTypes
 
 
 @AutobindControlMsg(ContrlCmdCodes.GetMessageTypeSupport)
@@ -19,13 +19,13 @@ class GetMessageTypeSupportPacket(Packet):
 
     fields_desc = set_control_fields(
         rsp_fields=[
-            FieldLenField('msg_type_cnt', None, fmt='!B', count_of='msg_type_list'),  # noqa: E501
+            FieldLenField('msg_type_cnt', None, fmt='!B', count_of='msg_type_list'),
             FieldListField('msg_type_list', [], ByteField('', 0),
                            length_from=lambda pkt: pkt.msg_type_cnt),
         ]
     )
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.supported_msg_types:
             return CompletionCodes.ERROR_UNSUPPORTED_CMD, None
         # filter out the Control msg types
@@ -36,15 +36,15 @@ class GetMessageTypeSupportPacket(Packet):
         )
 
 
-def GetMessageTypeSupport(_pkt: Union[bytes, bytearray] = b"", /, *args) -> GetMessageTypeSupportPacket:
+def GetMessageTypeSupport(_pkt: bytes | bytearray = b"", /, *args) -> GetMessageTypeSupportPacket:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.GetMessageTypeSupport)
     if _pkt:
         return GetMessageTypeSupportPacket(_pkt, _underlayer=hdr)
     return GetMessageTypeSupportPacket(_underlayer=hdr)
 
 
-def GetMessageTypeSupportResponse(_pkt: Union[bytes, bytearray] = b"", /, *,
-                                  msg_types: List[int] = None) -> GetMessageTypeSupportPacket:
+def GetMessageTypeSupportResponse(_pkt: bytes | bytearray = b"", /, *,
+                                  msg_types: list[int] | None = None) -> GetMessageTypeSupportPacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetMessageTypeSupport)
     if _pkt:
         return GetMessageTypeSupportPacket(_pkt, _underlayer=hdr)

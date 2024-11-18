@@ -1,22 +1,21 @@
 import binascii
-import socket
+import contextlib
 import socket
 import struct
 import time
 from collections import deque
 from enum import IntEnum
-from typing import Optional, Type, List
 
 import crc8
 from scapy.base_classes import BasePacket
 from scapy.compat import raw
 from scapy.data import MTU
-from scapy.fields import ByteEnumField, FieldLenField, FieldListField, ByteField, LEIntField, PacketListField
+from scapy.fields import ByteEnumField, ByteField, FieldLenField, FieldListField, LEIntField, PacketListField
 from scapy.packet import Packet, Raw
 from scapy.supersocket import SuperSocket
 from scapy.utils import linehexdump
 
-from pymctp.layers.mctp import TransportHdrPacket, SmbusTransportPacket
+from pymctp.layers.mctp import TransportHdrPacket
 from pymctp.layers.mctp.types import AnyPacketType
 
 
@@ -279,12 +278,12 @@ class I3C_EVENT(Packet):
         return b"", s
 
 
-def parse_next_msg(pkt: Packet, lst: List[BasePacket], cur: Optional[Packet], remain: bytes) -> Optional[Type[Packet]]:
+def parse_next_msg(pkt: Packet, lst: list[BasePacket], cur: Packet | None, remain: bytes) -> type[Packet] | None:
     if not remain and len(remain) == 0:
         return None
     # TODO: separate out START event and parse from list to determine next event
     last_event = None
-    for e in reversed(lst + [cur]):
+    for e in reversed([*lst, cur]):
         if not isinstance(e, I3C_EVENT):
             continue
         last_event = e.event
@@ -373,7 +372,6 @@ class QemuI3CCharDevSocket(SuperSocket):
         self.id_str = id_str
         fd = socket.socket(family)
         assert fd != -1
-        print(f"Attempting to connect to chardev socket, Start up QEMU.")
         while True:
             try:
                 fd.connect(in_file)
@@ -381,10 +379,9 @@ class QemuI3CCharDevSocket(SuperSocket):
             except:
                 time.sleep(1)
                 continue
-        print(f"Connected to chardev socket")
         self.ins = self.outs = fd
 
-        self.buffer = bytes()
+        self.buffer = b""
         self.in_ccc = False
         self.ccc = 0
         self.in_entdaa = False
@@ -402,7 +399,6 @@ class QemuI3CCharDevSocket(SuperSocket):
 
     def send_ibi(self, ipi_payload=None, add_mdb=False):
         if not self.bus_stopped:
-            print(f"{self.id_str}[IBI]: bus not idle...waiting")
             return
         if ipi_payload is None and add_mdb:
             ipi_payload = [0xAE]
@@ -411,7 +407,6 @@ class QemuI3CCharDevSocket(SuperSocket):
             crc.update(int.to_bytes(addr, byteorder="little", length=1))
             crc.update(bytes(ipi_payload))
             pec = crc.digest()
-            print(f"PEC={pec}, address={addr}")
             ipi_payload += [int.from_bytes(pec, byteorder='little')]
         self.in_ibi = True
         x = REMOTE_I3C_IBI_REQUEST(opcode=RemoteI3CCommands.REMOTE_I3C_IBI,
@@ -428,68 +423,58 @@ class QemuI3CCharDevSocket(SuperSocket):
         # Send IBI to notify controller a TX message is queued for reading
         if not self.in_ccc and not isinstance(x, REMOTE_I3C_READ_DATA) and not isinstance(x,
                                                                                           REMOTE_I3C_IBI_REQUEST):
-            print(f"{self.id_str}[IBI]: queuing request {linehexdump(x, onlyhex=1, dump=True)}")
             self.tx_fifo.append(x)
             if not self.in_ibi and not self.rx_pending:
                 self.send_ibi()
             return 0
 
         sx = raw(x)
-        try:
+        with contextlib.suppress(AttributeError):
             x.sent_time = time.time()
-        except AttributeError:
-            pass
 
         if not self.outs:
             return 0
-        print(f"{self.id_str}>TX> {linehexdump(x, onlyhex=1, dump=True)}")
         return self.outs.send(sx)
 
-    def handle_ccc(self, ccc: Optional[I3cCcc], data: bytes) -> Optional[Packet]:
+    def handle_ccc(self, ccc: I3cCcc | None, data: bytes) -> Packet | None:
         if ccc == I3cCcc.I3C_CCC_ENTDAA:
             # strip top 2 bytes as they are zeros (since big endian)
             data = struct.pack('!Q', self.pid)[2:]
             data += bytes([self.bcr, self.dcr])
-            pkt = REMOTE_I3C_READ_DATA(tx_data=list(data))
-            return pkt
+            return REMOTE_I3C_READ_DATA(tx_data=list(data))
         elif self.ccc == I3cCcc.I3C_CCC_ENTDAA:
             # this is the write byte of the ENTDAA where the
             # dynamic address is written to the target
             self.dynamic_addr = data[0]
-            print(f"{self.id_str}[DAA]: {hex(self.dynamic_addr)}")
+            return None
         elif ccc == I3cCcc.I3C_CCCD_GETPID:
             # strip top 2 bytes as they are zeros (since big endian)
             data = struct.pack('!Q', self.pid)[2:]
-            pkt = REMOTE_I3C_READ_DATA(tx_data=list(data))
-            return pkt
+            return REMOTE_I3C_READ_DATA(tx_data=list(data))
         elif ccc == I3cCcc.I3C_CCCD_GETBCR:
-            pkt = REMOTE_I3C_READ_DATA(tx_data=[self.bcr])
-            return pkt
+            return REMOTE_I3C_READ_DATA(tx_data=[self.bcr])
         elif ccc == I3cCcc.I3C_CCCD_GETDCR:
-            pkt = REMOTE_I3C_READ_DATA(tx_data=[self.dcr])
-            return pkt
+            return REMOTE_I3C_READ_DATA(tx_data=[self.dcr])
         elif ccc == I3cCcc.I3C_CCCD_GETMRL:
             mrl = struct.pack('!H', self.mrl)
             # Add the max IBI size if IBIs are enabled
             if self.bcr & 2 == 2:
                 mrl += bytes(0x0)  # 0 == unlimited number of bytes
-            pkt = REMOTE_I3C_READ_DATA(tx_data=list(mrl))
-            return pkt
+            return REMOTE_I3C_READ_DATA(tx_data=list(mrl))
         elif ccc == I3cCcc.I3C_CCCD_GETMWL:
             mwl = struct.pack('!H', self.mwl)
-            pkt = REMOTE_I3C_READ_DATA(tx_data=list(mwl))
-            return pkt
+            return REMOTE_I3C_READ_DATA(tx_data=list(mwl))
         elif ccc == I3cCcc.I3C_CCCD_GETMXDS:
-            pkt = REMOTE_I3C_READ_DATA(tx_data=[0, 0])
-            return pkt
+            return REMOTE_I3C_READ_DATA(tx_data=[0, 0])
+        return None
 
-    def handle_rx(self) -> Optional[AnyPacketType]:
+    def handle_rx(self) -> AnyPacketType | None:
         parsed = REMOTE_I3C(self.buffer)
         if len(parsed.msgs) == 0:
             return None
 
         received_packet = None
-        self.buffer = parsed.load if parsed.payload else bytes()
+        self.buffer = parsed.load if parsed.payload else b""
         parsed.show2()
         for pkt in parsed.msgs:
             start_event = 'start_event' in pkt.fields
@@ -498,13 +483,11 @@ class QemuI3CCharDevSocket(SuperSocket):
                 start_event = True
             if start_event and self.bus_stopped:
                 self.bus_stopped = self.in_send_cmd = False
-                print(f"{self.id_str}: START event received")
 
             if isinstance(pkt, I3C_IBI_STATUS):
                 self.in_ibi = False
                 self.rx_pending = True  # don't allow anymore IBIs to be sent
-                print(f"{self.id_str}[IBI]: {RemoteI3cIbiResponses(pkt.status)}")
-            elif isinstance(pkt, I3C_CCC_WRITE) or isinstance(pkt, I3C_CCC_DIRECT_WRITE):
+            elif isinstance(pkt, I3C_CCC_DIRECT_WRITE | I3C_CCC_WRITE):
                 self.ccc = pkt.ccc
                 self.in_ccc = True
                 self.in_entdaa = self.ccc == I3cCcc.I3C_CCC_ENTDAA
@@ -531,7 +514,6 @@ class QemuI3CCharDevSocket(SuperSocket):
                     crc.update(int.to_bytes(addr, byteorder="little", length=1))
                     crc.update(rsp)
                     pec = crc.digest()
-                    print(f"PEC={pec}, address={addr}")
                     rsp_pkt = REMOTE_I3C_READ_DATA(tx_data=list(rsp) + list(pec))
                     self.in_rx = True
                     self.rx_pending = False
@@ -560,7 +542,6 @@ class QemuI3CCharDevSocket(SuperSocket):
                     crc.update(int.to_bytes(addr, byteorder="little", length=1))
                     crc.update(rsp)
                     pec = crc.digest()
-                    print(f"PEC={pec}, address={addr}")
                     rsp_pkt = REMOTE_I3C_READ_DATA(tx_data=list(rsp) + list(pec))
                 self.in_rx = True
                 self.rx_pending = False
@@ -572,18 +553,16 @@ class QemuI3CCharDevSocket(SuperSocket):
                     self.ccc = 0
                     self.queued_tx = None
                     self.bus_stopped = True
-                    print(f"{self.id_str}: STOP event received")
 
         if not self.in_ccc and not self.in_rx and not self.rx_pending and not self.in_ibi and len(self.tx_fifo):
             self.send_ibi()
 
         return received_packet
 
-    def recv(self, x: int = MTU) -> Optional[AnyPacketType]:
+    def recv(self, x: int = MTU) -> AnyPacketType | None:
         raw_bytes = self.ins.recv(x)
         if not raw_bytes:
             return None
-        print(f"{self.id_str}<RX< {linehexdump(raw_bytes, onlyhex=1, dump=True)}")
         self.buffer += raw_bytes
         return self.handle_rx()
 
@@ -707,11 +686,7 @@ if __name__ == '__main__':
         [0x07, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x08]]:
         socket.buffer += bytes(data)
         resp = socket.handle_rx()
-        print(f"Response: {resp}")
-        print(f"Remaining bytes: {binascii.hexlify(socket.buffer)}")
         if resp:
             socket.send(Raw(bytes([0x01, 0x0A, 0x00, 0xD0, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00])))
     while len(socket.buffer):
         resp = socket.handle_rx()
-        print(f"Response: {resp}")
-        print(f"Remaining bytes: {binascii.hexlify(socket.buffer)}")

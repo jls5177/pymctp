@@ -3,14 +3,14 @@ from typing import Type, Union
 import crc8
 from scapy.compat import raw
 from scapy.config import conf
-from scapy.fields import BitField, XByteField, BitEnumField, LenField, ConditionalField, PacketLenField
+from scapy.fields import BitEnumField, BitField, ConditionalField, LenField, PacketLenField, XByteField
 from scapy.layers.l2 import CookedLinux, CookedLinuxV2
 from scapy.packet import Packet, bind_layers
 from scapy.plist import PacketList
 
-from .types import EndpointContext, Smbus7bitAddress, MsgTypes, ICanReply
 from ..helpers import AllowRawSummary, AnyPacketType
 from ..interfaces import ICanSetMySummaryClasses, ICanVerifyIfRequest
+from .types import EndpointContext, ICanReply, MsgTypes, Smbus7bitAddress
 
 
 class TransportHdrPacket(AllowRawSummary, Packet):
@@ -67,18 +67,14 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         if not s:
             return
         # Message Type is only present within the first fragment, just assume a raw payload
-        if self.som == 0:
-            cls = conf.raw_layer
-        else:
-            cls = self.guess_payload_class(s)
+        cls = conf.raw_layer if self.som == 0 else self.guess_payload_class(s)
         try:
             p = cls(s, _internal=1, _underlayer=self)
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            if conf.debug_dissector:
-                if cls is not None:
-                    raise
+            if conf.debug_dissector and cls is not None:
+                raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
         self.add_payload(p)
         if isinstance(p, ICanSetMySummaryClasses):
@@ -86,7 +82,7 @@ class TransportHdrPacket(AllowRawSummary, Packet):
 
     def answers(self, rq_pkt: Packet) -> int:
         # the endpoint EID should match
-        if self.src != rq_pkt.dst and rq_pkt.dst != 0:
+        if rq_pkt.dst not in (self.src, 0):
             print(f"mismatched eid: {rq_pkt.dst} != {self.src}")
             return 0
         # the tags should be the same
@@ -116,9 +112,10 @@ class TransportHdrPacket(AllowRawSummary, Packet):
             if not payload_resp:
                 return None
 
-        if isinstance(payload_resp, (PacketList, list)):
+        if isinstance(payload_resp, PacketList | list):
             # TODO: Implement multiple payloads from upper layers
-            raise RuntimeError("multiple payloads are not yet supported")
+            msg = "multiple payloads are not yet supported"
+            raise RuntimeError(msg)
 
         if not payload_resp:
             # TODO: should this just return None?
@@ -142,8 +139,8 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         while buf_size > 0:
             packet_size = min(ctx.mtu_size, buf_size)
             packet = buf[buf_offset:buf_offset + packet_size]
-            som = True if not buf_offset else False
-            eom = True if (buf_offset + packet_size) >= len(payload_resp) else False
+            som = bool(not buf_offset)
+            eom = (buf_offset + packet_size) >= len(payload_resp)
 
             resp = TransportHdr(
                 msg_type=self.msg_type,
@@ -167,12 +164,12 @@ class TransportHdrPacket(AllowRawSummary, Packet):
 def TransportHdr(*args,
                  dst: int = 0,
                  src: int = 0,
-                 som: Union[bool | int] = True,
-                 eom: Union[bool | int] = True,
+                 som: bool | int = True,
+                 eom: bool | int = True,
                  pkt_seq: int = 0,
-                 to: Union[bool | int] = True,
+                 to: bool | int = True,
                  tag: int = 0,
-                 ic: Union[bool | int] = False,
+                 ic: bool | int = False,
                  msg_type: MsgTypes = MsgTypes.CTRL,
                  version: bytes = 0b0001) -> TransportHdrPacket:
     if len(args):
@@ -249,13 +246,13 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
     ]
 
     def mysummary(self):  # type: () -> str
-        summary = f"SMBUS ("
+        summary = "SMBUS ("
         if "dst_addr" in self.fields:
             summary += f"dst=0x{self.dst_addr:02X}, "
         summary += f"src=0x{self.src_addr:02X}, byte_count={self.byte_count}"
         if "pec" in self.fields:
             summary += f", pec=0x{self.pec:02X}"
-        summary += f")"
+        summary += ")"
         return summary, [SmbusTransportPacket]
 
     def post_build(self, p, pay):
@@ -335,11 +332,11 @@ class TrimmedSmbusTransportPacket(SmbusTransportPacket):
 
 
 def SmbusTransport(*args,
-                   dst_addr: Union[int | Smbus7bitAddress] = 0,
-                   src_addr: Union[int | Smbus7bitAddress] = 1,
-                   byte_count: int = None,
+                   dst_addr: int | Smbus7bitAddress = 0,
+                   src_addr: int | Smbus7bitAddress = 1,
+                   byte_count: int | None = None,
                    command_code: int = 0x0f,
-                   pec: int = None) -> SmbusTransportPacket:
+                   pec: int | None = None) -> SmbusTransportPacket:
     if len(args):
         return SmbusTransportPacket(*args)
     if isinstance(dst_addr, Smbus7bitAddress):
@@ -357,7 +354,7 @@ class AutobindMessageType:
     def __init__(self, msg_type: MsgTypes):
         self.msg_type = msg_type
 
-    def __call__(self, cls: Type[Packet]):
+    def __call__(self, cls: type[Packet]):
         # print(f"Binding cls {cls} to msg_type {self.msg_type}")
         bind_layers(TransportHdrPacket, cls,
                     msg_type=self.msg_type.value)

@@ -1,22 +1,28 @@
 from enum import IntEnum
-from typing import Tuple, Union, List
+from typing import List, Tuple, Union
 
 from scapy.compat import raw
-from scapy.fields import XByteEnumField, XByteField, XLEIntField, XLEShortField, FieldLenField, FieldListField, \
-    ConditionalField, PacketField, SignedByteField
+from scapy.fields import (
+    ConditionalField,
+    FieldLenField,
+    FieldListField,
+    PacketField,
+    SignedByteField,
+    XByteEnumField,
+    XByteField,
+    XLEIntField,
+    XLEShortField,
+)
 from scapy.packet import Packet, bind_layers
 
-from .pldm import (
-    AutobindPLDMMsg,
-    PldmHdr, PldmHdrPacket, set_pldm_fields
-)
-from .types import (
-    PldmTypeCodes,
-    CompletionCodes,
-)
+from ...helpers import AllowRawSummary
 from .. import TransportHdrPacket
 from ..types import AnyPacketType
-from ...helpers import AllowRawSummary
+from .pldm import AutobindPLDMMsg, PldmHdr, PldmHdrPacket, set_pldm_fields
+from .types import (
+    CompletionCodes,
+    PldmTypeCodes,
+)
 
 
 class PldmPlatformMonitoringCmdCodes(IntEnum):
@@ -81,7 +87,7 @@ class GetPDRPacket(Packet):
 
 
 class PlatformEventMsgStatus(IntEnum):
-    NO_LOGGING = 0,
+    NO_LOGGING = 0
     LOGGING_DISABLED = 1
     LOG_FULL = 2
     ACCEPTED_FOR_LOGGING = 3
@@ -90,15 +96,15 @@ class PlatformEventMsgStatus(IntEnum):
 
 
 class PlatformEventMsgClasses(IntEnum):
-    PLDM_SENSOR_EVENT = 0x00,
-    PLDM_EFFECTER_EVENT = 0x01,
-    PLDM_REDFISH_TASK_EXECUTED_EVENT = 0x02,
-    PLDM_REDFISH_MESSAGE_EVENT = 0x03,
-    PLDM_PDR_REPOSITORY_CHG_EVENT = 0x04,
-    PLDM_MESSAGE_POLL_EVENT = 0x05,
-    PLDM_HEARTBEAT_TIMER_ELAPSED_EVENT = 0x06,
-    PLDM_OEM_CRASH_DUMP_EVENT = 0xF0,
-    PLDM_OEM_SEL_EVENT = 0xF1,
+    PLDM_SENSOR_EVENT = 0x00
+    PLDM_EFFECTER_EVENT = 0x01
+    PLDM_REDFISH_TASK_EXECUTED_EVENT = 0x02
+    PLDM_REDFISH_MESSAGE_EVENT = 0x03
+    PLDM_PDR_REPOSITORY_CHG_EVENT = 0x04
+    PLDM_MESSAGE_POLL_EVENT = 0x05
+    PLDM_HEARTBEAT_TIMER_ELAPSED_EVENT = 0x06
+    PLDM_OEM_CRASH_DUMP_EVENT = 0xF0
+    PLDM_OEM_SEL_EVENT = 0xF1
     PLDM_OEM_BMC_EVENT = 0xF2
 
 
@@ -109,7 +115,7 @@ class PldmMessagePollEventDataPacket(Packet):
         XLEIntField('DataTransferHandle', 0),
     ]
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = (f"MsgPollEventData (fmtVer={self.formatVersion}, eventID={self.eventID}, "
                    f"DataTransferHandle={self.DataTransferHandle})")
         return summary, [PollForPlatformEventMsgPacket, PldmHdrPacket, TransportHdrPacket]
@@ -130,7 +136,7 @@ class PldmSELEventDataPacket(Packet):
         XByteField('event_data_3', 0),
     ]
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = (f"SELEvent (record_id={self.record_id}, record_type={self.record_type}, "
                    f"sensor_num={self.sensor_num}, sensor_type={self.sensor_type})")
         return summary, [PollForPlatformEventMsgPacket, PldmHdrPacket, TransportHdrPacket]
@@ -149,8 +155,8 @@ class PlatformEventMsgPacket(Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
-        summary = f"PlatformEventMsg ("
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = "PlatformEventMsg ("
         if self.underlayer.getfieldval('rq') == 1:
             summary += f"ver={self.formatVersion}, tid={self.tid}, eventClass=0x{self.eventClass:02X}"
         else:
@@ -167,16 +173,16 @@ bind_layers(PlatformEventMsgPacket, PldmSELEventDataPacket,
 
 
 class PollForPlatformEventOperation(IntEnum):
-    GET_NEXT_PART = 0,
-    GET_FIRST_PART = 1,
-    ACK_ONLY = 2,
+    GET_NEXT_PART = 0
+    GET_FIRST_PART = 1
+    ACK_ONLY = 2
 
 
 class PollForPlatformEventTransferFlag(IntEnum):
-    START = 0,
-    MIDDLE = 1,
-    END = 4,
-    START_AND_END = 5,
+    START = 0
+    MIDDLE = 1
+    END = 4
+    START_AND_END = 5
 
 
 @AutobindPLDMMsg(PldmTypeCodes.PLATFORM_MONITORING, PldmPlatformMonitoringCmdCodes.PollForPlatformEventMessage)
@@ -226,8 +232,8 @@ class PollForPlatformEventMsgPacket(Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
-        summary = f"PPE ("
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = "PPE ("
         if self.underlayer.getfieldval('rq') == 1:
             summary += (f"ver={self.formatVersion}, op={self.TransferOperationFlag}, "
                         f"hdl=0x{self.DataTransferHandle:02X}, eventIDToAck=0x{self.eventIDToAcknowledge:04X}")
@@ -274,16 +280,16 @@ class GetSensorReadingEventMsgEnableEnum(IntEnum):
 
 
 class GetSensorReadingPresentEnum(IntEnum):
-    UNKNOWN = 0x0,
-    NORMAL = 0x01,
-    WARNING = 0x02,
-    CRITICAL = 0x03,
-    FATAL = 0x04,
-    LOWERWARNING = 0x05,
-    LOWERCRITICAL = 0x06,
-    LOWERFATAL = 0x07,
-    UPPERWARNING = 0x08,
-    UPPERCRITICAL = 0x09,
+    UNKNOWN = 0x0
+    NORMAL = 0x01
+    WARNING = 0x02
+    CRITICAL = 0x03
+    FATAL = 0x04
+    LOWERWARNING = 0x05
+    LOWERCRITICAL = 0x06
+    LOWERFATAL = 0x07
+    UPPERWARNING = 0x08
+    UPPERCRITICAL = 0x09
     UPPERFATAL = 0x0a
 
 
@@ -319,8 +325,8 @@ class GetSensorReadingPacket(AllowRawSummary, Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
-        summary = f"GetSensorReading ("
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = "GetSensorReading ("
         if self.underlayer.getfieldval('rq') == 1:
             summary += f"sensorID=0x{self.sensorID:04X}, rearmEventState=0x{self.rearmEventState:02X}"
         else:

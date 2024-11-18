@@ -1,17 +1,17 @@
 from typing import Tuple, Union
 
-from scapy.fields import XByteField, ByteEnumField, MultipleTypeField, XShortField, XIntField
+from scapy.fields import ByteEnumField, MultipleTypeField, XByteField, XIntField, XShortField
 from scapy.packet import Packet
 
+from ...helpers import AllowRawSummary
+from .. import EndpointContext
+from ..types import AnyPacketType, VendorCapabilitySet, VendorIdFormat
 from .control import (
     AutobindControlMsg,
     ControlHdr,
     set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
-from .. import EndpointContext
-from ..types import AnyPacketType, VendorIdFormat, VendorCapabilitySet
-from ...helpers import AllowRawSummary
 
 NO_MORE_CAPABILITY_SETS = 0xff
 
@@ -36,7 +36,7 @@ class GetVendorDefinedMessageSupportPacket(AllowRawSummary, Packet):
         ]
     )
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.supported_vdm_msg_types or self.vendor_id_set_selector >= len(ctx.supported_vdm_msg_types):
             # invalid request
             return CompletionCodes.ERROR_INVALID_DATA, None
@@ -55,7 +55,7 @@ class GetVendorDefinedMessageSupportPacket(AllowRawSummary, Packet):
         )
 
 
-def GetVendorDefinedMessageSupport(_pkt: Union[bytes, bytearray] = b"", /, *, set_selector: int = 0):
+def GetVendorDefinedMessageSupport(_pkt: bytes | bytearray = b"", /, *, set_selector: int = 0):
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.GetVendorDefinedMessageSupport)
     if _pkt:
         return GetVendorDefinedMessageSupportPacket(_pkt, _underlayer=hdr)
@@ -65,7 +65,7 @@ def GetVendorDefinedMessageSupport(_pkt: Union[bytes, bytearray] = b"", /, *, se
     )
 
 
-def GetVendorDefinedMessageSupportResponse(_pkt: Union[bytes, bytearray] = b"", /, *,
+def GetVendorDefinedMessageSupportResponse(_pkt: bytes | bytearray = b"", /, *,
                                            set_selector: int = 0,
                                            vendor_id_fmt: VendorIdFormat = VendorIdFormat.PCI_VENDOR_ID,
                                            vendor_id: int = 0,

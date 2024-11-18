@@ -4,13 +4,10 @@ from typing import Tuple, Union
 from scapy.fields import XByteEnumField, XByteField
 from scapy.packet import Packet
 
-from .control import (
-    AutobindControlMsg,
-    ControlHdr, set_control_fields
-)
-from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 from .. import EndpointContext
 from ..types import AnyPacketType
+from .control import AutobindControlMsg, ControlHdr, set_control_fields
+from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
 class AllocateEIDOperation(IntEnum):
@@ -39,7 +36,7 @@ class AllocateEndpointIDsPacket(Packet):
         ],
     )
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.is_bus_owner:
             return CompletionCodes.ERROR_UNSUPPORTED_CMD, None
 
@@ -65,7 +62,7 @@ class AllocateEndpointIDsPacket(Packet):
         )
 
 
-def AllocateEndpointIDs(_pkt: Union[bytes, bytearray] = b"", /, *,
+def AllocateEndpointIDs(_pkt: bytes | bytearray = b"", /, *,
                         op: AllocateEIDOperation,
                         allocated_pool_size: int,
                         starting_eid: int) -> AllocateEndpointIDsPacket:
@@ -80,7 +77,7 @@ def AllocateEndpointIDs(_pkt: Union[bytes, bytearray] = b"", /, *,
     )
 
 
-def AllocateEndpointIDsResponse(_pkt: Union[bytes, bytearray] = b"", /, *,
+def AllocateEndpointIDsResponse(_pkt: bytes | bytearray = b"", /, *,
                                 status: AllocateEIDAllocationStatus,
                                 eid_pool_size: int,
                                 first_eid: int):

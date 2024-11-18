@@ -1,21 +1,17 @@
 from enum import IntEnum
-from typing import Tuple, Union, List
+from typing import List, Tuple, Union
 
-from scapy.fields import XByteEnumField, XByteField, XLEIntField, FieldListField
+from scapy.fields import FieldListField, XByteEnumField, XByteField, XLEIntField
 from scapy.packet import Packet
 
-from .pldm import (
-    AutobindPLDMMsg,
-    set_pldm_fields, PldmHdrPacket
-)
-from .types import (
-    PldmTypeCodes,
-    PldmControlCmdCodes,
-)
-
 from .. import EndpointContext
-from ..types import AnyPacketType
 from ..transport import TransportHdrPacket
+from ..types import AnyPacketType
+from .pldm import AutobindPLDMMsg, PldmHdrPacket, set_pldm_fields
+from .types import (
+    PldmControlCmdCodes,
+    PldmTypeCodes,
+)
 
 
 @AutobindPLDMMsg(PldmTypeCodes.CONTROL, PldmControlCmdCodes.SetTID)
@@ -28,7 +24,7 @@ class SetTIDPacket(Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"SETTID (tid: {self.tid})"
         return summary, [PldmHdrPacket, TransportHdrPacket]
 
@@ -43,21 +39,21 @@ class GetTIDPacket(Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"GETTID (tid: {self.tid})"
         return summary, [PldmHdrPacket, TransportHdrPacket]
 
 
 class GetPLDMVersionOperation(IntEnum):
-    GET_NEXT_PART = 0,
-    GET_FIRST_PART = 1,
+    GET_NEXT_PART = 0
+    GET_FIRST_PART = 1
 
 
 class GetPLDMVersionTransferFlag(IntEnum):
-    START = 1,
-    MIDDLE = 2,
-    END = 4,
-    START_AND_END = 5,
+    START = 1
+    MIDDLE = 2
+    END = 4
+    START_AND_END = 5
 
 
 @AutobindPLDMMsg(PldmTypeCodes.CONTROL, PldmControlCmdCodes.GetPLDMVersion)
@@ -74,8 +70,8 @@ class GetPLDMVersionPacket(Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
-        summary = f"GetPLDMVER ("
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = "GetPLDMVER ("
         if self.underlayer.getfieldval('rq') == 1:
             summary += f"hdl={self.DataTransferHandle}, op={self.TransferOperationFlag}, type={self.PLDMType})"
         else:
@@ -110,27 +106,27 @@ class GetPLDMTypesPacket(Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
-        summary = f"GetPLDMTypes ("
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = "GetPLDMTypes ("
         if self.underlayer.getfieldval('rq') == 1:
-            summary += f")"
+            summary += ")"
             return summary, [PldmHdrPacket, TransportHdrPacket]
 
         if self.PLDMTypes1 != 0:
             if self.PLDMTypes1 & PLDMTypesByte1.CONTROL != 0:
-                summary += f"CTRL "
+                summary += "CTRL "
             if self.PLDMTypes1 & PLDMTypesByte1.SMBIOS != 0:
-                summary += f"SMBIOS "
+                summary += "SMBIOS "
             if self.PLDMTypes1 & PLDMTypesByte1.PLATFORM_MONITORING != 0:
-                summary += f"M&C "
+                summary += "M&C "
             if self.PLDMTypes1 & PLDMTypesByte1.BIOS != 0:
-                summary += f"BIOS "
+                summary += "BIOS "
             if self.PLDMTypes1 & PLDMTypesByte1.FRU != 0:
-                summary += f"FRU "
+                summary += "FRU "
             if self.PLDMTypes1 & PLDMTypesByte1.FIRMWARE_UPDATES != 0:
-                summary += f"FUP "
+                summary += "FUP "
             if self.PLDMTypes1 & PLDMTypesByte1.RDE != 0:
-                summary += f"RDE "
+                summary += "RDE "
             summary = summary.rstrip()
         if self.PLDMTypes2 != 0:
             summary += f"PLDMTypes[2]=0x{self.PLDMTypes2:02X}"
@@ -164,8 +160,8 @@ class GetPLDMCommandsPacket(Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
-        summary = f"GetPLDMTypes ("
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = "GetPLDMTypes ("
         if self.underlayer.getfieldval('rq') == 0:
             summary += f"{self.cmds}"
         summary += ")"

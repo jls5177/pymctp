@@ -1,18 +1,18 @@
 from enum import IntEnum
-from typing import Tuple, Union, List
+from typing import List, Tuple, Union
 
 from scapy.fields import BitEnumField, BitField, XByteField
 from scapy.packet import Packet
 
+from .. import EndpointContext, TransportHdrPacket
+from ..types import AnyPacketType
 from .control import (
     AutobindControlMsg,
     ControlHdr,
-    set_control_fields,
     ControlHdrPacket,
+    set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
-from .. import EndpointContext, TransportHdrPacket
-from ..types import AnyPacketType
 
 
 class EndpointType(IntEnum):
@@ -28,15 +28,15 @@ class EndpointIDType(IntEnum):
     """The endpoint uses a dynamic EID only"""
 
     STATIC_EID_SUPPORTED = 1
-    """The EID returned by this command reflects the present setting and may or 
+    """The EID returned by this command reflects the present setting and may or
     may not match the static EID value."""
 
     STATIC_EID_MATCH = 2
-    """The endpoint has been configured with a static EID. The present value is 
+    """The endpoint has been configured with a static EID. The present value is
     the same as the static value."""
 
     STATIC_EID_MISMATCH = 3
-    """ Endpoint has been configured with a static EID. The present value is 
+    """ Endpoint has been configured with a static EID. The present value is
     different than the static value"""
 
 
@@ -55,7 +55,7 @@ class GetEndpointIDPacket(Packet):
         ],
     )
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name}"
         if self.underlayer.getfieldval('rq') == 0:
             summary += f" (eid: {self.eid:02X}, type: "
@@ -68,10 +68,10 @@ class GetEndpointIDPacket(Packet):
                 summary += "eid_type: static_eid_match"
             elif self.endpoint_id_type == EndpointIDType.STATIC_EID_MISMATCH.value:
                 summary += "eid_type: static_eid_mismatch"
-            summary += f")"
+            summary += ")"
         return summary, [ControlHdrPacket, TransportHdrPacket]
 
-    def make_ctrl_reply(self, ctx: EndpointContext) -> Tuple[CompletionCode, AnyPacketType]:
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         cmplt_code = CompletionCodes.SUCCESS
         endp_type = EndpointIDType.DYNAMIC
         if ctx.static_eid:

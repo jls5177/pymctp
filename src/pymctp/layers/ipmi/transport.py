@@ -1,8 +1,8 @@
 from enum import IntEnum
-from typing import Union, Tuple, List
+from typing import List, Tuple, Union
 
 from scapy.config import conf
-from scapy.fields import BitField, XByteField, ByteEnumField, BitEnumField, PacketField
+from scapy.fields import BitEnumField, BitField, ByteEnumField, PacketField, XByteField
 from scapy.packet import Packet, bind_layers
 
 from pymctp.layers.helpers import AllowRawSummary
@@ -23,63 +23,37 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         return self.net_fn % 2 == 1
 
     def netfn_name(self):
-        if self.net_fn == 0:
-            return "CHASSIS REQ"
-        if self.net_fn == 1:
-            return "CHASSIS RSP"
-        if self.net_fn == 2:
-            return "BRIDGE REQ"
-        if self.net_fn == 3:
-            return "BRIDGE RSP"
-        if self.net_fn == 4:
-            return "SENSOR REQ"
-        if self.net_fn == 5:
-            return "SENSOR RSP"
-        if self.net_fn == 6:
-            return "APP REQ"
-        if self.net_fn == 7:
-            return "APP RSP"
-        if self.net_fn == 8:
-            return "FW REQ"
-        if self.net_fn == 9:
-            return "FW RSP"
-        if self.net_fn == 10:
-            return "STORAGE REQ"
-        if self.net_fn == 11:
-            return "STORAGE RSP"
-        if self.net_fn == 12:
-            return "TRANSPORT REQ"
-        if self.net_fn == 13:
-            return "TRANSPORT RSP"
-        if self.net_fn == 0x2C:
-            return "GROUP REQ"
-        if self.net_fn == 0x2D:
-            return "GROUP RSP"
-        if self.net_fn == 0x2E:
-            return "OEM REQ"
-        if self.net_fn == 0x2F:
-            return "OEM RSP"
-        if self.net_fn == 0x30:
-            return "OEM1 REQ"
-        if self.net_fn == 0x31:
-            return "OEM1 RSP"
-        if self.net_fn == 0x32:
-            return "OEM2 REQ"
-        if self.net_fn == 0x33:
-            return "OEM2 RSP"
-        if self.net_fn == 0x34:
-            return "OEM3 REQ"
-        if self.net_fn == 0x35:
-            return "OEM3 RSP"
-        if self.net_fn == 0x36:
-            return "OEM4 REQ"
-        if self.net_fn == 0x37:
-            return "OEM4 RSP"
-        if self.net_fn == 0x38:
-            return "OEM5 REQ"
-        if self.net_fn == 0x39:
-            return "OEM5 RSP"
-        return ""
+        netfn_names = {
+            0: "CHASSIS REQ",
+            1: "CHASSIS RSP",
+            2: "BRIDGE REQ",
+            3: "BRIDGE RSP",
+            4: "SENSOR REQ",
+            5: "SENSOR RSP",
+            6: "APP REQ",
+            7: "APP RSP",
+            8: "FW REQ",
+            9: "FW RSP",
+            10: "STORAGE REQ",
+            11: "STORAGE RSP",
+            12: "TRANSPORT REQ",
+            13: "TRANSPORT RSP",
+            0x2C: "GROUP REQ",
+            0x2D: "GROUP RSP",
+            0x2E: "OEM REQ",
+            0x2F: "OEM RSP",
+            0x30: "OEM1 REQ",
+            0x31: "OEM1 RSP",
+            0x32: "OEM2 REQ",
+            0x33: "OEM2 RSP",
+            0x34: "OEM3 REQ",
+            0x35: "OEM3 RSP",
+            0x36: "OEM4 REQ",
+            0x37: "OEM4 RSP",
+            0x38: "OEM5 REQ",
+            0x39: "OEM5 RSP",
+        }
+        return netfn_names.get(self.net_fn, "")
 
     def mysummary(self):  # type: () -> str
         netfn_name = self.netfn_name()
@@ -111,8 +85,8 @@ class MasterWriteReadRequestPacket(AllowRawSummary, Packet):
         PacketField("load", None, TrimmedSmbusTransportPacket),
     ]
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
-        bus_type_str = f"PUB" if self.bus_type == MasterWriteReadBusType.PUBLIC.value else f"PRV"
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        bus_type_str = "PUB" if self.bus_type == MasterWriteReadBusType.PUBLIC.value else "PRV"
         summary = (f"{self.name} (ch: {self.channel}, bus: {self.bus}, type: {bus_type_str}, "
                    f"phys_addr: 0x{self.phy_address:02X}, rd_cnt: {self.read_count})")
         return summary, [TransportHdrPacket]
@@ -125,7 +99,7 @@ class MasterWriteReadResponsePacket(AllowRawSummary, Packet):
         XByteField("completion_code", 0),
     ]
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} (cc: {self.completion_code:02X})"
         return summary, [TransportHdrPacket]
 

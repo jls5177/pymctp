@@ -1,22 +1,17 @@
 import time
+from collections.abc import Callable
 from enum import IntEnum
-from typing import Optional, Union, Type, Tuple, List, Callable
+from typing import List, Optional, Tuple, Type, Union
 
 from scapy.config import conf
-from scapy.fields import (
-    BitEnumField,
-    BitField,
-    ConditionalField,
-    XBitField,
-    XByteField, AnyField
-)
+from scapy.fields import AnyField, BitEnumField, BitField, ConditionalField, XBitField, XByteField
 from scapy.packet import Packet, Raw, bind_layers
 
-from .types import PldmTypeCodes, CompletionCodes
-from .. import EndpointContext
-from ..transport import AutobindMessageType, MsgTypes, TransportHdrPacket, SmbusTransportPacket
-from ..types import AnyPacketType
 from ...interfaces import ICanSetMySummaryClasses
+from .. import EndpointContext
+from ..transport import AutobindMessageType, MsgTypes, SmbusTransportPacket, TransportHdrPacket
+from ..types import AnyPacketType
+from .types import CompletionCodes, PldmTypeCodes
 
 
 class RqBit(IntEnum):
@@ -44,13 +39,13 @@ class PldmHdrPacket(Packet):
         ),
     ]
 
-    def mysummary(self) -> Union[str, Tuple[str, List[AnyPacketType]]]:
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         rqType = 'REQ' if self.rq == RqBit.REQUEST.value else 'RSP'
         summary = f"PLDM {rqType} (inst_id=0x{self.instance_id:02X}, type=0x{self.pldm_type:02X}, cmd=0x{self.cmd_code:02X}"
         if self.rq == RqBit.RESPONSE.value:
             summary += f", cc={self.completion_code})"
         else:
-            summary += f")"
+            summary += ")"
         return summary, [TransportHdrPacket, SmbusTransportPacket]
 
     def do_dissect_payload(self, s: bytes) -> None:
@@ -62,9 +57,8 @@ class PldmHdrPacket(Packet):
         except KeyboardInterrupt:
             raise
         except Exception:
-            if conf.debug_dissector:
-                if cls is not None:
-                    raise
+            if conf.debug_dissector and cls is not None:
+                raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
         self.add_payload(p)
         if isinstance(p, ICanSetMySummaryClasses):
@@ -111,8 +105,7 @@ class PldmHdrPacket(Packet):
                 delay = resp_info.processing_delay
                 if delay:
                     time.sleep(delay / 1000.0)
-                resp = Raw(bytes([rqDInstanceID & 0x7f])) / resp_data
-                return resp
+                return Raw(bytes([rqDInstanceID & 0x7f])) / resp_data
         # TODO: add support to auto-respond to pldm msgs
 
         rsp = PldmHdr(
@@ -127,13 +120,13 @@ class PldmHdrPacket(Packet):
 
 
 def PldmHdr(*args,
-            rq: Union[bool | RqBit] = RqBit.RESPONSE,
+            rq: bool | RqBit = RqBit.RESPONSE,
             d: bool = False,
             instance_id: int = 0,
             hdr_ver: int = DEFAULT_HDR_VERSION,
             pldm_type: PldmTypeCodes = PldmTypeCodes.CONTROL,
             cmd_code: int = 0,
-            completion_code: Optional[int] = 0) -> PldmHdrPacket:
+            completion_code: int | None = 0) -> PldmHdrPacket:
     if len(args):
         return PldmHdrPacket(*args)
     return PldmHdrPacket(rq=0 if not rq or rq in [False, RqBit.RESPONSE, 0] else 1,
@@ -150,7 +143,7 @@ class AutobindPLDMMsg:
         self.pldm_type = pldm_type
         self.cmd_code = cmd_code
 
-    def __call__(self, cls: Type[Packet]):
+    def __call__(self, cls: type[Packet]):
         pldm_type = self.pldm_type
         cmd_code = self.cmd_code
         # print(f"Binding cls {cls} to cmd_code {cmd_code}:{self.is_request}")
@@ -166,13 +159,14 @@ class AutobindPLDMMsg:
         return cls
 
 
-def set_pldm_fields(rq_fields: Optional[List[AnyField]] = None,
-                    rsp_fields: Optional[List[AnyField]] = None) -> List[AnyField]:
+def set_pldm_fields(rq_fields: list[AnyField] | None = None,
+                    rsp_fields: list[AnyField] | None = None) -> list[AnyField]:
     rq_fields = rq_fields or []
     rsp_fields = rsp_fields or []
 
     def gen_conditional_field(fld: AnyField, cond: Callable[[Packet], bool]):
-        default_cond = lambda pkt: True
+        def default_cond(pkt):
+            return True
         if isinstance(fld, ConditionalField):
             # unwrap the conditional field
             default_cond = fld.cond
