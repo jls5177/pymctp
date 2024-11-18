@@ -31,9 +31,13 @@ class QemuI2CNetDevSocket(SuperSocket):
         in_port=0,
         out_port=None,
         id_str="",
+        dump_hex=True,
+        dump_packet=False,
         **kwargs,
     ):
         self.id_str = id_str
+        self.dump_hex = dump_hex
+        self.dump_packet = dump_packet
         fd = socket.socket(family, type, proto)
         assert fd != -1
         self.ins = self.outs = fd
@@ -68,20 +72,26 @@ class QemuI2CNetDevSocket(SuperSocket):
                 print(f"Failed sending data: {e}")
                 raise
             else:
-                print(f"{self.id_str}>TX> {linehexdump(x, onlyhex=1, dump=True)}")
+                if self.dump_hex:
+                    print(f"{self.id_str}>TX> {linehexdump(x, onlyhex=1, dump=True)}")
+                if self.dump_packet:
+                    print(f"{self.id_str}>TX> {x.summary()}")
                 return result
         else:
             return self.outs.send(sx)
 
     def recv(self, x: int = MTU) -> Packet | None:
         raw_bytes = self.ins.recv(x)
-        print(f"{self.id_str}<RX< {linehexdump(raw_bytes, onlyhex=1, dump=True)}")
+        if self.dump_hex:
+            print(f"{self.id_str}<RX< {linehexdump(raw_bytes, onlyhex=1, dump=True)}")
         if len(raw_bytes) < 7:
             return None
         # TODO: Move this to a config field to support multiple transports
         #       Not needed right now as Qemu only supports I2C/SMBUS payloads
         pkt = SmbusTransport(raw_bytes)
         pkt.time = time.time()
+        if pkt and self.dump_packet:
+            print(f"{self.id_str}<RX< {pkt.summary()}")
         return pkt
 
 

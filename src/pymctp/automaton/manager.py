@@ -72,6 +72,8 @@ class UdpSocketConfig(DataClassDictMixin):
     out_port: int
     name: str
     iface: str = "localhost"
+    dump_hex: bool = True
+    dump_packet: bool = False
 
     socket: QemuI2CNetDevSocket | None = field(
         default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
@@ -79,7 +81,12 @@ class UdpSocketConfig(DataClassDictMixin):
 
     def __post_init__(self):
         self.socket = QemuI2CNetDevSocket(
-            iface=self.iface, in_port=self.in_port, out_port=self.out_port, id_str=self.name
+            iface=self.iface,
+            in_port=self.in_port,
+            out_port=self.out_port,
+            id_str=self.name,
+            dump_hex=self.dump_hex,
+            dump_packet=self.dump_packet,
         )
 
     def close_socket(self):
@@ -98,6 +105,8 @@ class AardvarkConfig(DataClassDictMixin):
     slave_addr: Smbus7bitAddress = field(metadata=field_options(alias="slave_address"))
     serial_number: str
     name: str
+    dump_hex: bool = True
+    dump_packet: bool = False
 
     socket: AardvarkI2CSocket | None = field(
         default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
@@ -108,7 +117,11 @@ class AardvarkConfig(DataClassDictMixin):
 
     def __post_init__(self):
         self.socket = AardvarkI2CSocket(
-            slave_address=self.slave_addr, serial_number=self.serial_number, id_str=self.name
+            slave_address=self.slave_addr,
+            serial_number=self.serial_number,
+            id_str=self.name,
+            dump_hex=self.dump_hex,
+            dump_packet=self.dump_packet,
         )
 
     def create_session(self) -> EndpointSession:
@@ -148,15 +161,16 @@ class EndpointManager:
     session: EndpointSession
     socket: SuperSocket
     thread: Thread
+    am: SimpleEndpointAM
 
     @classmethod
-    def from_config(cls, config: dict[Any, Any], start_thread=True):
+    def from_config(cls, config: dict[Any, Any], start_thread=True, verbose: bool = False):
         cfg = EndpointConfig.from_dict(config)
         print(f"DEBUG: {cfg or 'None'}")
         socket = cfg.config.socket
         session = EndpointSession(context=cfg.context, socket=socket)
 
-        am = SimpleEndpointAM(socket=socket, context=cfg.context, session=session)
+        am = SimpleEndpointAM(socket=socket, context=cfg.context, session=session, verbose=verbose)
         if cfg.context.is_bus_owner:
             # TODO: add discovery flow answering machine here
             pass
@@ -168,6 +182,7 @@ class EndpointManager:
             config=cfg,
             session=session,
             thread=thread,
+            am=am,
         )
 
     @property
@@ -177,3 +192,7 @@ class EndpointManager:
     @property
     def supersocket(self) -> SuperSocket:
         return self.config.config.socket
+
+    def stop_sniffer(self):
+        if self.am.sniffer.running:
+            self.am.stop()

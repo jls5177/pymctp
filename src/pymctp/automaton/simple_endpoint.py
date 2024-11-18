@@ -13,6 +13,7 @@ from scapy.plist import PacketList, _PacketIterable  # imported for type hinting
 from scapy.sendrecv import AsyncSniffer
 from scapy.supersocket import SuperSocket
 
+from ..layers.interfaces import AnyPacketType
 from ..layers.mctp.control import ControlHdrPacket
 from ..layers.mctp.types import EndpointContext, ICanReply
 from .sessions import EndpointSession
@@ -142,6 +143,24 @@ class SimpleEndpointAM(AnsweringMachine):
         """
         for p in reply:
             if len(reply) > 1:
-                time.sleep(random.uniform(0.01, 0.5))  # noqa: S311
+                time.sleep(random.uniform(0.001, 0.01))  # noqa: S311
+            else:
+                time.sleep(random.uniform(0.1, 0.25))  # noqa: S311
             if self.socket:
                 self.socket.send(p)
+
+    def print_reply(self, req: AnyPacketType, reply: AnyPacketType) -> None:
+        if isinstance(reply, PacketList):
+            print("")
+            print(f"{req.summary()} ==> {[res.summary() for res in reply]}")
+        else:
+            print(f"{req.summary()} ==> {reply.summary()}")
+
+    @property
+    def sniffer_running(self):
+        return self.sniffer.running
+
+    def stop_sniffer(self, join: bool = False) -> PacketList | None:
+        if self.sniffer_running:
+            return self.sniffer.stop(join=join)
+        return None

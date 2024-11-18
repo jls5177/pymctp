@@ -124,16 +124,16 @@ class TransportHdrPacket(AllowRawSummary, Packet):
             )
 
         # Split the response payload into packets (if needed)
-        resps = []
+        resps = PacketList()
         buf = raw(payload_resp)
+        buf_size = msg_size = len(buf)
         buf_offset = 0
-        buf_size = len(payload_resp)
         pkt_seq = self.pkt_seq + 1
         while buf_size > 0:
             packet_size = min(ctx.mtu_size, buf_size)
-            packet = buf[buf_offset : buf_offset + packet_size]
+            packet = payload_resp if msg_size <= ctx.mtu_size else buf[buf_offset : buf_offset + packet_size]
             som = bool(not buf_offset)
-            eom = (buf_offset + packet_size) >= len(payload_resp)
+            eom = (buf_offset + packet_size) >= msg_size
 
             resp = TransportHdr(
                 msg_type=self.msg_type,
@@ -145,13 +145,13 @@ class TransportHdrPacket(AllowRawSummary, Packet):
                 eom=eom,
                 pkt_seq=pkt_seq,
             )
-            resps += [resp / packet]
+            resps.append(resp / packet)
 
             buf_offset += packet_size
             buf_size -= packet_size
             pkt_seq += 1
 
-        return resps if len(resps) > 1 else resps[0]
+        return resps
 
 
 def TransportHdr(
@@ -199,13 +199,13 @@ class ExtendedConditionalField(ConditionalField):
         self.fld = fld
         self.cond = cond
 
-    def _evalcond(self, pkt, s):
+    def _evalcond(self, pkt, s=None):
         # type: (Packet, bytes) -> bool
-        return bool(self.cond(pkt, s))
+        return bool(self.cond(pkt, s or pkt.original))
 
     def i2h(self, pkt, val):
         # type: (Optional[Packet], Any) -> Any
-        if pkt and not self._evalcond(pkt, pkt.original):
+        if pkt and not self._evalcond(pkt, pkt.original or [val]):
             return None
         return self.fld.i2h(pkt, val)
 
@@ -226,13 +226,16 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
     name = "SMBUS/I2C"
 
     fields_desc = [
-        ExtendedConditionalField(XByteField("dst_addr", 0), lambda pkt, s: s[0] != 0x0F),
+        ExtendedConditionalField(
+            XByteField("dst_addr", 0), lambda pkt, s: (s[0] != 0x0F) if s else pkt.getfieldval("dst_addr")
+        ),
         XByteField("command_code", 0x0F),
         LenField("byte_count", None, fmt="B", adjust=lambda x: 0 if not x else (x + 1)),
         XByteField("src_addr", 0),
         PacketLenField("load", None, TransportHdrPacket, length_from=lambda x: x.byte_count - 1),
-        ExtendedConditionalField(XByteField("pec", None), lambda pkt, s: len(s) == 1 or len(s) >= pkt.byte_count),
-        # TrailerField(XByteField("pec", None)),
+        ExtendedConditionalField(
+            XByteField("pec", None), lambda pkt, s: len(s) == 1 or len(s) >= pkt.getfieldval("byte_count")
+        ),
     ]
 
     def mysummary(self):  # type: () -> str
@@ -255,7 +258,7 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
             val = crc.digest()
             self.pec = int.from_bytes(val, byteorder="little")
             p = p[:-1] + val
-        elif self.pec != pay[-1]:
+        elif pay and self.pec != pay[-1]:
             p = p[:-1] + int.to_bytes(self.pec, byteorder="little", length=1)
         return p
 
@@ -264,7 +267,11 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
             return 0
         if self.command_code != other.command_code:
             return 0
-        return self.payload.answers(other.payload)
+        if self.payload:
+            return self.payload.answers(other.payload)
+        if self.load:
+            return self.load.answers(other.load)
+        return None
 
     def src_addr_7bit(self) -> Smbus7bitAddress:
         return Smbus7bitAddress(self.src_addr >> 1)
@@ -275,6 +282,8 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
     def is_request(self, check_payload: bool = True) -> bool:
         if check_payload and self.payload and isinstance(self.payload, ICanReply):
             return self.payload.is_request()
+        if check_payload and self.load and isinstance(self.load, ICanReply):
+            return self.load.is_request()
         return False
 
     def make_reply(self, ctx: EndpointContext) -> AnyPacketType:
@@ -293,17 +302,30 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
             payload_resp = self.payload.make_reply(ctx)
             if not payload_resp:
                 return None
+        if self.load and isinstance(self.load, ICanReply):
+            payload_resp = self.load.make_reply(ctx)
+            if not payload_resp:
+                return None
 
         dst = self.dst_addr_7bit()
         src = self.src_addr_7bit()
 
-        resp = SmbusTransportPacket(
-            dst_addr=src.write(),
-            src_addr=dst.read(),
-        )
+        if not isinstance(payload_resp, PacketList | list):
+            payload_resp = [payload_resp]
 
         # wrap each packet with the SMBUS transport header
-        return [(resp / packet) for packet in payload_resp]
+        packets = PacketList()
+        for packet in payload_resp:
+            resp_hdr = SmbusTransport(
+                dst_addr=src.write(),
+                src_addr=dst.read(),
+                byte_count=len(packet),
+                load=packet,
+            )
+
+            packets.extend(resp_hdr)
+
+        return packets
 
 
 class TrimmedSmbusTransportPacket(SmbusTransportPacket):
@@ -324,6 +346,7 @@ def SmbusTransport(
     src_addr: int | Smbus7bitAddress = 1,
     byte_count: int | None = None,
     command_code: int = 0x0F,
+    load: AnyPacketType = None,
     pec: int | None = None,
 ) -> SmbusTransportPacket:
     if len(args):
@@ -332,8 +355,17 @@ def SmbusTransport(
         dst_addr = dst_addr.write()
     if isinstance(src_addr, Smbus7bitAddress):
         src_addr = src_addr.read()
+    if not byte_count:
+        byte_count = len(load) if load else 0
+    byte_count += 1
+    if not pec:
+        crc = crc8.crc8()
+        crc.update(bytes([dst_addr, command_code, byte_count, src_addr]))
+        crc.update(raw(load))
+        val = crc.digest()
+        pec = int.from_bytes(val, byteorder="little")
     return SmbusTransportPacket(
-        dst_addr=dst_addr, src_addr=src_addr, command_code=command_code, byte_count=byte_count, pec=pec
+        dst_addr=dst_addr, src_addr=src_addr, command_code=command_code, byte_count=byte_count, load=load, pec=pec
     )
 
 

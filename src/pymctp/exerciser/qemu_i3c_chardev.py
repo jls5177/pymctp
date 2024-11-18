@@ -356,7 +356,7 @@ class QemuI3CCharDevSocket(SuperSocket):
 
     def __init__(
         self,
-        family: int = socket.AF_UNIX,
+        family: int = socket.AF_UNIX if hasattr(socket, "AF_UNIX") else socket.AF_INET,
         pid: int = 0,
         bcr: int = 0,
         dcr: int = 0,

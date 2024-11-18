@@ -11,6 +11,7 @@ from collections.abc import Callable
 from enum import IntEnum
 from typing import Any
 
+from scapy.config import conf
 from scapy.fields import (
     AnyField,
     BitEnumField,
@@ -25,6 +26,7 @@ from scapy.fields import (
 from scapy.packet import Packet, bind_layers
 
 from ...helpers import AllowRawSummary
+from ...interfaces import ICanSetMySummaryClasses
 from .. import EndpointContext
 from ..transport import AutobindMessageType, MsgTypes, SmbusTransportPacket, TransportHdrPacket
 from ..types import AnyPacketType
@@ -47,6 +49,20 @@ class ControlHdrPacket(AllowRawSummary, Packet):
         Emph(ByteEnumField("cmd_code", 0, ContrlCmdCodes)),
         ConditionalField(XByteField("completion_code", 0), lambda pkt: pkt.rq == RqBit.RESPONSE.value),
     ]
+
+    def do_dissect_payload(self, s: bytes) -> None:
+        cls = self.guess_payload_class(s)
+        try:
+            p = cls(s, _internal=1, _underlayer=self)
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            if conf.debug_dissector and cls is not None:
+                raise
+            p = conf.raw_layer(s, _internal=1, _underlayer=self)
+        self.add_payload(p)
+        if isinstance(p, ICanSetMySummaryClasses):
+            p.set_mysummary_classes([self.__class__, self.underlayer.__class__])
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         rqType = "REQ" if self.rq == RqBit.REQUEST.value else "RSP"
