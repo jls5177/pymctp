@@ -50,6 +50,7 @@ allow-direct-references = true
 source = "regex_commit"
 path = "src/pymctp/__about__.py"
 #commit_extra_args = ["-e"]
+tag_sign = false
 
 [tool.hatch.build.targets.sdist]
 exclude = [
