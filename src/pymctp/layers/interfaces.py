@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 from typing import Protocol, TypeVar, runtime_checkable
 
 from scapy.packet import Packet

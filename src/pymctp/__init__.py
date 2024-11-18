@@ -1,3 +1,3 @@
-# SPDX-FileCopyrightText: 2024-present Justin Simon <justin@simonctl.com>
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
 #
 # SPDX-License-Identifier: MIT

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 from collections import OrderedDict, defaultdict
 from collections import OrderedDict as OrderedDictType
 from pathlib import Path

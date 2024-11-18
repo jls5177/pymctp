@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, NamedTuple

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 """
 This module defines the ControlHdrPacket class and related enums and functions
 for handling MCTP control header packets.

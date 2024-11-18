@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 name: Build
 
 on:
@@ -33,6 +37,9 @@ jobs:
     - name: Lint and typecheck
       run: |
         hatch fmt --check
+    - name: Validate license headers
+      run: |
+        hatch run license-check
     # - name: Test
     #   run: |
     #     hatch run test-cov-xml

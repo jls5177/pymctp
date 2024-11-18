@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 [build-system]
 requires = ["hatchling", "hatch-regex-commit"]
 build-backend = "hatchling.build"
@@ -66,6 +70,13 @@ check = "mypy --install-types --non-interactive {args:src/pymctp tests}"
 [tool.hatch.envs.default]
 type = "virtual"
 path = ".venv"
+dependencies = [
+  "reuse >= 4.0",
+]
+
+[tool.hatch.envs.default.scripts]
+license-check = "reuse lint"
+add-license = "reuse annotate -c \"$(git config --get user.name) <$(git config --get user.email)>\" -l MIT --merge-copyrights -r {args:src/pymctp tests}"
 
 # Ruff
 [tool.ruff]

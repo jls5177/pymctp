@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 from typing import Any
 
 from scapy.fields import BitEnumField, BitField, FieldLenField, FieldListField, PacketListField, XByteField

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 """
 Collection of helper classes and methods to simplify user applications.
 Note: these should not be used internally within the PyMCTP package to prevent
