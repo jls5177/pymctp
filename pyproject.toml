@@ -73,6 +73,49 @@ target-version = "py310"
 line-length = 120
 exclude = ["./.history", "./.venv"]
 
+[tool.ruff.lint]
+ignore = [
+    # Allow boolean positional values in function calls, like `dict.get(... True)`
+    "FBT001", "FBT002", "FBT003",
+    # Ignore complexity
+    "C901",
+    "RUF012",
+    # Allow unused arguments (for now)
+    "ARG001", "ARG002", "ARG005",
+    # Allow wildcard imports (for now)
+    "F403", "F405",
+    # Allow relative imports (for now)
+    "TID252", "F401",
+    # Allow "print" (for now)
+    "T201",
+    # Allow UpperCamelCase function names
+    "N801", "N802", "N806",
+    # Allow asserts in code
+    "S101",
+    # Allow magic values (for now)
+    "PLR2004",
+]
+unfixable = [
+    # Don't touch unused imports
+    "F401",
+    # Don't touch unused variables
+    "F841",
+    "TRY", "T201",
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+known-first-party = ["pymctp"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402", "F401", "I001", "E501"]
+".github/**" = ["D"]
+"tests/**/*" = ["PLR2004", "S101", "TID252", "ARG001"]
+"/*.py" = ["E402", "F401", "I001", "E501"]
+
+
 # Coverage
 [tool.coverage.run]
 source_pkgs = ["pymctp", "tests"]

@@ -3,6 +3,7 @@ Collection of helper classes and methods to simplify user applications.
 Note: these should not be used internally within the PyMCTP package to prevent
       circular dependencies.
 """
+
 import binascii
 
 import crc8
@@ -11,7 +12,7 @@ from scapy.packet import Raw
 
 from ..layers import ipmi, mctp
 
-ALL_1s_BLOCK = bytes([0xff] * 4096)
+ALL_1s_BLOCK = bytes([0xFF] * 4096)
 
 
 class PrintableRawPacket(Raw):
@@ -22,7 +23,7 @@ class PrintableRawPacket(Raw):
         self._mysummary_cls = classes
 
     def mysummary(self):
-        if self.load == ALL_1s_BLOCK[:len(self.load)]:
+        if self.load == ALL_1s_BLOCK[: len(self.load)]:
             summary = f"Padded [0xff] * {len(self.load)}"
         else:
             # add CRC to make it easy to compare raw payloads
@@ -33,7 +34,12 @@ class PrintableRawPacket(Raw):
             else:
                 summary = f"Raw ${crc.hexdigest().upper()} [{len(self.load)}] {binascii.hexlify(self.load, b' ', -2).decode()}"
         if hasattr(self, "_mysummary_cls"):
-            return summary, [*self._mysummary_cls, mctp.SmbusTransportPacket, mctp.TransportHdrPacket, ipmi.TransportHdrPacket]
+            return summary, [
+                *self._mysummary_cls,
+                mctp.SmbusTransportPacket,
+                mctp.TransportHdrPacket,
+                ipmi.TransportHdrPacket,
+            ]
         return summary, [mctp.SmbusTransportPacket, mctp.TransportHdrPacket, ipmi.TransportHdrPacket]
 
 

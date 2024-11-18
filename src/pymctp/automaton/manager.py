@@ -4,7 +4,7 @@ import threading
 from dataclasses import field
 from enum import Enum
 from threading import Thread
-from typing import Any, Dict, Optional, Protocol, Union, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from mashumaro import DataClassDictMixin, field_options
 from mashumaro.config import BaseConfig
@@ -41,12 +41,21 @@ class CharDevSocketConfig(DataClassDictMixin):
     mrl: int = 256
     dynamic_addr: int = 0
 
-    socket: QemuI3CCharDevSocket | None = field(default=None, init=False,
-                                                   metadata={'serialize': pickle.dumps, 'deserialize': pickle.loads})
+    socket: QemuI3CCharDevSocket | None = field(
+        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
+    )
 
     def __post_init__(self):
-        self.socket = QemuI3CCharDevSocket(in_file=self.in_file, id_str=self.name, pid=self.pid, bcr=self.bcr,
-                                           dcr=self.dcr, mwl=self.mwl, mrl=self.mrl, dynamic_addr=self.dynamic_addr)
+        self.socket = QemuI3CCharDevSocket(
+            in_file=self.in_file,
+            id_str=self.name,
+            pid=self.pid,
+            bcr=self.bcr,
+            dcr=self.dcr,
+            mwl=self.mwl,
+            mrl=self.mrl,
+            dynamic_addr=self.dynamic_addr,
+        )
 
     def close_socket(self):
         self.socket.close()
@@ -60,12 +69,14 @@ class UdpSocketConfig(DataClassDictMixin):
     name: str
     iface: str = "localhost"
 
-    socket: QemuI2CNetDevSocket | None = field(default=None, init=False,
-                                                  metadata={'serialize': pickle.dumps, 'deserialize': pickle.loads})
+    socket: QemuI2CNetDevSocket | None = field(
+        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
+    )
 
     def __post_init__(self):
-        self.socket = QemuI2CNetDevSocket(iface=self.iface, in_port=self.in_port, out_port=self.out_port,
-                                          id_str=self.name)
+        self.socket = QemuI2CNetDevSocket(
+            iface=self.iface, in_port=self.in_port, out_port=self.out_port, id_str=self.name
+        )
 
     def close_socket(self):
         self.socket.close()
@@ -84,19 +95,17 @@ class AardvarkConfig(DataClassDictMixin):
     serial_number: str
     name: str
 
-    socket: AardvarkI2CSocket | None = field(default=None, init=False,
-                                                metadata={'serialize': pickle.dumps, 'deserialize': pickle.loads})
+    socket: AardvarkI2CSocket | None = field(
+        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
+    )
 
     class Config(BaseConfig):
-        serialization_strategy = {
-            Smbus7bitAddress: {
-                "deserialize": deserialize_aardvark_address
-            }
-        }
+        serialization_strategy = {Smbus7bitAddress: {"deserialize": deserialize_aardvark_address}}
 
     def __post_init__(self):
-        self.socket = AardvarkI2CSocket(slave_address=self.slave_addr, serial_number=self.serial_number,
-                                        id_str=self.name)
+        self.socket = AardvarkI2CSocket(
+            slave_address=self.slave_addr, serial_number=self.serial_number, id_str=self.name
+        )
 
     def create_session(self) -> EndpointSession:
         pass
@@ -109,13 +118,12 @@ def deserialize_supersocket(value: dict) -> AardvarkConfig | UdpSocketConfig | C
     config_type = value.get("type")
     if config_type == ConfigTypes.Socket:
         return UdpSocketConfig.from_dict(value)
-    elif config_type == ConfigTypes.Aardvark:
+    if config_type == ConfigTypes.Aardvark:
         return AardvarkConfig.from_dict(value)
-    elif config_type == ConfigTypes.CharDev:
+    if config_type == ConfigTypes.CharDev:
         return CharDevSocketConfig.from_dict(value)
-    else:
-        msg = f"Unknown config type {config_type}"
-        raise ValueError(msg)
+    msg = f"Unknown config type {config_type}"
+    raise ValueError(msg)
 
 
 @dataclasses.dataclass()
@@ -126,9 +134,7 @@ class EndpointConfig(DataClassDictMixin):
 
     class Config(BaseConfig):
         serialization_strategy = {
-            Union[AardvarkConfig, UdpSocketConfig, CharDevSocketConfig]: {
-                "deserialize": deserialize_supersocket
-            }
+            AardvarkConfig | UdpSocketConfig | CharDevSocketConfig: {"deserialize": deserialize_supersocket}
         }
 
 

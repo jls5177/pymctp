@@ -1,7 +1,7 @@
 import random
 import time
 from collections.abc import Callable
-from typing import Optional, Union, cast
+from typing import cast
 
 from scapy.ansmachine import AnsweringMachine
 from scapy.packet import Packet
@@ -32,24 +32,32 @@ class SimpleEndpointAM(AnsweringMachine):
         >>> rsp = session.sndrcv_control_msg(GetEndpointID(), 0x15, Smbus7bitAddress(0x20 >> 1))
         >>> rsp.show2() if rsp else print(f"No response received, timeout?")
     """
+
     context: EndpointContext
     socket: SuperSocket
 
     function_name = "simple_bus_owner"
     # removed the "iface", "promisc", "count", and "type" options as they are ethernet specific
     sniff_options_list = [
-                             "store", "opened_socket", "count", "filter", "prn", "stop_filter"
-                         ] + [
-                             "timeout",  # added timeout to stop sniffer after designated time period
-                         ]
+        "store",
+        "opened_socket",
+        "count",
+        "filter",
+        "prn",
+        "stop_filter",
+        "timeout",  # added timeout to stop sniffer after designated time period
+    ]
     # removed the "socket" option to allow it to be passed to "parse_options"
     send_options_list = ["iface", "inter", "loop", "verbose"]
 
-    def __init__(self, session: EndpointSession | None = None,
-                 socket: SuperSocket | None = None,
-                 context: EndpointContext | None = None,
-                 timeout: int | float | None = None,
-                 **kwargs):
+    def __init__(
+        self,
+        session: EndpointSession | None = None,
+        socket: SuperSocket | None = None,
+        context: EndpointContext | None = None,
+        timeout: float | None = None,
+        **kwargs,
+    ):
         """
         Overloaded the AnsweringMachine.__init__() to add type hints for class specific parameters.
 
@@ -73,13 +81,15 @@ class SimpleEndpointAM(AnsweringMachine):
         Overloaded the AnsweringMachine.sniff() method to always capture the sniffer in an instance attribute
         """
         self.sniffer = AsyncSniffer()
-        self.sniffer._run(**self.optsniff)
+        self.sniffer._run(**self.optsniff)  # noqa: SLF001
         return cast(PacketList, self.sniffer.results)
 
-    def parse_options(self,
-                      session: EndpointSession | None = None,
-                      socket: SuperSocket | None = None,
-                      timeout: int | float | None = None) -> None:
+    def parse_options(
+        self,
+        session: EndpointSession | None = None,
+        socket: SuperSocket | None = None,
+        timeout: float | None = None,
+    ) -> None:
         """
         Sets up any additional sniffing/sending options that are not part of the
         standard AnsweringMachine.
@@ -128,6 +138,6 @@ class SimpleEndpointAM(AnsweringMachine):
         """
         for p in reply:
             if len(reply) > 1:
-                time.sleep(random.uniform(0.01, 0.5))
+                time.sleep(random.uniform(0.01, 0.5))  # noqa: S311
             if self.socket:
                 self.socket.send(p)

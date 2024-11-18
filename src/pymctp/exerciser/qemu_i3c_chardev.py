@@ -1,4 +1,3 @@
-import binascii
 import contextlib
 import socket
 import struct
@@ -13,7 +12,6 @@ from scapy.data import MTU
 from scapy.fields import ByteEnumField, ByteField, FieldLenField, FieldListField, LEIntField, PacketListField
 from scapy.packet import Packet, Raw
 from scapy.supersocket import SuperSocket
-from scapy.utils import linehexdump
 
 from pymctp.layers.mctp import TransportHdrPacket
 from pymctp.layers.mctp.types import AnyPacketType
@@ -30,9 +28,9 @@ class I3cCcc(IntEnum):
     I3C_CCC_ENTDAA = 0x07
     I3C_CCC_DEFTGTS = 0x08
     I3C_CCC_SETMWL = 0x09
-    I3C_CCC_SETMRL = 0x0a
-    I3C_CCC_ENTTM = 0x0b
-    I3C_CCC_SETBUSCON = 0x0c
+    I3C_CCC_SETMRL = 0x0A
+    I3C_CCC_ENTTM = 0x0B
+    I3C_CCC_SETBUSCON = 0x0C
     I3C_CCC_ENDXFER = 0x12
     I3C_CCC_ENTHDR0 = 0x20
     I3C_CCC_ENTHDR1 = 0x21
@@ -44,10 +42,10 @@ class I3cCcc(IntEnum):
     I3C_CCC_ENTHDR7 = 0x27
     I3C_CCC_SETXTIME = 0x28
     I3C_CCC_SETAASA = 0x29
-    I3C_CCC_RSTACT = 0x2a
-    I3C_CCC_DEFGRPA = 0x2b
-    I3C_CCC_RSTGRPA = 0x2c
-    I3C_CCC_MLANE = 0x2d
+    I3C_CCC_RSTACT = 0x2A
+    I3C_CCC_DEFGRPA = 0x2B
+    I3C_CCC_RSTGRPA = 0x2C
+    I3C_CCC_MLANE = 0x2D
 
     # Direct CCCs
     I3C_CCCD_ENEC = 0x80
@@ -59,12 +57,12 @@ class I3cCcc(IntEnum):
     I3C_CCCD_SETDASA = 0x87
     I3C_CCCD_SETNEWDA = 0x88
     I3C_CCCD_SETMWL = 0x89
-    I3C_CCCD_SETMRL = 0x8a
-    I3C_CCCD_GETMWL = 0x8b
-    I3C_CCCD_GETMRL = 0x8c
-    I3C_CCCD_GETPID = 0x8d
-    I3C_CCCD_GETBCR = 0x8e
-    I3C_CCCD_GETDCR = 0x8f
+    I3C_CCCD_SETMRL = 0x8A
+    I3C_CCCD_GETMWL = 0x8B
+    I3C_CCCD_GETMRL = 0x8C
+    I3C_CCCD_GETPID = 0x8D
+    I3C_CCCD_GETBCR = 0x8E
+    I3C_CCCD_GETDCR = 0x8F
     I3C_CCCD_GETSTATUS = 0x90
     I3C_CCCD_GETACCCR = 0x91
     I3C_CCCD_ENDXFER = 0x92
@@ -74,10 +72,10 @@ class I3cCcc(IntEnum):
     I3C_CCCD_SETROUTE = 0x96
     I3C_CCCD_SETXTIME = 0x98
     I3C_CCCD_GETXTIME = 0x99
-    I3C_CCCD_RSTACT = 0x9a
-    I3C_CCCD_SETGRPA = 0x9b
-    I3C_CCCD_RSTGRPA = 0x9c
-    I3C_CCCD_MLANE = 0x9d
+    I3C_CCCD_RSTACT = 0x9A
+    I3C_CCCD_SETGRPA = 0x9B
+    I3C_CCCD_RSTGRPA = 0x9C
+    I3C_CCCD_MLANE = 0x9D
 
 
 def directed_ccc_reads_data(ccc: int) -> bool:
@@ -133,9 +131,9 @@ class RemoteI3CCommands(IntEnum):
 
 class RemoteI3cIbiResponses(IntEnum):
     # Sent from remote target
-    REMOTE_I3C_IBI_ACK = 0xc0
-    REMOTE_I3C_IBI_NACK = 0xc1
-    REMOTE_I3C_IBI_DATA_NACK = 0xc2
+    REMOTE_I3C_IBI_ACK = 0xC0
+    REMOTE_I3C_IBI_NACK = 0xC1
+    REMOTE_I3C_IBI_DATA_NACK = 0xC2
 
 
 class RemoteI3CRXEvent(IntEnum):
@@ -149,9 +147,8 @@ class REMOTE_I3C_IBI_REQUEST(Packet):
         ByteEnumField("opcode", 0, RemoteI3CCommands),
         ByteField("ibi_addr", 0),
         ByteField("rnw", 0),
-        FieldLenField("length", None, fmt='<I', count_of='ibi_payload'),
-        FieldListField('ibi_payload', [], ByteField('', 0),
-                       count_from=lambda pkt: pkt.length),
+        FieldLenField("length", None, fmt="<I", count_of="ibi_payload"),
+        FieldListField("ibi_payload", [], ByteField("", 0), count_from=lambda pkt: pkt.length),
     ]
 
     def extract_padding(self, s):
@@ -159,13 +156,12 @@ class REMOTE_I3C_IBI_REQUEST(Packet):
 
 
 class I3C_CCC_READ_RESPONSE(Packet):
-    # TODO Support Entdaa CCC command: 07 01 00 00 00 09 03
+    # TODO: Support Entdaa CCC command: 07 01 00 00 00 09 03
     name = "CCC-Read-Response"
     fields_desc = [
         ByteEnumField("opcode", RemoteI3CCommands.REMOTE_I3C_CCC_WRITE, RemoteI3CCommands),
-        FieldLenField("length", None, fmt='<I', count_of='data'),
-        FieldListField('data', [], ByteField('', 0),
-                       count_from=lambda pkt: pkt.length),
+        FieldLenField("length", None, fmt="<I", count_of="data"),
+        FieldListField("data", [], ByteField("", 0), count_from=lambda pkt: pkt.length),
     ]
 
     def extract_padding(self, s):
@@ -186,7 +182,7 @@ class I3C_PRIV_READ(Packet):
 
 
 class I3C_CCC_READ(Packet):
-    # TODO Support CCC Read command: 01 08
+    # TODO: Support CCC Read command: 01 08
     name = "CCC-Read"
     fields_desc = [
         ByteEnumField("start_event", RemoteI3CEvents.REMOTE_I3C_START_READ, RemoteI3CEvents),
@@ -198,7 +194,7 @@ class I3C_CCC_READ(Packet):
 
 
 class I3C_CCC_DIRECT_WRITE(Packet):
-    # TODO Support CCC Read command: 01 08
+    # TODO: Support CCC Read command: 01 08
     name = "CCC-Direct-Write"
     fields_desc = [
         ByteEnumField("start_event", 0, RemoteI3CEvents),
@@ -207,9 +203,8 @@ class I3C_CCC_DIRECT_WRITE(Packet):
         ByteEnumField("ccc", None, I3cCcc),
         ByteEnumField("repeated_start_event", None, RemoteI3CEvents),
         ByteEnumField("opcode", None, RemoteI3CCommands),
-        FieldLenField("length", None, fmt='<I', count_of='data'),
-        FieldListField('data', [], ByteField('', 0),
-                       count_from=lambda pkt: pkt.length),
+        FieldLenField("length", None, fmt="<I", count_of="data"),
+        FieldListField("data", [], ByteField("", 0), count_from=lambda pkt: pkt.length),
     ]
 
     def extract_padding(self, s):
@@ -217,16 +212,14 @@ class I3C_CCC_DIRECT_WRITE(Packet):
 
 
 class I3C_CCC_WRITE(Packet):
-    # TODO Support CCC Read command: 01 08
+    # TODO: Support CCC Read command: 01 08
     name = "CCC-Write"
     fields_desc = [
         ByteEnumField("start_event", 0, RemoteI3CEvents),
         ByteEnumField("opcode", RemoteI3CCommands.REMOTE_I3C_CCC_WRITE, RemoteI3CCommands),
-        FieldLenField("length", None, fmt='<I', count_of='data',
-                      adjust=lambda pkt, x: x - 1),
+        FieldLenField("length", None, fmt="<I", count_of="data", adjust=lambda pkt, x: x - 1),
         ByteEnumField("ccc", 0, I3cCcc),
-        FieldListField('data', [], ByteField('', 0),
-                       count_from=lambda pkt: pkt.length - 1),
+        FieldListField("data", [], ByteField("", 0), count_from=lambda pkt: pkt.length - 1),
     ]
 
     def extract_padding(self, s):
@@ -239,9 +232,8 @@ class I3C_PRIV_WRITE(Packet):
     fields_desc = [
         ByteEnumField("start_event", RemoteI3CEvents.REMOTE_I3C_START_WRITE, RemoteI3CEvents),
         ByteEnumField("opcode", RemoteI3CCommands.REMOTE_I3C_PRIV_WRITE, RemoteI3CCommands),
-        FieldLenField("length", None, fmt='<I', count_of='data'),
-        FieldListField('data', [], ByteField('', 0),
-                       count_from=lambda pkt: pkt.length),
+        FieldLenField("length", None, fmt="<I", count_of="data"),
+        FieldListField("data", [], ByteField("", 0), count_from=lambda pkt: pkt.length),
     ]
 
     def extract_padding(self, s):
@@ -262,9 +254,8 @@ class I3C_IBI_STATUS(Packet):
 class REMOTE_I3C_READ_DATA(Packet):
     name = "RemoteI3C-RX-Response"
     fields_desc = [
-        FieldLenField("length", None, fmt='<I', count_of='tx_data'),
-        FieldListField('tx_data', [], ByteField('', 0),
-                       count_from=lambda pkt: pkt.length),
+        FieldLenField("length", None, fmt="<I", count_of="tx_data"),
+        FieldListField("tx_data", [], ByteField("", 0), count_from=lambda pkt: pkt.length),
     ]
 
 
@@ -282,11 +273,11 @@ def parse_next_msg(pkt: Packet, lst: list[BasePacket], cur: Packet | None, remai
     if not remain and len(remain) == 0:
         return None
     # TODO: separate out START event and parse from list to determine next event
-    last_event = None
-    for e in reversed([*lst, cur]):
-        if not isinstance(e, I3C_EVENT):
-            continue
-        last_event = e.event
+    # last_event = None
+    # for e in reversed([*lst, cur]):
+    #     if not isinstance(e, I3C_EVENT):
+    #         continue
+    #     last_event = e.event
 
     event = remain[0]
     if event == RemoteI3CEvents.REMOTE_I3C_START_READ:
@@ -294,11 +285,11 @@ def parse_next_msg(pkt: Packet, lst: list[BasePacket], cur: Packet | None, remai
         if opcode == RemoteI3CCommands.REMOTE_I3C_PRIV_READ:
             # Priv Read: 0x01, 0x05, 0x00, 0x01, 0x00, 0x00
             return I3C_PRIV_READ
-        elif opcode == RemoteI3CCommands.REMOTE_I3C_CCC_READ:
+        if opcode == RemoteI3CCommands.REMOTE_I3C_CCC_READ:
             # CCC Read (Directed): 0x01, 0x08
             return I3C_CCC_READ
         return I3C_EVENT if len(remain) > 1 else None
-    elif event == RemoteI3CEvents.REMOTE_I3C_START_WRITE:
+    if event == RemoteI3CEvents.REMOTE_I3C_START_WRITE:
         opcode = remain[1] if len(remain) > 1 else None
         if opcode == RemoteI3CCommands.REMOTE_I3C_PRIV_WRITE:
             # Priv Write: 0x02, 0x06, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x0A, 0xC8, 0x00, 0x80, 0x02, 0xB1, 0x03
@@ -309,10 +300,10 @@ def parse_next_msg(pkt: Packet, lst: list[BasePacket], cur: Packet | None, remai
             if len(remain) < (pkt.length + empty_pkt_size):
                 return None
             return I3C_PRIV_WRITE
-        elif opcode == RemoteI3CCommands.REMOTE_I3C_CCC_READ:
+        if opcode == RemoteI3CCommands.REMOTE_I3C_CCC_READ:
             # CCC Read (Broadcast,ENTDAA): 0x02, 0x08
             return I3C_CCC_READ
-        elif opcode == RemoteI3CCommands.REMOTE_I3C_CCC_WRITE:
+        if opcode == RemoteI3CCommands.REMOTE_I3C_CCC_WRITE:
             if len(remain) < 6:
                 return None
             ccc = remain[6]
@@ -328,15 +319,15 @@ def parse_next_msg(pkt: Packet, lst: list[BasePacket], cur: Packet | None, remai
             # CCC Write: 0x02, 0x07, 0x01, 0x00, 0x00, 0x00, 0x07
             return I3C_CCC_WRITE
         return I3C_EVENT if len(remain) > 1 else None
-    elif event == RemoteI3CEvents.REMOTE_I3C_STOP:
+    if event == RemoteI3CEvents.REMOTE_I3C_STOP:
         # Stop event: 0x03
         return I3C_EVENT
-    elif event == RemoteI3CCommands.REMOTE_I3C_CCC_WRITE:
+    if event == RemoteI3CCommands.REMOTE_I3C_CCC_WRITE:
         # CCC Write after Read (e.g., ENTDAA address assignment)
         if len(remain) < len(I3C_CCC_READ_RESPONSE()):
             return None
         return I3C_CCC_READ_RESPONSE
-    elif event in iter(RemoteI3cIbiResponses):
+    if event in iter(RemoteI3cIbiResponses):
         # IBI Resp: 0xC0
         return I3C_IBI_STATUS
 
@@ -359,16 +350,19 @@ class REMOTE_I3C(Packet):
 class QemuI3CCharDevSocket(SuperSocket):
     desc = "read/write to a QEMU CharDev Socket"
 
-    def __init__(self,
-                 family: int = socket.AF_UNIX,
-                 pid: int = 0,
-                 bcr: int = 0,
-                 dcr: int = 0,
-                 mwl: int = 256,
-                 mrl: int = 256,
-                 dynamic_addr: int = 0,
-                 in_file='', id_str="",
-                 **kwargs):
+    def __init__(
+        self,
+        family: int = socket.AF_UNIX,
+        pid: int = 0,
+        bcr: int = 0,
+        dcr: int = 0,
+        mwl: int = 256,
+        mrl: int = 256,
+        dynamic_addr: int = 0,
+        in_file="",
+        id_str="",
+        **kwargs,
+    ):
         self.id_str = id_str
         fd = socket.socket(family)
         assert fd != -1
@@ -376,9 +370,8 @@ class QemuI3CCharDevSocket(SuperSocket):
             try:
                 fd.connect(in_file)
                 break
-            except:
+            except OSError:
                 time.sleep(1)
-                continue
         self.ins = self.outs = fd
 
         self.buffer = b""
@@ -407,12 +400,11 @@ class QemuI3CCharDevSocket(SuperSocket):
             crc.update(int.to_bytes(addr, byteorder="little", length=1))
             crc.update(bytes(ipi_payload))
             pec = crc.digest()
-            ipi_payload += [int.from_bytes(pec, byteorder='little')]
+            ipi_payload += [int.from_bytes(pec, byteorder="little")]
         self.in_ibi = True
-        x = REMOTE_I3C_IBI_REQUEST(opcode=RemoteI3CCommands.REMOTE_I3C_IBI,
-                                   ibi_addr=self.dynamic_addr,
-                                   rnw=1,
-                                   ibi_payload=ipi_payload or [])
+        x = REMOTE_I3C_IBI_REQUEST(
+            opcode=RemoteI3CCommands.REMOTE_I3C_IBI, ibi_addr=self.dynamic_addr, rnw=1, ibi_payload=ipi_payload or []
+        )
         return self.send(x)
 
     def send(self, x: Packet) -> int:
@@ -421,8 +413,7 @@ class QemuI3CCharDevSocket(SuperSocket):
         """
 
         # Send IBI to notify controller a TX message is queued for reading
-        if not self.in_ccc and not isinstance(x, REMOTE_I3C_READ_DATA) and not isinstance(x,
-                                                                                          REMOTE_I3C_IBI_REQUEST):
+        if not self.in_ccc and not isinstance(x, REMOTE_I3C_READ_DATA) and not isinstance(x, REMOTE_I3C_IBI_REQUEST):
             self.tx_fifo.append(x)
             if not self.in_ibi and not self.rx_pending:
                 self.send_ibi()
@@ -439,32 +430,32 @@ class QemuI3CCharDevSocket(SuperSocket):
     def handle_ccc(self, ccc: I3cCcc | None, data: bytes) -> Packet | None:
         if ccc == I3cCcc.I3C_CCC_ENTDAA:
             # strip top 2 bytes as they are zeros (since big endian)
-            data = struct.pack('!Q', self.pid)[2:]
+            data = struct.pack("!Q", self.pid)[2:]
             data += bytes([self.bcr, self.dcr])
             return REMOTE_I3C_READ_DATA(tx_data=list(data))
-        elif self.ccc == I3cCcc.I3C_CCC_ENTDAA:
+        if self.ccc == I3cCcc.I3C_CCC_ENTDAA:
             # this is the write byte of the ENTDAA where the
             # dynamic address is written to the target
             self.dynamic_addr = data[0]
             return None
-        elif ccc == I3cCcc.I3C_CCCD_GETPID:
+        if ccc == I3cCcc.I3C_CCCD_GETPID:
             # strip top 2 bytes as they are zeros (since big endian)
-            data = struct.pack('!Q', self.pid)[2:]
+            data = struct.pack("!Q", self.pid)[2:]
             return REMOTE_I3C_READ_DATA(tx_data=list(data))
-        elif ccc == I3cCcc.I3C_CCCD_GETBCR:
+        if ccc == I3cCcc.I3C_CCCD_GETBCR:
             return REMOTE_I3C_READ_DATA(tx_data=[self.bcr])
-        elif ccc == I3cCcc.I3C_CCCD_GETDCR:
+        if ccc == I3cCcc.I3C_CCCD_GETDCR:
             return REMOTE_I3C_READ_DATA(tx_data=[self.dcr])
-        elif ccc == I3cCcc.I3C_CCCD_GETMRL:
-            mrl = struct.pack('!H', self.mrl)
+        if ccc == I3cCcc.I3C_CCCD_GETMRL:
+            mrl = struct.pack("!H", self.mrl)
             # Add the max IBI size if IBIs are enabled
             if self.bcr & 2 == 2:
                 mrl += bytes(0x0)  # 0 == unlimited number of bytes
             return REMOTE_I3C_READ_DATA(tx_data=list(mrl))
-        elif ccc == I3cCcc.I3C_CCCD_GETMWL:
-            mwl = struct.pack('!H', self.mwl)
+        if ccc == I3cCcc.I3C_CCCD_GETMWL:
+            mwl = struct.pack("!H", self.mwl)
             return REMOTE_I3C_READ_DATA(tx_data=list(mwl))
-        elif ccc == I3cCcc.I3C_CCCD_GETMXDS:
+        if ccc == I3cCcc.I3C_CCCD_GETMXDS:
             return REMOTE_I3C_READ_DATA(tx_data=[0, 0])
         return None
 
@@ -477,9 +468,11 @@ class QemuI3CCharDevSocket(SuperSocket):
         self.buffer = parsed.load if parsed.payload else b""
         parsed.show2()
         for pkt in parsed.msgs:
-            start_event = 'start_event' in pkt.fields
-            if isinstance(pkt, I3C_EVENT) and pkt.event in [RemoteI3CEvents.REMOTE_I3C_START_WRITE,
-                                                            RemoteI3CEvents.REMOTE_I3C_START_READ]:
+            start_event = "start_event" in pkt.fields
+            if isinstance(pkt, I3C_EVENT) and pkt.event in [
+                RemoteI3CEvents.REMOTE_I3C_START_WRITE,
+                RemoteI3CEvents.REMOTE_I3C_START_READ,
+            ]:
                 start_event = True
             if start_event and self.bus_stopped:
                 self.bus_stopped = self.in_send_cmd = False
@@ -494,9 +487,11 @@ class QemuI3CCharDevSocket(SuperSocket):
                 self.queued_tx = self.handle_ccc(pkt.ccc or 0, pkt.data)
 
                 # Controller is ready for the response, just send it
-                if isinstance(pkt, I3C_CCC_DIRECT_WRITE) and \
-                        pkt.repeated_start_event == RemoteI3CEvents.REMOTE_I3C_START_READ and \
-                        pkt.opcode == RemoteI3CCommands.REMOTE_I3C_CCC_READ:
+                if (
+                    isinstance(pkt, I3C_CCC_DIRECT_WRITE)
+                    and pkt.repeated_start_event == RemoteI3CEvents.REMOTE_I3C_START_READ
+                    and pkt.opcode == RemoteI3CCommands.REMOTE_I3C_CCC_READ
+                ):
                     self.send(self.queued_tx)
                     self.queued_tx = None
             elif isinstance(pkt, I3C_CCC_READ_RESPONSE):
@@ -567,23 +562,57 @@ class QemuI3CCharDevSocket(SuperSocket):
         return self.handle_rx()
 
 
-if __name__ == '__main__':
-    pkts = REMOTE_I3C(bytes(
-        [0x02, 0xc0, 0x07]))
+if __name__ == "__main__":
+    pkts = REMOTE_I3C(bytes([0x02, 0xC0, 0x07]))
     pkts.show2()
 
-    pkts = REMOTE_I3C(bytes(
-        [0x02, 0xC0, 0x07, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x08]))
+    pkts = REMOTE_I3C(bytes([0x02, 0xC0, 0x07, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x08]))
     pkts.show2()
 
-    pkts = REMOTE_I3C(bytes(
-        [0x02, 0x07, 0x01, 0x00, 0x00, 0x00, 0x06, 0x03, 0x02, 0x07, 0x02, 0x00, 0x00, 0x00, 0x01, 0x0B, 0x03,
-         0x02, 0x07, 0x01, 0x00, 0x00, 0x00, 0x07, 0x02, 0x08,
-         0x07, 0x01, 0x00, 0x00, 0x00, 0x09, 0x03]))
+    pkts = REMOTE_I3C(
+        bytes(
+            [
+                0x02,
+                0x07,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0x06,
+                0x03,
+                0x02,
+                0x07,
+                0x02,
+                0x00,
+                0x00,
+                0x00,
+                0x01,
+                0x0B,
+                0x03,
+                0x02,
+                0x07,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0x07,
+                0x02,
+                0x08,
+                0x07,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0x09,
+                0x03,
+            ]
+        )
+    )
     pkts.show2()
 
-    pkts = REMOTE_I3C(bytes(
-        [0x02, 0x07, 0x01, 0x00, 0x00, 0x00, 0x8A, 0x02, 0x07, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0xFF, 0x03]))
+    pkts = REMOTE_I3C(
+        bytes([0x02, 0x07, 0x01, 0x00, 0x00, 0x00, 0x8A, 0x02, 0x07, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0xFF, 0x03])
+    )
     pkts.show2()
 
     # # Broadcast message - ENTDAA
@@ -647,7 +676,7 @@ if __name__ == '__main__':
     # data = [0x02, 0x07, 0x01, 0x00, 0x00, 0x00, 0x07, 0x02, 0x08]
     # data = [0x02, 0x07, 0x01, 0x00, 0x00, 0x00, 0x06, 0x03, 0x02, 0x07, 0x01, 0x00, 0x00, 0x00, 0x06, 0x03]
     # data = [0x02, 0x07, 0x02, 0x00, 0x00, 0x00, 0x00, 0x08, 0x03]
-    socket = QemuI3CCharDevSocket(in_file='/tmp/remote-i3c-2')
+    socket = QemuI3CCharDevSocket(in_file="/tmp/remote-i3c-2")  # noqa: S108
     # resp = socket.handle_rx(payload=bytes(data))
     # print(f"Response: {resp}")
     # print(f"Remaining bytes: {binascii.hexlify(socket.buffer)}")
@@ -679,11 +708,32 @@ if __name__ == '__main__':
     #              [0x03],
     #              [0x01, 0x05, 0x00, 0x01, 0x00, 0x00]]:
     for data in [
-        [0x02, 0x06, 0x0E, 0x00, 0x00, 0x00, 0x01, 0x0C, 0x0A, 0xC9, 0x01, 0x8B, 0x00, 0x05, 0x05, 0x00, 0xF0, 0xF1,
-         0xF1, 0x24],
+        [
+            0x02,
+            0x06,
+            0x0E,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x0C,
+            0x0A,
+            0xC9,
+            0x01,
+            0x8B,
+            0x00,
+            0x05,
+            0x05,
+            0x00,
+            0xF0,
+            0xF1,
+            0xF1,
+            0x24,
+        ],
         [0x03],
         [0x02, 0xC0],
-        [0x07, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x08]]:
+        [0x07, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x08],
+    ]:
         socket.buffer += bytes(data)
         resp = socket.handle_rx()
         if resp:

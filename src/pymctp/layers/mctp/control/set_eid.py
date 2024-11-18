@@ -1,5 +1,4 @@
 from enum import IntEnum
-from typing import List, Tuple, Union
 
 from scapy.fields import BitEnumField, BitField, XByteField
 from scapy.packet import Packet

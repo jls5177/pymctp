@@ -2,7 +2,6 @@ import contextlib
 import threading
 import time
 from operator import itemgetter
-from typing import List, Optional
 
 from scapy.compat import raw
 from scapy.data import MTU
@@ -10,7 +9,7 @@ from scapy.packet import Packet
 from scapy.supersocket import SuperSocket
 from scapy.utils import hexdump
 
-from pymctp.layers.mctp import Smbus7bitAddress, SmbusTransport
+from ..layers.mctp import Smbus7bitAddress, SmbusTransport
 
 try:
     from array import array
@@ -24,14 +23,16 @@ except RuntimeError:
 class AardvarkI2CSocket(SuperSocket):
     desc = "read/write to an Aardvark USB device"
 
-    def __init__(self,
-                 slave_address: Smbus7bitAddress,
-                 port: int | None = None,
-                 serial_number: str | None = None,
-                 enable_i2c_pullups: bool = False,
-                 enable_target_power: bool = False,
-                 slave_only: bool = False,
-                 **kwargs):
+    def __init__(
+        self,
+        slave_address: Smbus7bitAddress,
+        port: int | None = None,
+        serial_number: str | None = None,
+        enable_i2c_pullups: bool = False,
+        enable_target_power: bool = False,
+        slave_only: bool = False,
+        **kwargs,
+    ):
         if pyaardvark is None:
             msg = "Failed to load pyaardvark library. Confirm if environment is bootstrapped."
             raise RuntimeError(msg)
@@ -94,19 +95,15 @@ class AardvarkI2CSocket(SuperSocket):
                     # TODO: wait until the msg is received
                 else:
                     self._dev.i2c_master_write(sx[0] >> 1, sx[1:])
-        except ProcessLookupError as err:
+        except OSError as err:
             print(f"Aardvark write failed: {err}")
-            if len(err.args) != 2:
-                raise
-            code, strerr = err.args
-            if code == pyaardvark.I2C_STATUS_SLA_NACK:
+            code, *_ = err.args
+            if code and code == pyaardvark.I2C_STATUS_SLA_NACK:
                 # return 0
                 # the return value is not checked, just raise the exception
                 pass
-            raise
-        except OSError as ioerr:
-            print(f"Aardvark write failed: {ioerr}")
-            raise
+            else:
+                raise
 
         return len(sx)
 
@@ -121,8 +118,13 @@ class AardvarkI2CSocket(SuperSocket):
         """
         # TODO: read until there is no more data available (might not be needed as the library uses 64K read buffers)
         (i2c_addr, rx_data) = self._dev.i2c_slave_read()
-        rx_data = array('B', rx_data)
-        rq_sa = array('B', [i2c_addr << 1, ])
+        rx_data = array("B", rx_data)
+        rq_sa = array(
+            "B",
+            [
+                i2c_addr << 1,
+            ],
+        )
         raw_array = rq_sa + rx_data
         raw_bytes = raw_array.tobytes()
 
@@ -130,11 +132,10 @@ class AardvarkI2CSocket(SuperSocket):
 
         # Attempt to parse the packet but mask any parsing errors as no valid packets received
         pkt = None
-        try:
+        with contextlib.suppress(Exception):
             pkt = SmbusTransport(raw_bytes)
             pkt.time = time.time()
-        finally:
-            return pkt
+        return pkt
 
     @staticmethod
     def select(sockets: list[SuperSocket], remain: float | None = None) -> list[SuperSocket]:
@@ -160,7 +161,7 @@ class AardvarkI2CSocket(SuperSocket):
             print(f"DEBUG: last transmit size {transmit_size}")
         if pyaardvark.POLL_I2C_READ in events:
             return [self]
-        elif pyaardvark.POLL_I2C_WRITE not in events:
+        if pyaardvark.POLL_I2C_WRITE not in events:
             print(f"DEBUG: events {events}")
         return []
 
@@ -172,5 +173,5 @@ class AardvarkI2CSocket(SuperSocket):
         """
         devices = pyaardvark.find_devices()
         for dev in devices:
-            port, serial_number, in_use = itemgetter('port', 'serial_number', 'in_use')(dev)
+            port, serial_number, in_use = itemgetter("port", "serial_number", "in_use")(dev)
             print(f"{port}) {serial_number} [{'in-used' if in_use else 'free'}]")

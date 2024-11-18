@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 from scapy.fields import BitEnumField, BitField, FieldLenField, FieldListField, PacketListField, XByteField
 from scapy.packet import Packet
@@ -17,7 +17,7 @@ from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
 class RoutingTableEntryPacket(AllowRawSummary, Packet):
-    name = 'RoutingTableEntry'
+    name = "RoutingTableEntry"
 
     fields_desc = [
         XByteField("eid_range", 0),
@@ -27,9 +27,8 @@ class RoutingTableEntryPacket(AllowRawSummary, Packet):
         BitField("port_number", 0, 5),
         XByteField("phys_transport_binding_id", 0),
         XByteField("phy_media_type_id", 0),
-        FieldLenField('phys_address_size', None, fmt='B', count_of='phy_address'),
-        FieldListField('phy_address', [], XByteField('', 0),
-                       count_from=lambda pkt: pkt.phys_address_size),
+        FieldLenField("phys_address_size", None, fmt="B", count_of="phy_address"),
+        FieldListField("phy_address", [], XByteField("", 0), count_from=lambda pkt: pkt.phys_address_size),
     ]
 
     def extract_padding(self, p):
@@ -52,7 +51,7 @@ def NewRoutingTableEntry(entry: RoutingTableEntry) -> RoutingTableEntryPacket:
 
 @AutobindControlMsg(ContrlCmdCodes.GetRoutingTableEntries)
 class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
-    name = 'GetRoutingTableEntries'
+    name = "GetRoutingTableEntries"
 
     fields_desc = set_control_fields(
         # TODO: define response fields
@@ -61,11 +60,10 @@ class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
         ],
         rsp_fields=[
             XByteField("next_entry_handle", 0),
-            FieldLenField('entry_count', None, fmt='B', count_of='entries'),
+            FieldLenField("entry_count", None, fmt="B", count_of="entries"),
             # TODO: implement routing table entry field
-            PacketListField('entries', [], RoutingTableEntryPacket,
-                            count_from=lambda pkt: pkt.entry_count),
-        ]
+            PacketListField("entries", [], RoutingTableEntryPacket, count_from=lambda pkt: pkt.entry_count),
+        ],
     )
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
@@ -79,7 +77,7 @@ class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} ("
-        if self.underlayer.getfieldval('rq') == RqBit.REQUEST.value:
+        if self.underlayer.getfieldval("rq") == RqBit.REQUEST.value:
             summary += f"hdl=0x{self.entry_handle:02X})"
         else:
             summary += f"next_hdl=0x{self.next_entry_handle:02X}, cnt={self.entry_count}) "
@@ -87,8 +85,8 @@ class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
                 summary += f" [0x{entry.starting_eid:02X}:{entry.eid_range}]"
         return summary, [ControlHdrPacket]
 
-def GetRoutingTableEntries(_pkt: bytes | bytearray = b"", /, *,
-                           entry_handle: int = 0) -> GetRoutingTableEntriesPacket:
+
+def GetRoutingTableEntries(_pkt: bytes | bytearray = b"", /, *, entry_handle: int = 0) -> GetRoutingTableEntriesPacket:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.GetRoutingTableEntries)
     if _pkt:
         return GetRoutingTableEntriesPacket(_pkt, _underlayer=hdr)
@@ -98,9 +96,9 @@ def GetRoutingTableEntries(_pkt: bytes | bytearray = b"", /, *,
     )
 
 
-def GetRoutingTableEntriesResponse(_pkt: bytes | bytearray = b"", /, *,
-                                   next_entry_handle: int,
-                                   entries: list[int] | None = None) -> GetRoutingTableEntriesPacket:
+def GetRoutingTableEntriesResponse(
+    _pkt: bytes | bytearray = b"", /, *, next_entry_handle: int, entries: list[int] | None = None
+) -> GetRoutingTableEntriesPacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetRoutingTableEntries)
     if _pkt:
         return GetRoutingTableEntriesPacket(_pkt, _underlayer=hdr)
@@ -109,5 +107,5 @@ def GetRoutingTableEntriesResponse(_pkt: bytes | bytearray = b"", /, *,
         entry_count=len(entries),
         entries=entries,
         # add a default underlayer to set the required "rq" field
-        _underlayer=hdr
+        _underlayer=hdr,
     )

@@ -1,5 +1,3 @@
-from typing import Tuple, Union
-
 from scapy.fields import ByteEnumField, MultipleTypeField, XByteField, XIntField, XShortField
 from scapy.packet import Packet
 
@@ -13,7 +11,7 @@ from .control import (
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
-NO_MORE_CAPABILITY_SETS = 0xff
+NO_MORE_CAPABILITY_SETS = 0xFF
 
 
 @AutobindControlMsg(ContrlCmdCodes.GetVendorDefinedMessageSupport)
@@ -27,13 +25,12 @@ class GetVendorDefinedMessageSupportPacket(AllowRawSummary, Packet):
             ByteEnumField("vendor_id_format", 0, VendorIdFormat),
             MultipleTypeField(
                 [
-                    (XIntField("vendor_id", 0),
-                     lambda pkt: pkt.vendor_id_format == VendorIdFormat.IANA_ENT_NUMBER),
+                    (XIntField("vendor_id", 0), lambda pkt: pkt.vendor_id_format == VendorIdFormat.IANA_ENT_NUMBER),
                 ],
                 XShortField("vendor_id", 0),
             ),
             XShortField("command_set_type", 0),
-        ]
+        ],
     )
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
@@ -65,11 +62,15 @@ def GetVendorDefinedMessageSupport(_pkt: bytes | bytearray = b"", /, *, set_sele
     )
 
 
-def GetVendorDefinedMessageSupportResponse(_pkt: bytes | bytearray = b"", /, *,
-                                           set_selector: int = 0,
-                                           vendor_id_fmt: VendorIdFormat = VendorIdFormat.PCI_VENDOR_ID,
-                                           vendor_id: int = 0,
-                                           command_set_type: int = 0):
+def GetVendorDefinedMessageSupportResponse(
+    _pkt: bytes | bytearray = b"",
+    /,
+    *,
+    set_selector: int = 0,
+    vendor_id_fmt: VendorIdFormat = VendorIdFormat.PCI_VENDOR_ID,
+    vendor_id: int = 0,
+    command_set_type: int = 0,
+):
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetVendorDefinedMessageSupport)
     if _pkt:
         return GetVendorDefinedMessageSupportPacket(_pkt, _underlayer=hdr)

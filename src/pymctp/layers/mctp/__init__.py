@@ -17,17 +17,9 @@ from .transport import (
 )
 
 # Import the main Packets for each MsgType to perform autobinding
-from .control import (
-    ControlHdrPacket
-)
-from .pldm import (
-    PldmHdrPacket
-)
-from .vdpci import (
-    VdPciHdrPacket
-)
+from .control import ControlHdrPacket
+from .pldm import PldmHdrPacket
+from .vdpci import VdPciHdrPacket
 
 # Import any utilities
-from .context_utils import (
-    import_pcap_dump
-)
+from .context_utils import import_pcap_dump

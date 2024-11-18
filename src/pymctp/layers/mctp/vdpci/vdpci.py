@@ -1,6 +1,5 @@
 import time
 from enum import IntEnum
-from typing import List, Tuple, Type, Union
 
 from scapy.config import conf
 from scapy.fields import BitEnumField, BitField, ShortEnumField, XByteField
@@ -15,7 +14,8 @@ from ..transport import (
     TransportHdrPacket,
     TrimmedSmbusTransportPacket,
 )
-from ..types import AnyPacketType, ICanReply, ICanSetMySummaryClasses
+from ..types import AnyPacketType
+from ...interfaces import ICanSetMySummaryClasses
 from .types import VdPCIVendorIds
 
 
@@ -35,12 +35,14 @@ class VdPciHdrPacket(Packet):
         BitEnumField("rq", 0, 1, RqBit),
         BitField("rsv", 0, 2),
         BitField("unused", 0, 5),
-        XByteField("vdm_cmd_code", 0)
+        XByteField("vdm_cmd_code", 0),
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        rqType = 'REQ' if self.is_request() else 'RSP'
-        summary = f"{self.name} {rqType} (VID: {self.vendor_id:04X}, cmd_code: 0x{self.vdm_cmd_code:02X}, rq: {self.rq})"
+        rqType = "REQ" if self.is_request() else "RSP"
+        summary = (
+            f"{self.name} {rqType} (VID: {self.vendor_id:04X}, cmd_code: 0x{self.vdm_cmd_code:02X}, rq: {self.rq})"
+        )
         return summary, [TransportHdrPacket, SmbusTransportPacket, TrimmedSmbusTransportPacket]
 
     def do_dissect_payload(self, s: bytes) -> None:
@@ -69,11 +71,15 @@ class VdPciHdrPacket(Packet):
         return self.payload.answers(other.payload)
 
     def is_request(self, check_payload: bool = True) -> bool:
-        return any([
-            self.rq == RqBit.REQUEST.value,
-            self.payload and isinstance(self.payload, ICanVerifyIfRequest) and self.payload.is_request(),
-            self.underlayer and isinstance(self.underlayer, ICanVerifyIfRequest) and self.underlayer.is_request(check_payload=False),
-        ])
+        return any(
+            [
+                self.rq == RqBit.REQUEST.value,
+                self.payload and isinstance(self.payload, ICanVerifyIfRequest) and self.payload.is_request(),
+                self.underlayer
+                and isinstance(self.underlayer, ICanVerifyIfRequest)
+                and self.underlayer.is_request(check_payload=False),
+            ]
+        )
 
     def make_reply(self, ctx: EndpointContext) -> AnyPacketType:
         if not self.is_request():
@@ -109,15 +115,13 @@ class VdPciHdrPacket(Packet):
         return (rsp / payload_resp) if payload_resp else rsp
 
 
-def VdPciHdr(*args,
-             rq: bool | RqBit = RqBit.RESPONSE,
-             vendor_id: int = 0,
-             vdm_cmd_code: int = 0) -> VdPciHdrPacket:
+def VdPciHdr(*args, rq: bool | RqBit = RqBit.RESPONSE, vendor_id: int = 0, vdm_cmd_code: int = 0) -> VdPciHdrPacket:
     if len(args):
         return VdPciHdrPacket(*args)
-    return VdPciHdrPacket(rq=0 if not rq or rq in [False, RqBit.RESPONSE, 0] else 1,
-                          vendor_id=vendor_id,
-                          vdm_cmd_code=vdm_cmd_code)
+    return VdPciHdrPacket(
+        rq=0 if not rq or rq in [False, RqBit.RESPONSE, 0] else 1, vendor_id=vendor_id, vdm_cmd_code=vdm_cmd_code
+    )
+
 
 class AutobindVDMMsg:
     def __init__(self, vid: VdPCIVendorIds, vdm_cmd_code):
@@ -127,9 +131,12 @@ class AutobindVDMMsg:
     def __call__(self, cls: type[Packet]):
         vid = self.vid
         cmd_code = self.vdm_cmd_code
-        bind_layers(VdPciHdrPacket, cls,
-                    vid=vid.value if type(vid) == VdPCIVendorIds else vid,
-                    vdm_cmd_code=cmd_code.value if hasattr(cmd_code, "value") else cmd_code)
+        bind_layers(
+            VdPciHdrPacket,
+            cls,
+            vid=vid.value if type(vid) == VdPCIVendorIds else vid,
+            vdm_cmd_code=cmd_code.value if hasattr(cmd_code, "value") else cmd_code,
+        )
         if not hasattr(cls, "name") or cls.name is None:
             cls.name = cls.__name__
         if not hasattr(cls, "vid") or cls.vid is None:

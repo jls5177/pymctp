@@ -1,12 +1,11 @@
 import threading
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Type
+from typing import TYPE_CHECKING, NamedTuple
 
 from scapy.packet import Packet
 from scapy.sendrecv import sndrcv
 from scapy.sessions import DefaultSession
 from scapy.supersocket import SuperSocket
-from scapy.utils import hexdump
 
 from ..layers.mctp import (
     AnyPhysicalAddress,
@@ -53,8 +52,7 @@ class EndpointSession(DefaultSession):
         self.am: AnsweringMachine | None = None
         self.default_handlers: dict[type, Callable[[Packet, EndpointContext], HandlerResponse | None]] = {}
 
-    def register_handler(self, layer_cls: type,
-                         handler: Callable[[Packet, EndpointContext], HandlerResponse | None]):
+    def register_handler(self, layer_cls: type, handler: Callable[[Packet, EndpointContext], HandlerResponse | None]):
         """
         Registers the specified handler to allow the handler to be invoked anytime a msg is received that
         contains the specified layer class.
@@ -143,14 +141,16 @@ class EndpointSession(DefaultSession):
             if response_pkts:
                 self.am.send_reply(response_pkts)
 
-    def sndrcv_control_msg(self,
-                           pkt: Packet,
-                           dst_eid: int,
-                           dst_phy_addr: AnyPhysicalAddress,
-                           *,
-                           instance_id: int | None = None,
-                           timeout_s: float | None = None,
-                           threaded: bool = False) -> Packet | None:
+    def sndrcv_control_msg(
+        self,
+        pkt: Packet,
+        dst_eid: int,
+        dst_phy_addr: AnyPhysicalAddress,
+        *,
+        instance_id: int | None = None,
+        timeout_s: float | None = None,
+        threaded: bool = False,
+    ) -> Packet | None:
         """
         Sends the specified MCTP Control Payload to the destination and waits for a
         response. This method will detect if the ControlHdrPacket, TransportHdrPacket,
@@ -170,50 +170,61 @@ class EndpointSession(DefaultSession):
         """
         if not isinstance(pkt, IControlMsgPacket):
             msg = "Packet is malformed, does not implement the IControlMsgPacket protocol"
-            raise AttributeError(msg)
+            raise TypeError(msg)
         cmd_code = pkt.cmd_code
 
         if not pkt.haslayer(ControlHdrPacket):
-            pkt = ControlHdr(
-                rq=True,
-                cmd_code=cmd_code,
-                instance_id=(instance_id or self.next_instance_id),
-            ) / pkt
-        return self.sndrcv_mctp_msg(pkt=pkt, dst_eid=dst_eid, dst_phy_addr=dst_phy_addr,
-                                    timeout_s=timeout_s, threaded=threaded)
+            pkt = (
+                ControlHdr(
+                    rq=True,
+                    cmd_code=cmd_code,
+                    instance_id=(instance_id or self.next_instance_id),
+                )
+                / pkt
+            )
+        return self.sndrcv_mctp_msg(
+            pkt=pkt, dst_eid=dst_eid, dst_phy_addr=dst_phy_addr, timeout_s=timeout_s, threaded=threaded
+        )
 
-    def sndrcv_mctp_msg(self,
-                        pkt: Packet,
-                        dst_eid: int,
-                        dst_phy_addr: AnyPhysicalAddress,
-                        *,
-                        msg_type: MsgTypes = MsgTypes.CTRL,
-                        msg_tag: int | None = None,
-                        timeout_s: float | None = None,
-                        threaded: bool = False) -> Packet | None:
-
+    def sndrcv_mctp_msg(
+        self,
+        pkt: Packet,
+        dst_eid: int,
+        dst_phy_addr: AnyPhysicalAddress,
+        *,
+        msg_type: MsgTypes = MsgTypes.CTRL,
+        msg_tag: int | None = None,
+        timeout_s: float | None = None,
+        threaded: bool = False,
+    ) -> Packet | None:
         # TODO: handle packet fragments
-        pkt = TransportHdr(
-            src=self.context.eid,
-            dst=dst_eid,
-            som=1, eom=1, pkt_seq=0, to=1,
-            tag=msg_tag or self.next_tag_number,
-            msg_type=msg_type
-        ) / pkt
+        pkt = (
+            TransportHdr(
+                src=self.context.eid,
+                dst=dst_eid,
+                som=1,
+                eom=1,
+                pkt_seq=0,
+                to=1,
+                tag=msg_tag or self.next_tag_number,
+                msg_type=msg_type,
+            )
+            / pkt
+        )
 
         src_phy_addr = self.context.physical_address
         if isinstance(dst_phy_addr, Smbus7bitAddress) and isinstance(src_phy_addr, Smbus7bitAddress):
             pkt = SmbusTransport(dst_addr=dst_phy_addr, src_addr=src_phy_addr) / pkt
         else:
             msg = f"Only Smbus7bitAddress are supported: {type(dst_phy_addr)}"
-            raise AttributeError(msg)
+            raise TypeError(msg)
 
         # hexdump(pkt)
         # if drop_pec:
         #     data = raw(pkt)
         #     pkt = Raw(data[:-1])
 
-        if threaded or (self.am and hasattr(self.am, 'sniffer') and self.am.sniffer.running):
+        if threaded or (self.am and hasattr(self.am, "sniffer") and self.am.sniffer.running):
             return self.sr1threaded(pkt=pkt, timeout_s=timeout_s)
         return self.sr1(pkt=pkt, timeout_s=timeout_s)
 
@@ -271,5 +282,6 @@ class EndpointSession(DefaultSession):
                 with self._responder_lock:
                     self.pending_rqs.remove(item)
             finally:
-                return None
+                pass
+            return None
         return rsp[0]

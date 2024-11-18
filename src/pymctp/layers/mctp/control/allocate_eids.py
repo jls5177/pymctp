@@ -1,5 +1,4 @@
 from enum import IntEnum
-from typing import Tuple, Union
 
 from scapy.fields import XByteEnumField, XByteField
 from scapy.packet import Packet
@@ -62,10 +61,9 @@ class AllocateEndpointIDsPacket(Packet):
         )
 
 
-def AllocateEndpointIDs(_pkt: bytes | bytearray = b"", /, *,
-                        op: AllocateEIDOperation,
-                        allocated_pool_size: int,
-                        starting_eid: int) -> AllocateEndpointIDsPacket:
+def AllocateEndpointIDs(
+    _pkt: bytes | bytearray = b"", /, *, op: AllocateEIDOperation, allocated_pool_size: int, starting_eid: int
+) -> AllocateEndpointIDsPacket:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.AllocateEndpointIDs)
     if _pkt:
         return AllocateEndpointIDsPacket(_pkt, _underlayer=hdr)
@@ -77,10 +75,9 @@ def AllocateEndpointIDs(_pkt: bytes | bytearray = b"", /, *,
     )
 
 
-def AllocateEndpointIDsResponse(_pkt: bytes | bytearray = b"", /, *,
-                                status: AllocateEIDAllocationStatus,
-                                eid_pool_size: int,
-                                first_eid: int):
+def AllocateEndpointIDsResponse(
+    _pkt: bytes | bytearray = b"", /, *, status: AllocateEIDAllocationStatus, eid_pool_size: int, first_eid: int
+):
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.AllocateEndpointIDs)
     if _pkt:
         return AllocateEndpointIDsPacket(_pkt, _underlayer=hdr)

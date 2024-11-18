@@ -1,3 +1,1 @@
-from .transport import (
-    TransportHdrPacket
-)
+from .transport import TransportHdrPacket

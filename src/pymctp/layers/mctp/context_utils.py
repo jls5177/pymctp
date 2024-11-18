@@ -1,11 +1,8 @@
 from collections import OrderedDict, defaultdict
 from collections import OrderedDict as OrderedDictType
 from pathlib import Path
-from typing import Dict, List, Optional
 
-import crc8
 from scapy.compat import raw
-from scapy.layers.l2 import CookedLinux, CookedLinuxV2
 from scapy.utils import rdpcap
 
 from .control import ControlHdrPacket
@@ -20,12 +17,12 @@ def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext)
     pending_reqs: list[AnyPacketType] = []
     responses: OrderedDictType[int, MctpResponse] = OrderedDict()
     responseList: dict[MsgTypes, list[MctpResponse]] = defaultdict(list)
-    for packet in rdpcap(str(resp_file.resolve())):
-        tx_packet = packet.pkttype == 4
+    for resp_packet in rdpcap(str(resp_file.resolve())):
+        # tx_packet = packet.pkttype == 4
         # prefix = '<TX<' if tx_packet else '>RX>'
-        if not packet.haslayer(TransportHdrPacket):
+        if not resp_packet.haslayer(TransportHdrPacket):
             continue
-        packet = packet.getlayer(TransportHdrPacket)
+        packet = resp_packet.getlayer(TransportHdrPacket)
         # print(f"{prefix} {packet.summary()}")
         if (packet.haslayer(ControlHdrPacket) and packet.rq) or (packet.haslayer(PldmHdrPacket) and packet.rq):
             pending_reqs += [packet]
@@ -55,8 +52,12 @@ def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext)
             if req in responses:
                 msg = "Found a duplicate request, stop and fix..."
                 raise SystemExit(msg)
-            mctp_resp = MctpResponse(request=list(req), response=list(rsp), processing_delay=0,
-                                     description=original_req.getlayer(ControlHdrPacket).summary())
+            mctp_resp = MctpResponse(
+                request=list(req),
+                response=list(rsp),
+                processing_delay=0,
+                description=original_req.getlayer(ControlHdrPacket).summary(),
+            )
             responses[req] = mctp_resp
             responseList[MsgTypes.CTRL] += [mctp_resp]
         elif packet.msg_type == MsgTypes.PLDM:
@@ -72,8 +73,12 @@ def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext)
                 cmd_code_str = PldmPlatformMonitoringCmdCodes(original_req.cmd_code).name
             else:
                 cmd_code_str = f"{original_req.cmd_code}({hex(original_req.cmd_code)})"
-            mctp_resp = MctpResponse(request=list(req), response=list(rsp), processing_delay=0,
-                                     description=f"PLDM {type_code.name} {cmd_code_str}")
+            mctp_resp = MctpResponse(
+                request=list(req),
+                response=list(rsp),
+                processing_delay=0,
+                description=f"PLDM {type_code.name} {cmd_code_str}",
+            )
             responses[req] = mctp_resp
             responseList[MsgTypes.PLDM] += [mctp_resp]
 

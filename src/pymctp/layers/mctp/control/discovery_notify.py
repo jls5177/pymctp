@@ -1,5 +1,3 @@
-from typing import Tuple
-
 from scapy.packet import Packet
 
 from .. import EndpointContext

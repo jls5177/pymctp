@@ -17,7 +17,7 @@ class AllowRawSummary:
             p = cls(s, _internal=1, _underlayer=self)
         except KeyboardInterrupt:
             raise
-        except Exception as err:
+        except Exception:
             if conf.debug_dissector and cls is not None:
                 raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
@@ -28,12 +28,12 @@ class AllowRawSummary:
     def _do_summary(self):
         # type: () -> Tuple[int, str, List[Any]]
         if "load" in self.fields:
-            found, s, needed = self.load._do_summary()
+            found, s, needed = self.load._do_summary()  # noqa: SLF001
             if self.payload and self.payload.original:
                 pld = conf.raw_layer(self.payload.original)
                 s = f"{s} / {pld}"
         else:
-            found, s, needed = self.payload._do_summary()
+            found, s, needed = self.payload._do_summary()  # noqa: SLF001
         ret = ""
         # if not found or self.__class__ in needed:
         ret = self.mysummary()
@@ -45,10 +45,7 @@ class AllowRawSummary:
         if not ret:
             ret = self.__class__.__name__ if self.show_summary else ""
         if self.__class__ in conf.emph:
-            impf = []
-            for f in self.fields_desc:
-                if f in conf.emph:
-                    impf.append(f"{f.name}={f.i2repr(self, self.getfieldval(f.name))}")
-            ret = "{} [{}]".format(ret, " ".join(impf))
+            impf = [f"{f.name}={f.i2repr(self, self.getfieldval(f.name))}" for f in self.fields_desc if f in conf.emph]
+            ret = f"{ret} [{' '.join(impf)}]"
         ret = f"{ret} / {s}" if ret and s else f"{ret}{s}"
         return found, ret, needed

@@ -1,13 +1,12 @@
 from enum import IntEnum
-from typing import List, Tuple, Union
 
 from scapy.config import conf
-from scapy.fields import BitEnumField, BitField, ByteEnumField, PacketField, XByteField
+from scapy.fields import BitEnumField, BitField, PacketField, XByteField
 from scapy.packet import Packet, bind_layers
 
-from pymctp.layers.helpers import AllowRawSummary
-from pymctp.layers.mctp import TrimmedSmbusTransportPacket
-from pymctp.layers.mctp.types import AnyPacketType
+from ..helpers import AllowRawSummary
+from ..mctp import TrimmedSmbusTransportPacket
+from ..mctp.types import AnyPacketType
 
 
 class TransportHdrPacket(AllowRawSummary, Packet):
@@ -87,8 +86,10 @@ class MasterWriteReadRequestPacket(AllowRawSummary, Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         bus_type_str = "PUB" if self.bus_type == MasterWriteReadBusType.PUBLIC.value else "PRV"
-        summary = (f"{self.name} (ch: {self.channel}, bus: {self.bus}, type: {bus_type_str}, "
-                   f"phys_addr: 0x{self.phy_address:02X}, rd_cnt: {self.read_count})")
+        summary = (
+            f"{self.name} (ch: {self.channel}, bus: {self.bus}, type: {bus_type_str}, "
+            f"phys_addr: 0x{self.phy_address:02X}, rd_cnt: {self.read_count})"
+        )
         return summary, [TransportHdrPacket]
 
 

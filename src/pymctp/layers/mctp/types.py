@@ -5,12 +5,12 @@ import uuid
 from dataclasses import field
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Optional, Protocol, TypeVar, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from mashumaro import DataClassDictMixin, field_options
 from mashumaro.config import BaseConfig
 
-from ..interfaces import AnyPacketType, ICanSetMySummaryClasses
+from ..interfaces import AnyPacketType
 
 
 class MsgTypes(IntEnum):
@@ -18,6 +18,7 @@ class MsgTypes(IntEnum):
     Messages used to support initialization and configuration of MCTP communication within an MCTP network, as
     specified in DSP0236
     """
+
     CTRL = 0x00
     PLDM = 0x01
     NCSI = 0x02
@@ -56,7 +57,7 @@ class PhysicalTransportBindingId(IntEnum):
     MCTPoverKCS = 0x04
     MCTPoverSerial = 0x05
     MCTPoverI3C = 0x06
-    VendorDefined = 0xff
+    VendorDefined = 0xFF
 
 
 class PhysicalMediumIdentifiers(IntEnum):
@@ -131,7 +132,7 @@ class Smbus10bitAddress(DataClassDictMixin):
             raise ValueError(msg)
 
 
-AnyPhysicalAddress = TypeVar('AnyPhysicalAddress', Smbus7bitAddress, Smbus10bitAddress)
+AnyPhysicalAddress = TypeVar("AnyPhysicalAddress", Smbus7bitAddress, Smbus10bitAddress)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -147,10 +148,10 @@ class MctpResponse(DataClassDictMixin):
     def __post_init__(self):
         req = bytes(self.request)
         key = base64.b64encode(req)
-        object.__setattr__(self, 'key', key)
+        object.__setattr__(self, "key", key)
 
         packet = bytes(self.response)
-        object.__setattr__(self, 'data', packet)
+        object.__setattr__(self, "data", packet)
 
 
 # @dataclasses.dataclass(frozen=True)
@@ -166,16 +167,16 @@ class MctpResponseList(DataClassDictMixin):
 def deserialize_msg_types(values: list[MsgTypes] | list[str]) -> list[MsgTypes]:
     if not isinstance(values, list):
         msg = f"Unknown msg type: {type(values)}"
-        raise ValueError(msg)
+        raise TypeError(msg)
     if all(isinstance(y, MsgTypes) for y in values):
         return values
     msg_types = []
     for mt in values:
-        if type(mt) == str and hasattr(MsgTypes, mt):
+        if isinstance(mt, str) and hasattr(MsgTypes, mt):
             msg_types += [MsgTypes[mt]]
             continue
         msg = f"Unknown msg type: {mt}"
-        raise ValueError(msg)
+        raise TypeError(msg)
     return msg_types
 
 
@@ -197,11 +198,7 @@ class EndpointContext(DataClassDictMixin):
     routing_table: list[RoutingTableEntry] = dataclasses.field(default_factory=list)
 
     class Config(BaseConfig):
-        serialization_strategy = {
-            list[MsgTypes]: {
-                "deserialize": deserialize_msg_types
-            }
-        }
+        serialization_strategy = {list[MsgTypes]: {"deserialize": deserialize_msg_types}}
 
     @property
     def eid(self) -> int:
@@ -218,8 +215,9 @@ class EndpointContext(DataClassDictMixin):
             data = {MsgTypes[k]: v for k, v in data.items() if MsgTypes[k] in self.supported_msg_types}
             self.mctp_responses = MctpResponseList.from_dict({"responses": data})
 
-    def get_response(self, msg_type: MsgTypes, req_bytes: bytes, vendor_id: str = "",
-                     vdm_cmd_code: str = "") -> MctpResponse | None:
+    def get_response(
+        self, msg_type: MsgTypes, req_bytes: bytes, vendor_id: str = "", vdm_cmd_code: str = ""
+    ) -> MctpResponse | None:
         if msg_type not in MsgTypes:
             return None
         if msg_type not in self.mctp_responses.responses:

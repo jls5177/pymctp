@@ -1,10 +1,8 @@
-from typing import List, Tuple, Union
-
 from scapy.fields import ByteField, FieldLenField, FieldListField
 from scapy.packet import Packet
 
 from .. import EndpointContext
-from ..types import AnyPacketType, MsgTypes
+from ..types import AnyPacketType
 from .control import (
     AutobindControlMsg,
     ControlHdr,
@@ -15,13 +13,12 @@ from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 @AutobindControlMsg(ContrlCmdCodes.GetMessageTypeSupport)
 class GetMessageTypeSupportPacket(Packet):
-    name = 'GetMessageTypeSupport'
+    name = "GetMessageTypeSupport"
 
     fields_desc = set_control_fields(
         rsp_fields=[
-            FieldLenField('msg_type_cnt', None, fmt='!B', count_of='msg_type_list'),
-            FieldListField('msg_type_list', [], ByteField('', 0),
-                           length_from=lambda pkt: pkt.msg_type_cnt),
+            FieldLenField("msg_type_cnt", None, fmt="!B", count_of="msg_type_list"),
+            FieldListField("msg_type_list", [], ByteField("", 0), length_from=lambda pkt: pkt.msg_type_cnt),
         ]
     )
 
@@ -43,12 +40,15 @@ def GetMessageTypeSupport(_pkt: bytes | bytearray = b"", /, *args) -> GetMessage
     return GetMessageTypeSupportPacket(_underlayer=hdr)
 
 
-def GetMessageTypeSupportResponse(_pkt: bytes | bytearray = b"", /, *,
-                                  msg_types: list[int] | None = None) -> GetMessageTypeSupportPacket:
+def GetMessageTypeSupportResponse(
+    _pkt: bytes | bytearray = b"", /, *, msg_types: list[int] | None = None
+) -> GetMessageTypeSupportPacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetMessageTypeSupport)
     if _pkt:
         return GetMessageTypeSupportPacket(_pkt, _underlayer=hdr)
-    return GetMessageTypeSupportPacket(msg_type_cnt=len(msg_types),
-                                       msg_type_list=msg_types,
-                                       # add a default underlayer to set the required "rq" field
-                                       _underlayer=hdr)
+    return GetMessageTypeSupportPacket(
+        msg_type_cnt=len(msg_types),
+        msg_type_list=msg_types,
+        # add a default underlayer to set the required "rq" field
+        _underlayer=hdr,
+    )

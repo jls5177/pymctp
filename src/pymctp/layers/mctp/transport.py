@@ -1,5 +1,3 @@
-from typing import Type, Union
-
 import crc8
 from scapy.compat import raw
 from scapy.config import conf
@@ -26,16 +24,9 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         BitField("pkt_seq", 0, 2),
         BitField("to", 0, 1),
         BitField("tag", 0, 3),
-
         # These are technically part of the msg, but are needed to properly bind the layers
-        ConditionalField(
-            BitEnumField("ic", 0, 1, {0: "no", 1: "yes"}),
-            lambda pkt: pkt.som == 1
-        ),
-        ConditionalField(
-            BitEnumField("msg_type", MsgTypes.CTRL.value, 7, MsgTypes),
-            lambda pkt: pkt.som == 1
-        ),
+        ConditionalField(BitEnumField("ic", 0, 1, {0: "no", 1: "yes"}), lambda pkt: pkt.som == 1),
+        ConditionalField(BitEnumField("msg_type", MsgTypes.CTRL.value, 7, MsgTypes), lambda pkt: pkt.som == 1),
     ]
 
     def mysummary(self):  # type: () -> str
@@ -57,10 +48,8 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         summary += ")"
         # allow unknown message types to be passed in
         if msg_type is not None:
-            try:
-                summary += f" {MsgTypes(msg_type).name}"
-            except:
-                summary += f" {msg_type:02X}"
+            msg_type_name = getattr(MsgTypes(msg_type), "name", f"{msg_type:02X}")
+            summary += f" {msg_type_name}"
         return summary, [SmbusTransportPacket, TrimmedSmbusTransportPacket]
 
     def do_dissect_payload(self, s: bytes) -> None:
@@ -72,7 +61,7 @@ class TransportHdrPacket(AllowRawSummary, Packet):
             p = cls(s, _internal=1, _underlayer=self)
         except KeyboardInterrupt:
             raise
-        except Exception as e:
+        except Exception:
             if conf.debug_dissector and cls is not None:
                 raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
@@ -115,7 +104,7 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         if isinstance(payload_resp, PacketList | list):
             # TODO: Implement multiple payloads from upper layers
             msg = "multiple payloads are not yet supported"
-            raise RuntimeError(msg)
+            raise TypeError(msg)
 
         if not payload_resp:
             # TODO: should this just return None?
@@ -138,7 +127,7 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         pkt_seq = self.pkt_seq + 1
         while buf_size > 0:
             packet_size = min(ctx.mtu_size, buf_size)
-            packet = buf[buf_offset:buf_offset + packet_size]
+            packet = buf[buf_offset : buf_offset + packet_size]
             som = bool(not buf_offset)
             eom = (buf_offset + packet_size) >= len(payload_resp)
 
@@ -161,29 +150,34 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         return resps if len(resps) > 1 else resps[0]
 
 
-def TransportHdr(*args,
-                 dst: int = 0,
-                 src: int = 0,
-                 som: bool | int = True,
-                 eom: bool | int = True,
-                 pkt_seq: int = 0,
-                 to: bool | int = True,
-                 tag: int = 0,
-                 ic: bool | int = False,
-                 msg_type: MsgTypes = MsgTypes.CTRL,
-                 version: bytes = 0b0001) -> TransportHdrPacket:
+def TransportHdr(
+    *args,
+    dst: int = 0,
+    src: int = 0,
+    som: bool | int = True,
+    eom: bool | int = True,
+    pkt_seq: int = 0,
+    to: bool | int = True,
+    tag: int = 0,
+    ic: bool | int = False,
+    msg_type: MsgTypes = MsgTypes.CTRL,
+    version: bytes = 0b0001,
+) -> TransportHdrPacket:
     if len(args):
         return TransportHdrPacket(*args)
-    return TransportHdrPacket(dst=dst,
-                              src=src,
-                              som=1 if som else 0,
-                              eom=1 if eom else 0,
-                              pkt_seq=pkt_seq,
-                              to=1 if to else 0,
-                              tag=tag,
-                              ic=1 if ic else 0,
-                              msg_type=msg_type,
-                              version=version)
+    return TransportHdrPacket(
+        dst=dst,
+        src=src,
+        som=1 if som else 0,
+        eom=1 if eom else 0,
+        pkt_seq=pkt_seq,
+        to=1 if to else 0,
+        tag=tag,
+        ic=1 if ic else 0,
+        msg_type=msg_type,
+        version=version,
+    )
+
 
 class ExtendedConditionalField(ConditionalField):
     """
@@ -192,10 +186,11 @@ class ExtendedConditionalField(ConditionalField):
 
     __slots__ = ["fld", "cond"]
 
-    def __init__(self,
-                 fld,  # type: Field[Any, Any]
-                 cond  # type: Callable[[Packet, bytes], bool]
-                 ):
+    def __init__(
+        self,
+        fld,  # type: Field[Any, Any]
+        cond,  # type: Callable[[Packet, bytes], bool]
+    ):
         # type: (...) -> None
         self.fld = fld
         self.cond = cond
@@ -214,34 +209,25 @@ class ExtendedConditionalField(ConditionalField):
         # type: (Packet, bytes) -> Tuple[bytes, Any]
         if self._evalcond(pkt, s):
             return self.fld.getfield(pkt, s)
-        else:
-            return s, None
+        return s, None
 
     def addfield(self, pkt, s, val):
         # type: (Packet, bytes, Any) -> bytes
         if self._evalcond(pkt, s):
             return self.fld.addfield(pkt, s, val)
-        else:
-            return s
+        return s
 
 
 class SmbusTransportPacket(AllowRawSummary, Packet):
     name = "SMBUS/I2C"
 
     fields_desc = [
-        ExtendedConditionalField(
-            XByteField("dst_addr", 0),
-            lambda pkt, s: s[0] != 0x0f
-        ),
-        XByteField("command_code", 0x0f),
-        LenField("byte_count", None, fmt='B', adjust=lambda x: 0 if not x else (x + 1)),
+        ExtendedConditionalField(XByteField("dst_addr", 0), lambda pkt, s: s[0] != 0x0F),
+        XByteField("command_code", 0x0F),
+        LenField("byte_count", None, fmt="B", adjust=lambda x: 0 if not x else (x + 1)),
         XByteField("src_addr", 0),
-        PacketLenField("load", None, TransportHdrPacket,
-                       length_from=lambda x: x.byte_count - 1),
-        ExtendedConditionalField(
-            XByteField("pec", None),
-            lambda pkt, s: len(s) == 1 or len(s) >= pkt.byte_count
-        )
+        PacketLenField("load", None, TransportHdrPacket, length_from=lambda x: x.byte_count - 1),
+        ExtendedConditionalField(XByteField("pec", None), lambda pkt, s: len(s) == 1 or len(s) >= pkt.byte_count),
         # TrailerField(XByteField("pec", None)),
     ]
 
@@ -263,10 +249,10 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
             crc = crc8.crc8()
             crc.update(p[:-1])
             val = crc.digest()
-            self.pec = int.from_bytes(val, byteorder='little')
+            self.pec = int.from_bytes(val, byteorder="little")
             p = p[:-1] + val
         elif self.pec != pay[-1]:
-            p = p[:-1] + int.to_bytes(self.pec, byteorder='little', length=1)
+            p = p[:-1] + int.to_bytes(self.pec, byteorder="little", length=1)
         return p
 
     def answers(self, other: Packet) -> int:
@@ -294,7 +280,8 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
                 return None
             if ctx.physical_address != self.dst_addr_7bit():
                 print(
-                    f"Warning: received incorrectly addressed packet: {self.dst_addr_7bit()} != {ctx.physical_address}")
+                    f"Warning: received incorrectly addressed packet: {self.dst_addr_7bit()} != {ctx.physical_address}"
+                )
                 return None
 
         payload_resp = None
@@ -319,35 +306,31 @@ class TrimmedSmbusTransportPacket(SmbusTransportPacket):
     name = "SMBUS/I2C"
 
     fields_desc = [
-        XByteField("command_code", 0x0f),
-        LenField("byte_count", None, fmt='B', adjust=lambda x: 0 if not x else (x + 1)),
+        XByteField("command_code", 0x0F),
+        LenField("byte_count", None, fmt="B", adjust=lambda x: 0 if not x else (x + 1)),
         XByteField("src_addr", 0),
-        PacketLenField("load", None, TransportHdrPacket,
-                       length_from=lambda x: x.byte_count - 1),
-        ExtendedConditionalField(
-            XByteField("pec", None),
-            lambda pkt, s: len(s) == 1 or len(s) >= pkt.byte_count
-        )
+        PacketLenField("load", None, TransportHdrPacket, length_from=lambda x: x.byte_count - 1),
+        ExtendedConditionalField(XByteField("pec", None), lambda pkt, s: len(s) == 1 or len(s) >= pkt.byte_count),
     ]
 
 
-def SmbusTransport(*args,
-                   dst_addr: int | Smbus7bitAddress = 0,
-                   src_addr: int | Smbus7bitAddress = 1,
-                   byte_count: int | None = None,
-                   command_code: int = 0x0f,
-                   pec: int | None = None) -> SmbusTransportPacket:
+def SmbusTransport(
+    *args,
+    dst_addr: int | Smbus7bitAddress = 0,
+    src_addr: int | Smbus7bitAddress = 1,
+    byte_count: int | None = None,
+    command_code: int = 0x0F,
+    pec: int | None = None,
+) -> SmbusTransportPacket:
     if len(args):
         return SmbusTransportPacket(*args)
     if isinstance(dst_addr, Smbus7bitAddress):
         dst_addr = dst_addr.write()
     if isinstance(src_addr, Smbus7bitAddress):
         src_addr = src_addr.read()
-    return SmbusTransportPacket(dst_addr=dst_addr,
-                                src_addr=src_addr,
-                                command_code=command_code,
-                                byte_count=byte_count,
-                                pec=pec)
+    return SmbusTransportPacket(
+        dst_addr=dst_addr, src_addr=src_addr, command_code=command_code, byte_count=byte_count, pec=pec
+    )
 
 
 class AutobindMessageType:
@@ -356,8 +339,7 @@ class AutobindMessageType:
 
     def __call__(self, cls: type[Packet]):
         # print(f"Binding cls {cls} to msg_type {self.msg_type}")
-        bind_layers(TransportHdrPacket, cls,
-                    msg_type=self.msg_type.value)
+        bind_layers(TransportHdrPacket, cls, msg_type=self.msg_type.value)
         if not hasattr(cls, "name") or cls.name is None:
             cls.name = cls.__name__
         return cls
@@ -368,4 +350,4 @@ bind_layers(CookedLinux, TransportHdrPacket, proto=0xFA)
 bind_layers(CookedLinuxV2, TransportHdrPacket, proto=0xFA)
 
 # Add the MCTP Transport as a valid SMBUS command protocol
-bind_layers(SmbusTransportPacket, TransportHdrPacket, command_code=0x0f)
+bind_layers(SmbusTransportPacket, TransportHdrPacket, command_code=0x0F)

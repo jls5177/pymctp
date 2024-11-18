@@ -12,13 +12,7 @@ from .control import (
     ControlHdrPacket,
 )
 
-from .get_eid import (
-    GetEndpointID,
-    GetEndpointIDPacket,
-    GetEndpointIDResponse,
-    EndpointType,
-    EndpointIDType
-)
+from .get_eid import GetEndpointID, GetEndpointIDPacket, GetEndpointIDResponse, EndpointType, EndpointIDType
 
 from .set_eid import (
     SetEndpointID,
@@ -26,7 +20,7 @@ from .set_eid import (
     SetEndpointIDResponse,
     SetEndpointIDOperation,
     SetEndpointIDAssignmentStatus,
-    SetEndpointIDAllocationStatus
+    SetEndpointIDAllocationStatus,
 )
 
 from .discovery_notify import (

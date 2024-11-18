@@ -1,13 +1,9 @@
 from enum import IntEnum
-from typing import List, Tuple, Union
 
-from scapy.compat import raw
 from scapy.fields import (
     ConditionalField,
     FieldLenField,
     FieldListField,
-    PacketField,
-    SignedByteField,
     XByteEnumField,
     XByteField,
     XLEIntField,
@@ -18,9 +14,8 @@ from scapy.packet import Packet, bind_layers
 from ...helpers import AllowRawSummary
 from .. import TransportHdrPacket
 from ..types import AnyPacketType
-from .pldm import AutobindPLDMMsg, PldmHdr, PldmHdrPacket, set_pldm_fields
+from .pldm import AutobindPLDMMsg, PldmHdrPacket, set_pldm_fields
 from .types import (
-    CompletionCodes,
     PldmTypeCodes,
 )
 
@@ -111,34 +106,38 @@ class PlatformEventMsgClasses(IntEnum):
 class PldmMessagePollEventDataPacket(Packet):
     fields_desc = [
         XByteField("formatVersion", 0x01),
-        XLEShortField('eventID', 0),
-        XLEIntField('DataTransferHandle', 0),
+        XLEShortField("eventID", 0),
+        XLEIntField("DataTransferHandle", 0),
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = (f"MsgPollEventData (fmtVer={self.formatVersion}, eventID={self.eventID}, "
-                   f"DataTransferHandle={self.DataTransferHandle})")
+        summary = (
+            f"MsgPollEventData (fmtVer={self.formatVersion}, eventID={self.eventID}, "
+            f"DataTransferHandle={self.DataTransferHandle})"
+        )
         return summary, [PollForPlatformEventMsgPacket, PldmHdrPacket, TransportHdrPacket]
 
 
 class PldmSELEventDataPacket(Packet):
     fields_desc = [
         XLEShortField("record_id", 0x01),
-        XByteField('record_type', 0),
-        XLEIntField('timestamp', 0),
+        XByteField("record_type", 0),
+        XLEIntField("timestamp", 0),
         XLEShortField("generator_id", 0x01),
-        XByteField('event_msg_rev', 0),
-        XByteField('sensor_type', 0),
-        XByteField('sensor_num', 0),
-        XByteField('event_dir_type', 0),
-        XByteField('event_data_1', 0),
-        XByteField('event_data_2', 0),
-        XByteField('event_data_3', 0),
+        XByteField("event_msg_rev", 0),
+        XByteField("sensor_type", 0),
+        XByteField("sensor_num", 0),
+        XByteField("event_dir_type", 0),
+        XByteField("event_data_1", 0),
+        XByteField("event_data_2", 0),
+        XByteField("event_data_3", 0),
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = (f"SELEvent (record_id={self.record_id}, record_type={self.record_type}, "
-                   f"sensor_num={self.sensor_num}, sensor_type={self.sensor_type})")
+        summary = (
+            f"SELEvent (record_id={self.record_id}, record_type={self.record_type}, "
+            f"sensor_num={self.sensor_num}, sensor_type={self.sensor_type})"
+        )
         return summary, [PollForPlatformEventMsgPacket, PldmHdrPacket, TransportHdrPacket]
 
 
@@ -151,13 +150,13 @@ class PlatformEventMsgPacket(Packet):
             XByteEnumField("eventClass", 0, PlatformEventMsgClasses),
         ],
         rsp_fields=[
-            XByteEnumField('status', 0, PlatformEventMsgStatus),
+            XByteEnumField("status", 0, PlatformEventMsgStatus),
         ],
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = "PlatformEventMsg ("
-        if self.underlayer.getfieldval('rq') == 1:
+        if self.underlayer.getfieldval("rq") == 1:
             summary += f"ver={self.formatVersion}, tid={self.tid}, eventClass=0x{self.eventClass:02X}"
         else:
             summary += f"status={self.status}"
@@ -166,10 +165,12 @@ class PlatformEventMsgPacket(Packet):
         return summary, [PldmHdrPacket, TransportHdrPacket]
 
 
-bind_layers(PlatformEventMsgPacket, PldmMessagePollEventDataPacket,
-            eventClass=PlatformEventMsgClasses.PLDM_MESSAGE_POLL_EVENT.value)
-bind_layers(PlatformEventMsgPacket, PldmSELEventDataPacket,
-            eventClass=PlatformEventMsgClasses.PLDM_OEM_SEL_EVENT.value)
+bind_layers(
+    PlatformEventMsgPacket,
+    PldmMessagePollEventDataPacket,
+    eventClass=PlatformEventMsgClasses.PLDM_MESSAGE_POLL_EVENT.value,
+)
+bind_layers(PlatformEventMsgPacket, PldmSELEventDataPacket, eventClass=PlatformEventMsgClasses.PLDM_OEM_SEL_EVENT.value)
 
 
 class PollForPlatformEventOperation(IntEnum):
@@ -191,34 +192,24 @@ class PollForPlatformEventMsgPacket(Packet):
         rq_fields=[
             XByteField("formatVersion", 0x01),
             XByteEnumField("TransferOperationFlag", 0, PollForPlatformEventOperation),
-            XLEIntField('DataTransferHandle', 0),
-            XLEShortField('eventIDToAcknowledge', 0),
+            XLEIntField("DataTransferHandle", 0),
+            XLEShortField("eventIDToAcknowledge", 0),
         ],
         rsp_fields=[
             XByteField("tid", 0),
-            XLEShortField('eventID', 0),
+            XLEShortField("eventID", 0),
+            ConditionalField(XLEIntField("NextDataTransferHandle", 0), lambda pkt: pkt.eventID != 0),
             ConditionalField(
-                XLEIntField('NextDataTransferHandle', 0),
-                lambda pkt: pkt.eventID != 0
+                XByteEnumField("TransferFlag", 0, PollForPlatformEventTransferFlag), lambda pkt: pkt.eventID != 0
+            ),
+            ConditionalField(XByteEnumField("eventClass", 0, PlatformEventMsgClasses), lambda pkt: pkt.eventID != 0),
+            ConditionalField(
+                FieldLenField("eventDataSize", None, fmt="<I", count_of="eventData"), lambda pkt: pkt.eventID != 0
             ),
             ConditionalField(
-                XByteEnumField("TransferFlag", 0, PollForPlatformEventTransferFlag),
-                lambda pkt: pkt.eventID != 0
+                FieldListField("eventData", [], XByteField("", 0), count_from=lambda pkt: pkt.eventDataSize),
+                lambda pkt: pkt.eventID != 0,
             ),
-            ConditionalField(
-                XByteEnumField("eventClass", 0, PlatformEventMsgClasses),
-                lambda pkt: pkt.eventID != 0
-            ),
-            ConditionalField(
-                FieldLenField('eventDataSize', None, fmt='<I', count_of='eventData'),
-                lambda pkt: pkt.eventID != 0
-            ),
-            ConditionalField(
-                FieldListField('eventData', [], XByteField('', 0),
-                               count_from=lambda pkt: pkt.eventDataSize),
-                lambda pkt: pkt.eventID != 0
-            ),
-
             # XLEIntField('NextDataTransferHandle', 0),
             # XByteEnumField("TransferFlag", 0, PollForPlatformEventTransferFlag),
             # XByteEnumField("eventClass", 0, PlatformEventMsgClasses),
@@ -227,23 +218,26 @@ class PollForPlatformEventMsgPacket(Packet):
             #                count_from=lambda pkt: pkt.eventDataSize),
             ConditionalField(
                 XLEIntField("eventDataIntegrityChecksum", 0),
-                lambda pkt: pkt.eventID != 0 and pkt.TransferFlag == PollForPlatformEventTransferFlag.END.value
+                lambda pkt: pkt.eventID != 0 and pkt.TransferFlag == PollForPlatformEventTransferFlag.END.value,
             ),
         ],
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = "PPE ("
-        if self.underlayer.getfieldval('rq') == 1:
-            summary += (f"ver={self.formatVersion}, op={self.TransferOperationFlag}, "
-                        f"hdl=0x{self.DataTransferHandle:02X}, eventIDToAck=0x{self.eventIDToAcknowledge:04X}")
+        if self.underlayer.getfieldval("rq") == 1:
+            summary += (
+                f"ver={self.formatVersion}, op={self.TransferOperationFlag}, "
+                f"hdl=0x{self.DataTransferHandle:02X}, eventIDToAck=0x{self.eventIDToAcknowledge:04X}"
+            )
         else:
             summary += f"tid={self.tid}, eventID=0x{self.eventID:04X}"
             if self.eventID != 0:
                 summary += (
                     f", nextHdl=0x{self.NextDataTransferHandle:08x}, "
                     f"transferFlag={self.TransferFlag}, eventClass=0x{self.eventClass:02X}, "
-                    f"eventDataSize={self.eventDataSize}")
+                    f"eventDataSize={self.eventDataSize}"
+                )
             if self.TransferFlag == PollForPlatformEventTransferFlag.END.value:
                 summary += f", eventDataIntegrityChecksum={self.eventDataIntegrityChecksum}"
         summary += ")"
@@ -290,14 +284,14 @@ class GetSensorReadingPresentEnum(IntEnum):
     LOWERFATAL = 0x07
     UPPERWARNING = 0x08
     UPPERCRITICAL = 0x09
-    UPPERFATAL = 0x0a
+    UPPERFATAL = 0x0A
 
 
 @AutobindPLDMMsg(PldmTypeCodes.PLATFORM_MONITORING, PldmPlatformMonitoringCmdCodes.GetSensorReading)
 class GetSensorReadingPacket(AllowRawSummary, Packet):
     fields_desc = set_pldm_fields(
         rq_fields=[
-            XLEShortField('sensorID', 0),
+            XLEShortField("sensorID", 0),
             XByteField("rearmEventState", 0),
         ],
         rsp_fields=[
@@ -309,40 +303,48 @@ class GetSensorReadingPacket(AllowRawSummary, Packet):
             XByteEnumField("eventState", 0, GetSensorReadingPresentEnum),
             ConditionalField(
                 XByteField("presentReading8", 0),
-                lambda pkt: pkt.sensorDataSize in [GetSensorReadingDataSizeEnum.UINT8.value,
-                                                   GetSensorReadingDataSizeEnum.SINT8.value]
+                lambda pkt: pkt.sensorDataSize
+                in [GetSensorReadingDataSizeEnum.UINT8.value, GetSensorReadingDataSizeEnum.SINT8.value],
             ),
             ConditionalField(
                 XLEShortField("presentReading16", 0),
-                lambda pkt: pkt.sensorDataSize in [GetSensorReadingDataSizeEnum.UINT16.value,
-                                                   GetSensorReadingDataSizeEnum.SINT16.value]
+                lambda pkt: pkt.sensorDataSize
+                in [GetSensorReadingDataSizeEnum.UINT16.value, GetSensorReadingDataSizeEnum.SINT16.value],
             ),
             ConditionalField(
                 XLEIntField("presentReading32", 0),
-                lambda pkt: pkt.sensorDataSize in [GetSensorReadingDataSizeEnum.UINT32.value,
-                                                   GetSensorReadingDataSizeEnum.SINT32.value]
+                lambda pkt: pkt.sensorDataSize
+                in [GetSensorReadingDataSizeEnum.UINT32.value, GetSensorReadingDataSizeEnum.SINT32.value],
             ),
         ],
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = "GetSensorReading ("
-        if self.underlayer.getfieldval('rq') == 1:
+        if self.underlayer.getfieldval("rq") == 1:
             summary += f"sensorID=0x{self.sensorID:04X}, rearmEventState=0x{self.rearmEventState:02X}"
         else:
-            summary += (f"sensorDataSize={self.sensorDataSize}, opState=0x{self.sensorOperationalState:02X}, "
-                        f"eventMsgEnabled=0x{self.sensorEventMessageEnable:02x}, "
-                        f"presentState={self.presentState}, "
-                        f"previousState={self.presentState}, "
-                        f"eventState={self.presentState}")
-            if self.sensorDataSize in [GetSensorReadingDataSizeEnum.UINT8.value,
-                                       GetSensorReadingDataSizeEnum.SINT8.value]:
+            summary += (
+                f"sensorDataSize={self.sensorDataSize}, opState=0x{self.sensorOperationalState:02X}, "
+                f"eventMsgEnabled=0x{self.sensorEventMessageEnable:02x}, "
+                f"presentState={self.presentState}, "
+                f"previousState={self.presentState}, "
+                f"eventState={self.presentState}"
+            )
+            if self.sensorDataSize in [
+                GetSensorReadingDataSizeEnum.UINT8.value,
+                GetSensorReadingDataSizeEnum.SINT8.value,
+            ]:
                 summary += f", presentReading=0x{self.presentReading8:02X}"
-            elif self.sensorDataSize in [GetSensorReadingDataSizeEnum.UINT16.value,
-                                         GetSensorReadingDataSizeEnum.SINT16.value]:
+            elif self.sensorDataSize in [
+                GetSensorReadingDataSizeEnum.UINT16.value,
+                GetSensorReadingDataSizeEnum.SINT16.value,
+            ]:
                 summary += f", presentReading=0x{self.presentReading16:04X}"
-            elif self.sensorDataSize in [GetSensorReadingDataSizeEnum.UINT32.value,
-                                         GetSensorReadingDataSizeEnum.SINT32.value]:
+            elif self.sensorDataSize in [
+                GetSensorReadingDataSizeEnum.UINT32.value,
+                GetSensorReadingDataSizeEnum.SINT32.value,
+            ]:
                 summary += f", presentReading=0x{self.presentReading32:08X}"
         summary += ")"
         # TODO: decode eventData based on eventClass

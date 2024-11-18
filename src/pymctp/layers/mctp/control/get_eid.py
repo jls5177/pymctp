@@ -1,5 +1,4 @@
 from enum import IntEnum
-from typing import List, Tuple, Union
 
 from scapy.fields import BitEnumField, BitField, XByteField
 from scapy.packet import Packet
@@ -42,7 +41,7 @@ class EndpointIDType(IntEnum):
 
 @AutobindControlMsg(ContrlCmdCodes.GetEndpointID)
 class GetEndpointIDPacket(Packet):
-    name = 'GetEndpointID'
+    name = "GetEndpointID"
 
     fields_desc = set_control_fields(
         rsp_fields=[
@@ -57,7 +56,7 @@ class GetEndpointIDPacket(Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name}"
-        if self.underlayer.getfieldval('rq') == 0:
+        if self.underlayer.getfieldval("rq") == 0:
             summary += f" (eid: {self.eid:02X}, type: "
             summary += "simple, " if self.endpoint_type == 0 else "busowner, "
             if self.endpoint_id_type == EndpointIDType.DYNAMIC.value:
@@ -95,17 +94,21 @@ def GetEndpointID(*args) -> GetEndpointIDPacket:
     return GetEndpointIDPacket(_underlayer=hdr)
 
 
-def GetEndpointIDResponse(*args,
-                          eid: int = 0,
-                          endpoint_type: EndpointType = EndpointType.SIMPLE,
-                          endpoint_id_type: EndpointIDType = EndpointIDType.DYNAMIC,
-                          medium_specific: int = 0) -> GetEndpointIDPacket:
+def GetEndpointIDResponse(
+    *args,
+    eid: int = 0,
+    endpoint_type: EndpointType = EndpointType.SIMPLE,
+    endpoint_id_type: EndpointIDType = EndpointIDType.DYNAMIC,
+    medium_specific: int = 0,
+) -> GetEndpointIDPacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetEndpointID)
     if len(args):
         return GetEndpointIDPacket(*args, _underlayer=hdr)
-    return GetEndpointIDPacket(eid=eid,
-                               endpoint_type=endpoint_type,
-                               endpoint_id_type=endpoint_id_type,
-                               medium_specific=medium_specific,
-                               # add a default underlayer to set the required "rq" field
-                               _underlayer=hdr)
+    return GetEndpointIDPacket(
+        eid=eid,
+        endpoint_type=endpoint_type,
+        endpoint_id_type=endpoint_id_type,
+        medium_specific=medium_specific,
+        # add a default underlayer to set the required "rq" field
+        _underlayer=hdr,
+    )

@@ -1,5 +1,5 @@
 from enum import IntEnum
-from typing import Protocol, Tuple, TypeVar, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 
 from ..types import AnyPacketType, EndpointContext
 

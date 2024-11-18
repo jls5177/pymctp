@@ -1,10 +1,8 @@
 from enum import IntEnum
-from typing import List, Tuple, Union
 
 from scapy.fields import FieldListField, XByteEnumField, XByteField, XLEIntField
 from scapy.packet import Packet
 
-from .. import EndpointContext
 from ..transport import TransportHdrPacket
 from ..types import AnyPacketType
 from .pldm import AutobindPLDMMsg, PldmHdrPacket, set_pldm_fields
@@ -20,8 +18,7 @@ class SetTIDPacket(Packet):
         rq_fields=[
             XByteField("tid", 0),
         ],
-        rsp_fields=[
-        ],
+        rsp_fields=[],
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
@@ -32,8 +29,7 @@ class SetTIDPacket(Packet):
 @AutobindPLDMMsg(PldmTypeCodes.CONTROL, PldmControlCmdCodes.GetTID)
 class GetTIDPacket(Packet):
     fields_desc = set_pldm_fields(
-        rq_fields=[
-        ],
+        rq_fields=[],
         rsp_fields=[
             XByteField("tid", 0),
         ],
@@ -60,19 +56,19 @@ class GetPLDMVersionTransferFlag(IntEnum):
 class GetPLDMVersionPacket(Packet):
     fields_desc = set_pldm_fields(
         rq_fields=[
-            XLEIntField('DataTransferHandle', 0),
+            XLEIntField("DataTransferHandle", 0),
             XByteEnumField("TransferOperationFlag", 0, GetPLDMVersionOperation),
             XByteField("PLDMType", 0),
         ],
         rsp_fields=[
-            XLEIntField('NextDataTransferHandle', 0),
+            XLEIntField("NextDataTransferHandle", 0),
             XByteEnumField("TransferFlag", 0, GetPLDMVersionTransferFlag),
         ],
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = "GetPLDMVER ("
-        if self.underlayer.getfieldval('rq') == 1:
+        if self.underlayer.getfieldval("rq") == 1:
             summary += f"hdl={self.DataTransferHandle}, op={self.TransferOperationFlag}, type={self.PLDMType})"
         else:
             summary += f"nextHdl={self.NextDataTransferHandle}, transferFlag={self.TransferFlag})"
@@ -92,23 +88,22 @@ class PLDMTypesByte1(IntEnum):
 @AutobindPLDMMsg(PldmTypeCodes.CONTROL, PldmControlCmdCodes.GetPLDMTypes)
 class GetPLDMTypesPacket(Packet):
     fields_desc = set_pldm_fields(
-        rq_fields=[
-        ],
+        rq_fields=[],
         rsp_fields=[
-            XByteEnumField('PLDMTypes1', 0, PLDMTypesByte1),
-            XByteField('PLDMTypes2', 0),
-            XByteField('PLDMTypes3', 0),
-            XByteField('PLDMTypes4', 0),
-            XByteField('PLDMTypes5', 0),
-            XByteField('PLDMTypes6', 0),
-            XByteField('PLDMTypes7', 0),
-            XByteField('PLDMTypes8', 0),
+            XByteEnumField("PLDMTypes1", 0, PLDMTypesByte1),
+            XByteField("PLDMTypes2", 0),
+            XByteField("PLDMTypes3", 0),
+            XByteField("PLDMTypes4", 0),
+            XByteField("PLDMTypes5", 0),
+            XByteField("PLDMTypes6", 0),
+            XByteField("PLDMTypes7", 0),
+            XByteField("PLDMTypes8", 0),
         ],
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = "GetPLDMTypes ("
-        if self.underlayer.getfieldval('rq') == 1:
+        if self.underlayer.getfieldval("rq") == 1:
             summary += ")"
             return summary, [PldmHdrPacket, TransportHdrPacket]
 
@@ -152,17 +147,16 @@ class GetPLDMCommandsPacket(Packet):
     fields_desc = set_pldm_fields(
         rq_fields=[
             XByteField("PLDMType", 0),
-            XLEIntField('Version', 0),
+            XLEIntField("Version", 0),
         ],
         rsp_fields=[
-            FieldListField('cmds', [], XByteField('', 0),
-                           length_from=lambda pkt: 32),
+            FieldListField("cmds", [], XByteField("", 0), length_from=lambda pkt: 32),
         ],
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = "GetPLDMTypes ("
-        if self.underlayer.getfieldval('rq') == 0:
+        if self.underlayer.getfieldval("rq") == 0:
             summary += f"{self.cmds}"
         summary += ")"
         return summary, [PldmHdrPacket, TransportHdrPacket]
