@@ -35,9 +35,9 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/jls5177/mctp-emu#readme"
-Issues = "https://github.com/jls5177/mctp-emu/issues"
-Source = "https://github.com/jls5177/mctp-emu"
+Documentation = "https://github.com/jls5177/pymctp#readme"
+Issues = "https://github.com/jls5177/pymctp/issues"
+Source = "https://github.com/jls5177/pymctp"
 
 [tool.hatch.metadata]
 allow-direct-references = true
