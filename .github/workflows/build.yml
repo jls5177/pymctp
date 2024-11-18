@@ -3,8 +3,6 @@ name: Build
 on:
   pull_request:
     branches: [ "development" ]
-  push:
-    branches: [ "development" ]
 
 permissions:
   contents: read
