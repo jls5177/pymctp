@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "pymctp"
 dynamic = ["version"]
-description = "PyMCTP is a tool to forge/decode DMTF MCTP communication packets"
+description = "PyMCTP is a tool to craft/decode DMTF MCTP communication packets"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { file = "LICENSE" }

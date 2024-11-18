@@ -1,7 +1,7 @@
 # PyMCTP
 
 <p align="center">
-    <em>PyMCTP is a tool to forge/decode DMTF MCTP communication packets</em>
+    <em>PyMCTP is a tool to craft/decode DMTF MCTP communication packets</em>
 </p>
 
 [![build](https://github.com/jls5177/mctp-emu/workflows/Build/badge.svg)](https://github.com/jls5177/mctp-emu/actions)
