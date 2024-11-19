@@ -149,3 +149,14 @@ exclude_lines = [
   "if __name__ == .__main__.:",
   "if TYPE_CHECKING:",
 ]
+
+[tool.hatch.envs.coverage]
+detached = true
+dependencies = [
+    "coverage[toml]",
+]
+
+[tool.hatch.envs.coverage.scripts]
+combine = "coverage combine {args}"
+html = "coverage html --skip-covered --skip-empty"
+xml = "coverage xml --skip-empty"
