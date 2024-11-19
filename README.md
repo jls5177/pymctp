@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT
 </p>
 
 [![build](https://github.com/jls5177/mctp-emu/workflows/Build/badge.svg)](https://github.com/jls5177/mctp-emu/actions)
-[![codecov](https://codecov.io/gh/jls5177/mctp-emu/branch/master/graph/badge.svg)](https://codecov.io/gh/jls5177/mctp-emu)
+[![codecov](https://codecov.io/gh/jls5177/pymctp/graph/badge.svg?token=XZKM9BP68G)](https://codecov.io/gh/jls5177/pymctp)
 [![PyPI version](https://badge.fury.io/py/pymctp.svg)](https://badge.fury.io/py/pymctp)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pymctp.svg)](https://pypi.org/project/pymctp)
 
