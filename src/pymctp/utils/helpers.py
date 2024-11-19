@@ -12,7 +12,7 @@ import binascii
 
 import crc8
 from scapy.config import conf
-from scapy.packet import Raw
+from scapy.packet import Raw, Packet
 
 from ..layers import ipmi, mctp
 
@@ -50,3 +50,12 @@ class PrintableRawPacket(Raw):
 def set_printable_raw_layer():
     """Replaces the default Raw Packet to one that supports printing underlayers by default"""
     conf.raw_layer = PrintableRawPacket
+
+
+def str_to_bytes(byte_string: str) -> bytes:
+    return bytes([int(x, 16) for x in byte_string.split(" ")])
+
+
+def str_to_pkt(byte_string: str, pkt_cls: type[Packet]) -> Packet:
+    data = str_to_bytes(byte_string)
+    return pkt_cls(data)

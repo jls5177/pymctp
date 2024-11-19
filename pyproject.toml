@@ -72,7 +72,9 @@ check = "mypy --install-types --non-interactive {args:src/pymctp tests}"
 type = "virtual"
 path = ".venv"
 dependencies = [
-  "reuse >= 4.0",
+    "pytest",
+    "pytest-cov",
+    "reuse >= 4.0",
 ]
 
 [tool.hatch.envs.default.scripts]
@@ -124,7 +126,7 @@ known-first-party = ["pymctp"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401", "I001", "E501"]
 ".github/**" = ["D"]
-"tests/**/*" = ["PLR2004", "S101", "TID252", "ARG001"]
+"tests/**/*" = ["PLR2004", "S101", "TID252", "ARG001", "C408"]
 "/*.py" = ["E402", "F401", "I001", "E501"]
 
 
