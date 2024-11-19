@@ -79,7 +79,7 @@ dependencies = [
 
 [tool.hatch.envs.default.scripts]
 license-check = "reuse lint"
-add-license = "reuse annotate -c \"$(git config --get user.name) <$(git config --get user.email)>\" -l MIT --merge-copyrights -r {args:src/pymctp tests}"
+add-license = "reuse annotate -c \"$(git config --get user.name) <$(git config --get user.email)>\" -l MIT --merge-copyrights -r ."
 
 # Ruff
 [tool.ruff]
