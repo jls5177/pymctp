@@ -44,6 +44,7 @@ jobs:
         hatch run license-check
     -   name: Test
         run: |
+            hatch test --cover
             hatch run coverage:xml
     -   uses: codecov/codecov-action@v5
         with:
