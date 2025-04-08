@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 import contextlib
+import queue
 import threading
 import time
 from operator import itemgetter
@@ -19,6 +20,8 @@ try:
     from array import array
 
     import pyaardvark
+    from pyaardvark.aardvark import _raise_error_if_negative
+    from pyaardvark.ext import api
 except RuntimeError:
     # ignore the missing library as this might not be needed in all deployments
     pyaardvark = None
@@ -39,6 +42,7 @@ class AardvarkI2CSocket(SuperSocket):
         id_str: str = "",
         dump_hex=True,
         dump_packet=False,
+        bitrate: int = 400,
         **kwargs,
     ):
         if pyaardvark is None:
@@ -56,10 +60,28 @@ class AardvarkI2CSocket(SuperSocket):
         self._lock = threading.Lock()
         self._slave_only = slave_only
         self._poll_period_ms = poll_period_ms
+        self._bitrate = bitrate
+        self.packet_queue = queue.Queue()
 
         if not self.connect():
             msg = f"Failed to open connection to Aardvark adapter: {slave_address}, {port}"
             raise RuntimeError(msg)
+
+    def enable_i2c_slave(self, maxTxBytes=0, maxRxBytes=0, disable_first=True):
+        """Enable I2C slave mode.
+
+        The device will respond to the specified slave_address if it is
+        addressed.
+
+        You can wait for the data with :func:`poll` and get it with
+        `i2c_slave_read`.
+        """
+        if disable_first:
+            self._dev.disable_i2c_slave()
+        ret = api.py_aa_i2c_slave_enable(self._dev.handle, self._slave_address.address,
+                                         maxTxBytes or self._dev.BUFFER_SIZE,
+                                         maxRxBytes or self._dev.BUFFER_SIZE)
+        _raise_error_if_negative(ret)
 
     def connect(self) -> bool:
         """
@@ -72,11 +94,17 @@ class AardvarkI2CSocket(SuperSocket):
         if not self._dev or self._dev.handle is None:
             self._dev: pyaardvark.Aardvark = pyaardvark.open(self._port, self._serial_number)
             self._dev.enable_i2c_slave(self._slave_address.address)
+            if self._slave_only:
+                # self.enable_i2c_slave(disable_first=False)
+                # self.packet_queue.put([0xff])
+                # self._dev.i2c_slave_response = self.packet_queue.queue[0]
+                self._dev.i2c_slave_response = [0xff]
+            # else:
+            # self.enable_i2c_slave(disable_first=False)
+            self._dev.i2c_bitrate = self._bitrate
 
-            if self._enable_i2c_pullups:
-                self._dev.i2c_pullups = self._enable_i2c_pullups
-            if self._enable_target_power:
-                self._dev.target_power = self._enable_target_power
+            self._dev.i2c_pullups = self._enable_i2c_pullups
+            self._dev.target_power = self._enable_target_power
             self._dev.i2c_stop()
             return True
         return False
@@ -106,8 +134,16 @@ class AardvarkI2CSocket(SuperSocket):
             with self._lock:
                 # API uses 7bit addresses but payload has 8bit address in the first byte
                 if self._slave_only:
-                    self._dev.i2c_slave_response(sx[1:])
-                    # TODO: wait until the msg is received
+                    padding = [0xff] * (64 - len(sx) + 1)
+                    packet = sx[1:] + bytes(padding)
+                    # packet = sx[1:]
+                    print(f"DEBUG: packet len: {len(packet)}, queue_len: {len(self.packet_queue.queue)}")
+                    if self.packet_queue.empty():
+                        # self.enable_i2c_slave(maxTxBytes=0)
+                        self._dev.i2c_slave_response = packet
+                        print("DEBUG: queued packet")
+                    # always put the packet into the queue to keep msg queued
+                    self.packet_queue.put(packet)
                 else:
                     self._dev.i2c_master_write(sx[0] >> 1, sx[1:])
                     # this causes the stop condition to be skipped, hanging the bus
@@ -156,6 +192,8 @@ class AardvarkI2CSocket(SuperSocket):
             pkt = SmbusTransport(raw_bytes)
             pkt.time = time.time()
 
+        # TODO: buffer fragmented requests
+
         if pkt and self.dump_packet:
             print(f"{self.id_str}<RX< {pkt.summary()}")
 
@@ -180,10 +218,32 @@ class AardvarkI2CSocket(SuperSocket):
 
         # use "remain" if it is less than the pre-defined poll period
         events = self._dev.poll(int(min(self._poll_period_ms, (remain or 1) * 1000)))
+        # POLL_I2C_WRITE == I2C READ from controller
         if pyaardvark.POLL_I2C_WRITE in events:
-            transmit_size = self._dev.i2c_slave_last_transmit_size()
-            print(f"DEBUG: last transmit size {transmit_size}")
+            transmit_size = self._dev.i2c_slave_last_transmit_size
+            print(f"DEBUG: last transmit size {transmit_size}, packet_queue: {len(self.packet_queue.queue)}")
+            # if transmit_size == 259:
+            if not self.packet_queue.empty():
+                self.packet_queue.get(block=False)
+                if not self.packet_queue.empty():
+                    # grab the head of the queue
+                    self._dev.i2c_slave_response = self.packet_queue.queue[0]
+                    print(f"DEBUG: setup next packet")
+                # else:
+                #     self.packet_queue.put([0xff])
+                #     self._dev.i2c_slave_response = self.packet_queue.queue[0]
+            # else:
+            # self.enable_i2c_slave(maxTxBytes=4)
+            # self.packet_queue.put([0xff])
+            # self._dev.i2c_slave_response = self.packet_queue.queue[0]
+            # self._dev.i2c_slave_response = [0xff]
+            # print(f"DEBUG: no more packets queued, setting invalid response buffer")
+            # elif not self.packet_queue.empty():
+            #     print(f"DEBUG: force TX bytes to 0")
+            #     self.enable_i2c_slave(maxTxBytes=0)
+        # POLL_I2C_READ == I2C WRITE from controller
         if pyaardvark.POLL_I2C_READ in events:
+            self._dev.i2c_slave_response = [0xff]
             return [self]
         if events and pyaardvark.POLL_I2C_WRITE not in events:
             print(f"DEBUG: events {events}")

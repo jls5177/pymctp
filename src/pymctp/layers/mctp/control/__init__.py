@@ -73,3 +73,8 @@ from .get_routing_table_entries import (
     GetRoutingTableEntriesPacket,
     RoutingTableEntryPacket,
 )
+
+from .routing_info_update import (
+    RoutingInfoUpdateEntry1BAddressPacket,
+    RoutingInfoUpdatePacket,
+)

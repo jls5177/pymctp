@@ -71,7 +71,7 @@ class UdpSocketConfig(DataClassDictMixin):
     in_port: int
     out_port: int
     name: str
-    iface: str = "localhost"
+    iface: str | None = None
     dump_hex: bool = True
     dump_packet: bool = False
 
@@ -107,6 +107,11 @@ class AardvarkConfig(DataClassDictMixin):
     name: str
     dump_hex: bool = True
     dump_packet: bool = False
+    enable_pullups: bool = False
+    enable_target_power: bool = False
+    slave_only: bool = False
+    poll_period_ms: int = 10
+    bitrate: int = 400
 
     socket: AardvarkI2CSocket | None = field(
         default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
@@ -122,6 +127,11 @@ class AardvarkConfig(DataClassDictMixin):
             id_str=self.name,
             dump_hex=self.dump_hex,
             dump_packet=self.dump_packet,
+            enable_i2c_pullups=self.enable_pullups,
+            enable_target_power=self.enable_target_power,
+            poll_period_ms=self.poll_period_ms,
+            slave_only=self.slave_only,
+            bitrate=self.bitrate,
         )
 
     def create_session(self) -> EndpointSession:
@@ -148,6 +158,7 @@ class EndpointConfig(DataClassDictMixin):
     context: EndpointContext
     config: AardvarkConfig | UdpSocketConfig | CharDevSocketConfig
     thread_kwargs: dict[str, Any] = field(default_factory=dict)
+    downstream_endpoints: dict[int, EndpointContext] = field(default_factory=dict)
 
     class Config(BaseConfig):
         serialization_strategy = {
@@ -164,13 +175,14 @@ class EndpointManager:
     am: SimpleEndpointAM
 
     @classmethod
-    def from_config(cls, config: dict[Any, Any], start_thread=True, verbose: bool = False):
+    def from_config(cls, config: dict[Any, Any], start_thread=True, verbose: bool = False, prn=None):
         cfg = EndpointConfig.from_dict(config)
         print(f"DEBUG: {cfg or 'None'}")
         socket = cfg.config.socket
         session = EndpointSession(context=cfg.context, socket=socket)
 
-        am = SimpleEndpointAM(socket=socket, context=cfg.context, session=session, verbose=verbose)
+        am = SimpleEndpointAM(socket=socket, context=cfg.context, session=session, verbose=verbose,
+                              prn=prn or session.on_packet_received, downstream_endpoints=cfg.downstream_endpoints)
         if cfg.context.is_bus_owner:
             # TODO: add discovery flow answering machine here
             pass

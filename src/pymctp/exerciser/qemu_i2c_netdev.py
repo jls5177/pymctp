@@ -49,7 +49,7 @@ class QemuI2CNetDevSocket(SuperSocket):
         else:
             self.iface = "any"
 
-        self.ins.bind((iface, in_port))
+        self.ins.bind((self.iface, in_port))
         if out_port:
             # self.outs.connect((iface, out_port))
             self.out_port = out_port

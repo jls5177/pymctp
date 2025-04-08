@@ -23,7 +23,7 @@ class TransportHdrPacket(AllowRawSummary, Packet):
     ]
 
     def is_request(self):
-        return self.net_fn % 2 == 1
+        return self.net_fn % 2 == 0
 
     def netfn_name(self):
         netfn_names = {

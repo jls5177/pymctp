@@ -3,14 +3,18 @@
 # SPDX-License-Identifier: MIT
 
 import threading
+import time
 from collections.abc import Callable
+import random
 from typing import TYPE_CHECKING, NamedTuple
 
-from scapy.packet import Packet
+from scapy.packet import Packet, Raw
 from scapy.sendrecv import sndrcv
 from scapy.sessions import DefaultSession
 from scapy.supersocket import SuperSocket
+from scapy.utils import hexdump, linehexdump
 
+from ..layers import SmbusTransportPacket
 from ..layers.mctp import (
     AnyPhysicalAddress,
     EndpointContext,
@@ -96,15 +100,64 @@ class EndpointSession(DefaultSession):
         if not rq_pkt or not rq_pkt.haslayer(TransportHdrPacket):
             return
 
-        mctp_pkt_hdr = rq_pkt.getlayer(TransportHdrPacket)
+        mctp_pkt_hdr: TransportHdrPacket | None = rq_pkt.getlayer(TransportHdrPacket)
         is_request = bool(self.am.is_request(rq_pkt))
         som = bool(mctp_pkt_hdr.som)
         eom = bool(mctp_pkt_hdr.eom)
+        msg_id = f"{mctp_pkt_hdr.tag}{mctp_pkt_hdr.dst}{mctp_pkt_hdr.src}"
 
-        if som and not eom:
-            # TODO: handle packet fragments (see ISOTPSession for an example)
-            msg = "TODO: handle receiving fragemented packets"
-            raise RuntimeError(msg)
+        # handle fragmented packets
+        # TODO: see ISOTPSession for an example of how to create a builder pattern
+        if not (som and eom):
+            frag_bytes = bytes(mctp_pkt_hdr) if som else bytes(mctp_pkt_hdr.payload)
+            if som:
+                self.context.reassembly_list[msg_id] = frag_bytes
+            else:
+                self.context.reassembly_list[msg_id] += frag_bytes
+
+            if not eom:
+                return
+
+            # collect the full message payload and remove it from the reassembly queue
+            msg_payload = self.context.reassembly_list[msg_id]
+            mctp_pkt_hdr = TransportHdrPacket(msg_payload)
+            del self.context.reassembly_list[msg_id]
+
+            # Special case: treat msg_type==0x7F and unsupported payload as an echo command
+            if mctp_pkt_hdr.haslayer(Raw) and (mctp_pkt_hdr.msg_type == 0x7f or
+                                               (mctp_pkt_hdr.msg_type == 0x01 and True)):
+                # strip off the transport header from the msg payload
+                mctp_pkt_hdr_len = len(mctp_pkt_hdr) - len(mctp_pkt_hdr.payload)
+                # fragment the response payload with the transport header
+                response_pkts = mctp_pkt_hdr.build_reply(self.context, msg_payload[mctp_pkt_hdr_len:])
+
+                # add the smbus header to each fragment
+                smbus_hdr: SmbusTransportPacket = rq_pkt.getlayer(SmbusTransportPacket).copy()
+                response_pkts = smbus_hdr.build_reply(self.context, response_pkts)
+
+                # time.sleep(random.uniform(0.250, 0.750))
+                # time.sleep(random.uniform(5.0, 15.0))
+
+                # send the responses
+                self.am.send_reply(response_pkts)
+                return
+            rq_pkt = rq_pkt.getlayer(SmbusTransportPacket).copy(mctp_pkt_hdr)
+        elif som and eom and mctp_pkt_hdr.haslayer(Raw) and (mctp_pkt_hdr.msg_type == 0x7f):
+            # strip off the transport header from the msg payload
+            # mctp_pkt_hdr_len = len(mctp_pkt_hdr) - len(mctp_pkt_hdr.payload)
+            # fragment the response payload with the transport header
+            response_pkts = mctp_pkt_hdr.build_reply(self.context, bytes(mctp_pkt_hdr.payload))
+
+            # add the smbus header to each fragment
+            smbus_hdr: SmbusTransportPacket = rq_pkt.getlayer(SmbusTransportPacket).copy()
+            response_pkts = smbus_hdr.build_reply(self.context, response_pkts)
+
+            # time.sleep(random.uniform(0.250, 0.750))
+            # time.sleep(random.uniform(5.0, 15.0))
+
+            # send the responses
+            self.am.send_reply(response_pkts)
+            return
 
         # Lock the session to prevent another thread trying to send a request on the bus before we finish replying
         with self._responder_lock:
@@ -218,7 +271,7 @@ class EndpointSession(DefaultSession):
 
         src_phy_addr = self.context.physical_address
         if isinstance(dst_phy_addr, Smbus7bitAddress) and isinstance(src_phy_addr, Smbus7bitAddress):
-            pkt = SmbusTransport(dst_addr=dst_phy_addr, src_addr=src_phy_addr) / pkt
+            pkt = SmbusTransport(dst_addr=dst_phy_addr, src_addr=src_phy_addr, load=pkt)
         else:
             msg = f"Only Smbus7bitAddress are supported: {type(dst_phy_addr)}"
             raise TypeError(msg)

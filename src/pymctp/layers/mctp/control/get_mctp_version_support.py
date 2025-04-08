@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
 #
 # SPDX-License-Identifier: MIT
+from typing import Any
 
 from scapy.fields import FieldLenField, FieldListField, XByteField, XLEIntField
 from scapy.packet import Packet
@@ -14,13 +15,14 @@ from .control import (
     set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
+from ...helpers import AllowRawSummary
 
 MCTP_BASE_SPEC_VERSION_1_3_1 = 0xF1F3F100
 MCTP_CONTROL_VERSION_1_3_1 = 0xF1F3F100
 
 
 @AutobindControlMsg(ContrlCmdCodes.GetMCTPVersionSupport)
-class GetMctpVersionSupportPacket(Packet):
+class GetMctpVersionSupportPacket(AllowRawSummary, Packet):
     name = "GetMctpVersionSupport"
 
     fields_desc = set_control_fields(
@@ -34,6 +36,19 @@ class GetMctpVersionSupportPacket(Packet):
             ),
         ],
     )
+
+    # def extract_padding(self, p):
+    #     """Required to ensure remaining bytes are properly transferred into next entry"""
+    #     return b"", p
+    #
+    # def to_dict(self) -> dict[str, Any]:
+    #     data = {}
+    #     for f in self.fields_desc:
+    #         value = getattr(self, f.name)
+    #         if value is type(None):
+    #             value = None
+    #         data[f.name] = value
+    #     return data
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} ("

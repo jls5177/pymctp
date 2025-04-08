@@ -192,7 +192,7 @@ class EndpointContext(DataClassDictMixin):
     discovered: bool = False
     is_bus_owner: bool = False
     pool_size: int = 0
-    mtu_size: int = 240
+    mtu_size: int = 240 - (4 + 5)  # make room for transport and protocol headers
     allocated_pool: list[int] | None = None
     endpoint_uuid: uuid.UUID = dataclasses.field(default_factory=lambda: uuid.uuid4())
     supported_msg_types: list[MsgTypes] = dataclasses.field(default_factory=lambda: [MsgTypes.CTRL])
@@ -200,6 +200,7 @@ class EndpointContext(DataClassDictMixin):
     mctp_responses: MctpResponseList | None = None
     routing_table_ready: bool = False
     routing_table: list[RoutingTableEntry] = dataclasses.field(default_factory=list)
+    reassembly_list: dict[str, bytes] = dataclasses.field(default_factory=dict)
 
     class Config(BaseConfig):
         serialization_strategy = {list[MsgTypes]: {"deserialize": deserialize_msg_types}}

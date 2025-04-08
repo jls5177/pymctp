@@ -58,7 +58,6 @@ class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
     name = "GetRoutingTableEntries"
 
     fields_desc = set_control_fields(
-        # TODO: define response fields
         rq_fields=[
             XByteField("entry_handle", 0),
         ],

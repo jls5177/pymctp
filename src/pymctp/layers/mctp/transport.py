@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
 #
 # SPDX-License-Identifier: MIT
+from typing import Self
 
 import crc8
 from scapy.compat import raw
@@ -100,11 +101,16 @@ class TransportHdrPacket(AllowRawSummary, Packet):
 
     def make_reply(self, ctx: EndpointContext) -> AnyPacketType:
         payload_resp = None
+        if self.dst not in (ctx.eid, 0):
+            print(f"mismatched dst eid: {self.dst} != {ctx.eid}")
+            return None
         if self.payload and isinstance(self.payload, ICanReply):
             payload_resp = self.payload.make_reply(ctx)
             if not payload_resp:
                 return None
+        return self.build_reply(ctx, payload_resp)
 
+    def build_reply(self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes) -> AnyPacketType:
         if isinstance(payload_resp, PacketList | list):
             # TODO: Implement multiple payloads from upper layers
             msg = "multiple payloads are not yet supported"
@@ -116,7 +122,8 @@ class TransportHdrPacket(AllowRawSummary, Packet):
                 msg_type=self.msg_type,
                 to=False,
                 tag=self.tag,
-                src=ctx.assigned_eid or self.dst,
+                # src=ctx.assigned_eid or self.dst,
+                src=0 if self.dst else (ctx.assigned_eid or self.dst),
                 dst=self.src,
                 som=True,
                 eom=True,
@@ -140,6 +147,8 @@ class TransportHdrPacket(AllowRawSummary, Packet):
                 to=False,
                 tag=self.tag,
                 src=ctx.assigned_eid or self.dst,
+                # TODO: test 0 Source EID response
+                # src=0 if self.dst else (ctx.assigned_eid or self.dst),
                 dst=self.src,
                 som=som,
                 eom=eom,
@@ -306,6 +315,9 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
             payload_resp = self.load.make_reply(ctx)
             if not payload_resp:
                 return None
+        return self.build_reply(ctx, payload_resp)
+
+    def build_reply(self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes) -> AnyPacketType:
 
         dst = self.dst_addr_7bit()
         src = self.src_addr_7bit()
@@ -327,6 +339,14 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
 
         return packets
 
+    @classmethod
+    def build_reply_pkt(cls, dst_phy_addr: Smbus7bitAddress, src_phy_addr: Smbus7bitAddress):
+        pass
+
+    def copy(self, load: AnyPacketType | None = None) -> Self:
+        clone: SmbusTransportPacket = super().copy()
+        clone.load = load
+        return clone
 
 class TrimmedSmbusTransportPacket(SmbusTransportPacket):
     name = "SMBUS/I2C"
