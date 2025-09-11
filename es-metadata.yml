@@ -1,0 +1,8 @@
+schemaVersion: 0.0.1
+isProduction: false
+accountableOwners:
+  service: 2bb18c84-2dfd-4557-9c03-8904847edefd
+routing:
+  defaultAreaPath:
+    org: azurecsi
+    path: Dev\Semester Planning\Control Plane FW\BMC
