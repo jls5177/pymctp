@@ -62,13 +62,13 @@ def _parse_timestamp(line: str):
 def _parse_line(line: str):
     line = line.strip()
     if not line.startswith("0x") or line.count("  ") < 2:
-        return None, bytes()
+        return None, b""
     offset, data_line, *_ = line.split("  ")
     return int(offset[:-1], 16), bytes.fromhex(data_line)
 
 
 def _read_ascii_file(ascii_file: Path):
-    next_request = bytes()
+    next_request = b""
     next_request_timestamp = None
     with ascii_file.open("r") as f:
         for line in f.readlines():
@@ -121,7 +121,7 @@ def import_pcap_dump(
     pending_reqs: list[AnyPacketType] = []
     responses: OrderedDictType[int, MctpResponse] = OrderedDict()
     responseList: dict[MsgTypes, list[MctpResponse | dict[str, dict[int, list[MctpResponse]]]]] = defaultdict(list)
-    fragments = bytes()
+    fragments = b""
     for resp_packet in packet_generator:
         if debug:
             if file_type == "pcap":

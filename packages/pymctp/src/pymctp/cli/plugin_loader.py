@@ -19,7 +19,7 @@ else:
     from importlib_metadata import entry_points
 
 
-def discover_cli_commands(cli_group: click.Group) -> List[str]:
+def discover_cli_commands(cli_group: click.Group) -> list[str]:
     """Discover and register CLI command extensions via entry points.
 
     Extension packages can register CLI commands by adding an entry point
@@ -67,7 +67,7 @@ def discover_cli_commands(cli_group: click.Group) -> List[str]:
     return loaded_commands
 
 
-def discover_cli_commands_silent(cli_group: click.Group) -> List[str]:
+def discover_cli_commands_silent(cli_group: click.Group) -> list[str]:
     """Discover and register CLI commands silently (no warnings).
 
     Same as discover_cli_commands but suppresses all output.

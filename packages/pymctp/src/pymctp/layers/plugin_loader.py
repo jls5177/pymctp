@@ -16,7 +16,7 @@ from typing import List
 logger = logging.getLogger(__name__)
 
 
-def discover_and_load_extensions() -> List[str]:
+def discover_and_load_extensions() -> list[str]:
     """Discover and load all registered pymctp extensions.
 
     Extensions are discovered via the 'pymctp.extensions' entry point group.
@@ -59,7 +59,7 @@ def discover_and_load_extensions() -> List[str]:
     return loaded_extensions
 
 
-def load_extensions_silent() -> List[str]:
+def load_extensions_silent() -> list[str]:
     """Load extensions without logging errors to console.
 
     This is useful for optional extensions that may not be installed.

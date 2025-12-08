@@ -16,7 +16,6 @@ from pymctp.cli.plugin_loader import discover_cli_commands_silent
 @click.version_option(version=__version__, prog_name="pymctp")
 def cli():
     """PyMCTP - MCTP/PLDM/IPMI protocol analysis tools."""
-    pass
 
 
 # Register built-in commands

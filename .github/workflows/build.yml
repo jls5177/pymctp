@@ -91,9 +91,8 @@ jobs:
         path: /home/runner/.local/share/hatch/env/virtual/
         key: ${{ runner.os }}-hatch
     - name: Lint and typecheck
-      working-directory: packages/pymctp
       run: |
-        hatch fmt --check
+        hatch run format-check
     - name: Validate license headers
       working-directory: packages/pymctp
       run: |

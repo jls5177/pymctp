@@ -16,10 +16,10 @@ from typing import Dict, List, Type
 logger = logging.getLogger(__name__)
 
 # Registry of discovered exercisers
-_exerciser_registry: Dict[str, Type] = {}
+_exerciser_registry: dict[str, type] = {}
 
 
-def register_exerciser(name: str, exerciser_class: Type) -> None:
+def register_exerciser(name: str, exerciser_class: type) -> None:
     """Register an exerciser class.
 
     Args:
@@ -32,7 +32,7 @@ def register_exerciser(name: str, exerciser_class: Type) -> None:
     logger.debug(f"Registered exerciser: {name} -> {exerciser_class.__name__}")
 
 
-def get_exerciser(name: str) -> Type | None:
+def get_exerciser(name: str) -> type | None:
     """Get an exerciser class by name.
 
     Args:
@@ -44,7 +44,7 @@ def get_exerciser(name: str) -> Type | None:
     return _exerciser_registry.get(name)
 
 
-def list_exercisers() -> List[str]:
+def list_exercisers() -> list[str]:
     """List all registered exerciser names.
 
     Returns:
@@ -53,7 +53,7 @@ def list_exercisers() -> List[str]:
     return list(_exerciser_registry.keys())
 
 
-def discover_and_load_exercisers() -> List[str]:
+def discover_and_load_exercisers() -> list[str]:
     """Discover and load all registered pymctp exercisers.
 
     Exercisers are discovered via the 'pymctp.exercisers' entry point group.
@@ -96,7 +96,7 @@ def discover_and_load_exercisers() -> List[str]:
     return loaded_packages
 
 
-def load_exercisers_silent() -> List[str]:
+def load_exercisers_silent() -> list[str]:
     """Load exercisers without logging errors to console.
 
     This is useful for optional exercisers that may not be installed.

@@ -44,18 +44,18 @@ def parse_timestamp(line: str, timezone_str: str, is_dst: bool, date_str: str) -
     return None
 
 
-def parse_line(line: str) -> Tuple[int | None, bytes]:
+def parse_line(line: str) -> tuple[int | None, bytes]:
     """Parse single line of hex dump."""
     line = line.strip()
     if not line.startswith("0x") or line.count("  ") < 2:
-        return None, bytes()
+        return None, b""
     offset, data_line, *_ = line.split("  ")
     return int(offset[:-1], 16), bytes.fromhex(data_line)
 
 
 def parse_text_file(
     filename: pathlib.Path, timezone_str: str, is_dst: bool, date_str: str
-) -> List[Tuple[datetime | None, AnyPacketType]]:
+) -> list[tuple[datetime | None, AnyPacketType]]:
     """Parse text-format tcpdump file.
 
     Args:
@@ -65,7 +65,7 @@ def parse_text_file(
         date_str: Date string in YYYY-MM-DD format for text dumps without dates
     """
     packets = []
-    next_request = bytes()
+    next_request = b""
     next_request_timestamp = None
     for line in filename.read_text().splitlines():
         timestamp = parse_timestamp(line, timezone_str, is_dst, date_str)
@@ -95,9 +95,9 @@ def parse_text_file(
     return packets
 
 
-def parse_pcap_file(filename: pathlib.Path, timezone_str: str, is_dst: bool) -> List[Tuple[datetime, AnyPacketType]]:
+def parse_pcap_file(filename: pathlib.Path, timezone_str: str, is_dst: bool) -> list[tuple[datetime, AnyPacketType]]:
     """Parse pcap/dump file."""
-    packets: List[Tuple[datetime, AnyPacketType]] = list()
+    packets: list[tuple[datetime, AnyPacketType]] = list()
     tz = pytz.timezone(timezone_str)
     with PcapReader(str(filename.resolve())) as fdesc:
         for packet in fdesc:
@@ -168,7 +168,7 @@ def analyze_tcpdump(
         raise click.Abort()
 
     # Parse the capture file
-    packets: List[Tuple[datetime | None, AnyPacketType]] = []
+    packets: list[tuple[datetime | None, AnyPacketType]] = []
     if capture_file.suffix in [".pcap", ".dump"]:
         click.echo(f"Parsing pcap file: {capture_file}")
         packets = parse_pcap_file(capture_file, timezone, dst)

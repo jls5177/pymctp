@@ -76,6 +76,10 @@ format-all = """
     ruff format packages/
     ruff check --fix packages/
 """
+format-check = """
+    ruff format --check packages/
+    ruff check packages/
+"""
 
 [tool.hatch.envs.test]
 dependencies = [
