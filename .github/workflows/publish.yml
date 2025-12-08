@@ -20,12 +20,11 @@ jobs:
     name: Build all packages
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         package:
           - name: pymctp
             path: packages/pymctp
-          - name: pymctp-sample-vendorextension
-            path: packages/pymctp-sample-vendorextension
           - name: pymctp-exerciser-aardvark
             path: packages/pymctp-exerciser-aardvark
           - name: pymctp-exerciser-qemu
@@ -54,15 +53,14 @@ jobs:
 
   publish-to-pypi:
     name: Publish to PyPI
-    if: startsWith(github.ref, 'refs/tags/')  # only publish to PyPI on tag pushes
     needs:
     - build-all-packages
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         package:
           - pymctp
-          - pymctp-sample-vendorextension
           - pymctp-exerciser-aardvark
           - pymctp-exerciser-qemu
           - pymctp-exerciser-serial
@@ -130,10 +128,10 @@ jobs:
     - build-all-packages
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         package:
           - pymctp
-          - pymctp-sample-vendorextension
           - pymctp-exerciser-aardvark
           - pymctp-exerciser-qemu
           - pymctp-exerciser-serial
@@ -155,3 +153,4 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         repository-url: https://test.pypi.org/legacy/
+        verbose: true
