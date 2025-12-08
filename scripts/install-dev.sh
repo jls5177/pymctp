@@ -21,7 +21,7 @@ PACKAGES=(
 for package in "${PACKAGES[@]}"; do
     echo ""
     echo "Installing: $package"
-    pip install -e "$package"
+    python -m pip install -e "$package"
 done
 
 echo ""
@@ -30,4 +30,4 @@ echo "✓ All packages installed in development mode!"
 echo "=========================================="
 echo ""
 echo "Installed packages:"
-pip list | grep pymctp
+python -m pip list | grep pymctp

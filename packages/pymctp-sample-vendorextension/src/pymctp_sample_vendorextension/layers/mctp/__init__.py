@@ -5,5 +5,6 @@
 """Sample vendor MCTP layer implementations."""
 
 from .sample_vendor import *
+from .sample_vendor import __all__ as _sample_vendor_all
 
-__all__ = []
+__all__ = _sample_vendor_all

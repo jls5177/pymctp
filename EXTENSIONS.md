@@ -26,9 +26,14 @@ PyMCTP uses Python's entry points mechanism to automatically discover and load e
 When pymctp is imported, it automatically:
 1. Discovers all registered extensions via entry points
 2. Imports the registered modules
-3. Allows the extension's layer bindings to register automatically via decorators
+3. Registers extensions into the pymctp namespace (e.g., pymctp.oem.microsoft)
+4. Allows the extension's layer bindings to register automatically via decorators
 
 This design keeps OEM-specific code separate from the core library while maintaining seamless integration.
+
+Extensions are automatically accessible under the `pymctp.oem` namespace based on their entry point name:
+- Entry point `microsoft` → `pymctp.oem.microsoft`
+- Entry point `sample-vendor` → `pymctp.oem.sample_vendor` (hyphens converted to underscores)
 
 ## Extension Architecture
 
@@ -215,6 +220,13 @@ import pymctp
 # Check if your extension was loaded
 from pymctp.layers import __all_extensions__
 print(__all_extensions__)  # Should include your extension name
+
+# Access your extension via the pymctp namespace
+# If your entry point is 'microsoft', it will be at:
+from pymctp.oem.microsoft import YourCustomLayer
+
+# Or for 'sample-vendor' entry point:
+from pymctp.oem.sample_vendor import YourCustomLayer
 
 # Test your layers
 from pymctp.layers.mctp.vdpci import VdPciHdrPacket
