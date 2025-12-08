@@ -11,6 +11,8 @@ from scapy.sendrecv import sndrcv
 from scapy.sessions import DefaultSession
 from scapy.supersocket import SuperSocket
 
+from ..exerciser import TTYSerialSocket
+from ..layers import SmbusTransportPacket, UartTransport
 from ..layers.mctp import (
     AnyPhysicalAddress,
     EndpointContext,
@@ -219,6 +221,8 @@ class EndpointSession(DefaultSession):
         src_phy_addr = self.context.physical_address
         if isinstance(dst_phy_addr, Smbus7bitAddress) and isinstance(src_phy_addr, Smbus7bitAddress):
             pkt = SmbusTransport(dst_addr=dst_phy_addr, src_addr=src_phy_addr) / pkt
+        elif isinstance(self.socket, TTYSerialSocket):
+            pkt = UartTransport(load=pkt)
         else:
             msg = f"Only Smbus7bitAddress are supported: {type(dst_phy_addr)}"
             raise TypeError(msg)

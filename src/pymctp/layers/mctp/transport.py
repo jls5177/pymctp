@@ -369,6 +369,115 @@ def SmbusTransport(
     )
 
 
+class UartTransportPacket(AllowRawSummary, Packet):
+    name = "UART"
+
+    fields_desc = [
+        XByteField("frame_start", 0x7E),
+        XByteField("protocol_rev", 1),
+        LenField("byte_count", None, fmt="B", adjust=lambda x: x or 0),
+        PacketLenField("load", None, TransportHdrPacket, length_from=lambda x: x.byte_count),
+        XShortField("fcs", None),
+        XByteField("frame_end", 0x7E),
+    ]
+
+    FCS_FUNC = crcmod.predefined.Crc("crc-16-mcrf4xx")
+
+    def mysummary(self):  # type: () -> str
+        summary = "UART ("
+        summary += f"byte_count={self.byte_count}"
+        if "fcs" in self.fields:
+            summary += f", chk=0x{self.fcs:04X}"
+        summary += ")"
+        return summary, [UartTransportPacket]
+
+    def post_build(self, p, pay):
+        # hexdump(p)
+        # hexdump(pay)
+        p += pay
+        if self.fcs is None:
+            data = p[1:-3]
+            crc16 = UartTransportPacket.FCS_FUNC.new()
+            crc16.update(data)
+            # val = binascii.crc_hqx(data, 0xFFFF)
+            self.fcs = crc16.crcValue
+            p = p[:-3] + self.fcs.to_bytes(2, byteorder="big") + p[-1:]
+        elif pay and self.fcs != int.from_bytes(pay[-3:-1], byteorder="big"):
+            p = p[:-3] + int.to_bytes(self.fcs, byteorder="big", length=2) + p[-1:]
+        return p
+
+    def answers(self, other: Packet) -> int:
+        if self.payload:
+            return self.payload.answers(other.payload)
+        if self.load:
+            return self.load.answers(other.load)
+        return None
+
+    def is_request(self, check_payload: bool = True) -> bool:
+        if check_payload and self.payload and isinstance(self.payload, ICanReply):
+            return self.payload.is_request()
+        if check_payload and self.load and isinstance(self.load, ICanReply):
+            return self.load.is_request()
+        return False
+
+    def make_reply(self, ctx: EndpointContext) -> AnyPacketType:
+        payload_resp = None
+        if self.payload and isinstance(self.payload, ICanReply):
+            payload_resp = self.payload.make_reply(ctx)
+            if not payload_resp:
+                return None
+        if self.load and isinstance(self.load, ICanReply):
+            payload_resp = self.load.make_reply(ctx)
+            if not payload_resp:
+                return None
+        return self.build_reply(ctx, payload_resp)
+
+    def build_reply(self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes) -> AnyPacketType:
+        if not isinstance(payload_resp, PacketList | list):
+            payload_resp = [payload_resp]
+
+        # wrap each packet with the SMBUS transport header
+        packets = PacketList()
+        for packet in payload_resp:
+            resp_hdr = UartTransportPacket(
+                byte_count=len(packet),
+                load=packet,
+            )
+            packets.extend(resp_hdr)
+        return packets
+
+    @classmethod
+    def build_reply_pkt(cls, dst_phy_addr: Smbus7bitAddress, src_phy_addr: Smbus7bitAddress):
+        pass
+
+    def copy(self, load: AnyPacketType | None = None) -> Self:
+        clone: UartTransportPacket = super().copy()
+        clone.load = load
+        return clone
+
+
+def UartTransport(
+    *args,
+    byte_count: int | None = None,
+    load: AnyPacketType = None,
+    fcs: int | None = None,
+) -> UartTransportPacket:
+    if len(args):
+        return UartTransportPacket(*args)
+    if not byte_count:
+        byte_count = len(load) if load else 0
+    if not fcs:
+        # CRC skips framing flag
+        crc16 = UartTransportPacket.FCS_FUNC.new()
+        crc16.update(bytes([1, byte_count]))
+        crc16.update(bytes(load) if load else b"")
+        fcs = crc16.crcValue
+        # print(f"fcs={fcs:04X}")
+    return UartTransportPacket(
+        byte_count=byte_count, load=load, fcs=fcs
+    )
+
+
 class AutobindMessageType:
     def __init__(self, msg_type: MsgTypes):
         self.msg_type = msg_type
@@ -387,3 +496,6 @@ bind_layers(CookedLinuxV2, TransportHdrPacket, proto=0xFA)
 
 # Add the MCTP Transport as a valid SMBUS command protocol
 bind_layers(SmbusTransportPacket, TransportHdrPacket, command_code=0x0F)
+
+# Add the MCTP-over-UART transport
+bind_layers(UartTransportPacket, TransportHdrPacket, frame_start=0x7e, frame_end=0x7e)

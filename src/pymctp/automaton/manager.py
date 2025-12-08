@@ -15,7 +15,7 @@ from mashumaro.config import BaseConfig
 from scapy.supersocket import SuperSocket
 
 from pymctp.automaton import EndpointSession, SimpleEndpointAM
-from pymctp.exerciser import AardvarkI2CSocket, QemuI2CNetDevSocket, QemuI3CCharDevSocket
+from pymctp.exerciser import AardvarkI2CSocket, QemuI2CNetDevSocket, QemuI3CCharDevSocket, TTYSerialSocket
 from pymctp.layers.mctp import EndpointContext, Smbus7bitAddress
 
 
@@ -23,6 +23,7 @@ class ConfigTypes(str, Enum):
     Socket = "socket"
     Aardvark = "aardvark"
     CharDev = "chardev"
+    TTY = "tty"
 
 
 @runtime_checkable
@@ -59,6 +60,31 @@ class CharDevSocketConfig(DataClassDictMixin):
             mwl=self.mwl,
             mrl=self.mrl,
             dynamic_addr=self.dynamic_addr,
+        )
+
+    def close_socket(self):
+        self.socket.close()
+
+@dataclasses.dataclass()
+class TTYSocketConfig(DataClassDictMixin):
+    type = ConfigTypes.TTY
+    tty: str
+    name: str
+    baudrate: int = 115200
+    dump_hex: bool = True
+    dump_packet: bool = False
+
+    socket: TTYSerialSocket | None = field(
+        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
+    )
+
+    def __post_init__(self):
+        self.socket = TTYSerialSocket(
+            tty=self.tty,
+            id_str=self.name,
+            baudrate=self.baudrate,
+            dump_hex=self.dump_hex,
+            dump_packet=self.dump_packet,
         )
 
     def close_socket(self):
@@ -131,7 +157,7 @@ class AardvarkConfig(DataClassDictMixin):
         self.socket.close()
 
 
-def deserialize_supersocket(value: dict) -> AardvarkConfig | UdpSocketConfig | CharDevSocketConfig:
+def deserialize_supersocket(value: dict) -> AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig:
     config_type = value.get("type")
     if config_type == ConfigTypes.Socket:
         return UdpSocketConfig.from_dict(value)
@@ -139,6 +165,8 @@ def deserialize_supersocket(value: dict) -> AardvarkConfig | UdpSocketConfig | C
         return AardvarkConfig.from_dict(value)
     if config_type == ConfigTypes.CharDev:
         return CharDevSocketConfig.from_dict(value)
+    if config_type == ConfigTypes.TTY:
+        return TTYSocketConfig.from_dict(value)
     msg = f"Unknown config type {config_type}"
     raise ValueError(msg)
 
@@ -146,12 +174,13 @@ def deserialize_supersocket(value: dict) -> AardvarkConfig | UdpSocketConfig | C
 @dataclasses.dataclass()
 class EndpointConfig(DataClassDictMixin):
     context: EndpointContext
-    config: AardvarkConfig | UdpSocketConfig | CharDevSocketConfig
+    config: AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig
     thread_kwargs: dict[str, Any] = field(default_factory=dict)
+    downstream_endpoints: dict[int, EndpointContext] = field(default_factory=dict)
 
     class Config(BaseConfig):
         serialization_strategy = {
-            AardvarkConfig | UdpSocketConfig | CharDevSocketConfig: {"deserialize": deserialize_supersocket}
+            AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig : {"deserialize": deserialize_supersocket}
         }
 
 

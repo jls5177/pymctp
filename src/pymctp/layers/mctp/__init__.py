@@ -18,6 +18,8 @@ from .transport import (
     SmbusTransport,
     SmbusTransportPacket,
     TrimmedSmbusTransportPacket,
+    UartTransport,
+    UartTransportPacket,
 )
 
 # Import the main Packets for each MsgType to perform autobinding
