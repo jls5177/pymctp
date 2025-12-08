@@ -99,8 +99,8 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         if check_payload and self.payload and isinstance(self.payload, ICanVerifyIfRequest):
             return self.payload.is_request()
         # check previous layer
-        if self.underlayer and isinstance(self.underlayer, ICanVerifyIfRequest):
-            return self.underlayer.is_request()
+        # if self.underlayer and isinstance(self.underlayer, ICanVerifyIfRequest):
+        #     return self.underlayer.is_request()
         # Fallback to checking the TO bit
         return self.to == 1
 
@@ -127,7 +127,8 @@ class TransportHdrPacket(AllowRawSummary, Packet):
                 msg_type=self.msg_type,
                 to=False,
                 tag=self.tag,
-                src=ctx.assigned_eid or self.dst,
+                # src=ctx.assigned_eid or self.dst,
+                src=0 if self.dst else (ctx.assigned_eid or self.dst),
                 dst=self.src,
                 som=True,
                 eom=True,
@@ -151,6 +152,8 @@ class TransportHdrPacket(AllowRawSummary, Packet):
                 to=False,
                 tag=self.tag,
                 src=ctx.assigned_eid or self.dst,
+                # TODO: test 0 Source EID response
+                # src=0 if self.dst else (ctx.assigned_eid or self.dst),
                 dst=self.src,
                 som=som,
                 eom=eom,

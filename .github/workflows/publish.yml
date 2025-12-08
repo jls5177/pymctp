@@ -2,20 +2,36 @@
 #
 # SPDX-License-Identifier: MIT
 
-# This workflow will upload a Python Package using Hatch when a new tag is pushed to the repository.
+# This workflow will upload Python Packages using build when a new tag is pushed to the repository.
 
-name: Publish Python 🐍 distribution 📦 to PyPI
+name: Publish Python 🐍 distributions 📦 to PyPI
 
 on:
   push:
     tags:
         - 'v*'
+        - 'pymctp-*'
+        - 'exerciser-*'
+        - 'oem-*'
     branches: [ "main" ]
 
 jobs:
-  build:
-    name: Build distribution 📦
+  build-all-packages:
+    name: Build all packages
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - name: pymctp
+            path: packages/pymctp
+          - name: pymctp-sample-vendorextension
+            path: packages/pymctp-sample-vendorextension
+          - name: pymctp-exerciser-aardvark
+            path: packages/pymctp-exerciser-aardvark
+          - name: pymctp-exerciser-qemu
+            path: packages/pymctp-exerciser-qemu
+          - name: pymctp-exerciser-serial
+            path: packages/pymctp-exerciser-serial
 
     steps:
     - uses: actions/checkout@v4
@@ -23,44 +39,51 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: "3.x"
-    - name: Install dependencies
+    - name: Install build tools
       run: |
         python -m pip install --upgrade pip
-        pip install hatch
-    - name: Build a binary wheel and a source tarball
-      run: hatch build
-    - name: Store the distribution packages
+        pip install build hatch
+    - name: Build ${{ matrix.package.name }}
+      working-directory: ${{ matrix.package.path }}
+      run: python -m build
+    - name: Store distribution packages
       uses: actions/upload-artifact@v4
       with:
-        name: python-package-distributions
-        path: dist/
+        name: dist-${{ matrix.package.name }}
+        path: ${{ matrix.package.path }}/dist/
 
   publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
+    name: Publish to PyPI
     if: startsWith(github.ref, 'refs/tags/')  # only publish to PyPI on tag pushes
     needs:
-    - build
+    - build-all-packages
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - pymctp
+          - pymctp-sample-vendorextension
+          - pymctp-exerciser-aardvark
+          - pymctp-exerciser-qemu
+          - pymctp-exerciser-serial
+
     environment:
       name: pypi
-      url: https://pypi.org/p/pymctp
+      url: https://pypi.org/p/${{ matrix.package }}
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
     steps:
-    - name: Download all the dists
+    - name: Download distributions for ${{ matrix.package }}
       uses: actions/download-artifact@v4
       with:
-        name: python-package-distributions
+        name: dist-${{ matrix.package }}
         path: dist/
-    - name: Publish distribution 📦 to PyPI
+    - name: Publish ${{ matrix.package }} to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    name: >-
-      Sign the Python 🐍 distribution 📦 with Sigstore
-      and upload them to GitHub Release
+    name: Create GitHub Release
     needs:
     - publish-to-pypi
     runs-on: ubuntu-latest
@@ -70,12 +93,13 @@ jobs:
       id-token: write  # IMPORTANT: mandatory for sigstore
 
     steps:
-    - name: Download all the dists
+    - name: Download all distributions
       uses: actions/download-artifact@v4
       with:
-        name: python-package-distributions
+        pattern: dist-*
         path: dist/
-    - name: Sign the dists with Sigstore
+        merge-multiple: true
+    - name: Sign distributions with Sigstore
       uses: sigstore/gh-action-sigstore-python@v3.0.0
       with:
         inputs: >-
@@ -89,7 +113,7 @@ jobs:
         '${{ github.ref_name }}'
         --repo '${{ github.repository }}'
         --notes ""
-    - name: Upload artifact signatures to GitHub Release
+    - name: Upload artifacts to GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
       # Upload to GitHub Release using the `gh` CLI.
@@ -101,25 +125,33 @@ jobs:
         --repo '${{ github.repository }}'
 
   publish-to-testpypi:
-    name: Publish Python 🐍 distribution 📦 to TestPyPI
+    name: Publish to TestPyPI
     needs:
-    - build
+    - build-all-packages
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - pymctp
+          - pymctp-sample-vendorextension
+          - pymctp-exerciser-aardvark
+          - pymctp-exerciser-qemu
+          - pymctp-exerciser-serial
 
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/pymctp
+      url: https://test.pypi.org/p/${{ matrix.package }}
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
     steps:
-    - name: Download all the dists
+    - name: Download distributions for ${{ matrix.package }}
       uses: actions/download-artifact@v4
       with:
-        name: python-package-distributions
+        name: dist-${{ matrix.package }}
         path: dist/
-    - name: Publish distribution 📦 to TestPyPI
+    - name: Publish ${{ matrix.package }} to TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         repository-url: https://test.pypi.org/legacy/

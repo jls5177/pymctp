@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pymctp-exerciser-qemu"
+version = "0.2.0"
+description = "QEMU I2C/I3C exerciser for pymctp"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["mctp", "qemu", "i2c", "i3c", "virtualization"]
+authors = [
+  { name = "Justin Simon", email = "justin@simonctl.com" }
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: System :: Emulators",
+]
+dependencies = [
+    "pymctp>=0.2.0",
+    "crc8>=0.1.0",
+]
+
+[project.urls]
+Documentation = "https://github.com/jls5177/pymctp#readme"
+Issues = "https://github.com/jls5177/pymctp/issues"
+Source = "https://github.com/jls5177/pymctp"
+
+# Register this package as a pymctp exerciser
+[project.entry-points."pymctp.exercisers"]
+qemu = "pymctp_exerciser_qemu"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".history",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    "dist",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+ignore = [
+    "FBT001", "FBT002", "FBT003",
+    "C901",
+    "RUF012",
+    "ARG001", "ARG002", "ARG005",
+    "F403", "F405",
+    "TID252", "F401",
+    "T201",
+    "N801", "N802", "N806",
+    "S101",
+    "PLR2004",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pymctp_exerciser_qemu"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402", "F401", "I001", "E501"]

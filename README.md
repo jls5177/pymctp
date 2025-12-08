@@ -4,137 +4,178 @@ SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
 SPDX-License-Identifier: MIT
 -->
 
-# PyMCTP
+# PyMCTP - DMTF MCTP Protocol Library
 
 <p align="center">
-    <em>PyMCTP is a tool to craft/decode DMTF MCTP communication packets</em>
+    <em>A comprehensive Python library for crafting and decoding DMTF MCTP communication packets</em>
 </p>
 
 [![build](https://github.com/jls5177/mctp-emu/workflows/Build/badge.svg)](https://github.com/jls5177/mctp-emu/actions)
-[![codecov](https://codecov.io/gh/jls5177/pymctp/graph/badge.svg?token=XZKM9BP68G)](https://codecov.io/gh/jls5177/pymctp)
+[![codecov](https://codecov.io/gh/jls5177/mctp-emu/branch/master/graph/badge.svg)](https://codecov.io/gh/jls5177/mctp-emu)
 [![PyPI version](https://badge.fury.io/py/pymctp.svg)](https://badge.fury.io/py/pymctp)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pymctp.svg)](https://pypi.org/project/pymctp)
 
------
+## Overview
 
-## Table of Contents
+PyMCTP is a modular Python library for working with DMTF MCTP (Management Component Transport Protocol) packets. The library is organized as a monorepo with multiple packages:
 
-- [Introduction](#introduction)
-- [Features](#features)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Contributing](#contributing)
-- [License](#license)
+- **Core library** - Protocol layer definitions and packet crafting/decoding
+- **OEM extensions** - Vendor-specific protocol implementations
+- **Exercisers** - Hardware and virtual device interfaces
 
-## Introduction
+## Packages
 
-PyMCTP is a Python library designed to craft and decode DMTF MCTP (Management Component Transport Protocol) communication packets. It provides tools and utilities to work with MCTP packets, making it easier to develop and test MCTP-based communication systems.
+### Core Package
+
+- **[pymctp](packages/pymctp/)** - Main library with MCTP/IPMI/PLDM protocol support
+  ```bash
+  pip install pymctp
+  ```
+
+### Vendor Extensions
+
+- **[pymctp-sample-vendorextension](packages/pymctp-sample-vendorextension/)** - Sample vendor extension (template/example)
+  ```bash
+  pip install pymctp-sample-vendorextension
+  ```
+
+### Exercisers
+
+- **[pymctp-exerciser-aardvark](packages/pymctp-exerciser-aardvark/)** - Total Phase Aardvark I2C adapter
+  ```bash
+  pip install pymctp-exerciser-aardvark
+  ```
+
+- **[pymctp-exerciser-qemu](packages/pymctp-exerciser-qemu/)** - QEMU I2C/I3C virtual devices
+  ```bash
+  pip install pymctp-exerciser-qemu
+  ```
+
+- **[pymctp-exerciser-serial](packages/pymctp-exerciser-serial/)** - TTY/Serial UART devices
+  ```bash
+  pip install pymctp-exerciser-serial
+  ```
+
+## Quick Start
+
+### Installation
+
+```bash
+# Minimal installation (core library only)
+pip install pymctp
+
+# With all exercisers
+pip install pymctp[all-exercisers]
+
+# Or install specific packages
+pip install pymctp pymctp-sample-vendorextension pymctp-exerciser-qemu
+```
+
+### Usage Example
+
+```python
+from pymctp.layers.mctp import SmbusTransport, TransportHdr
+from pymctp.layers.mctp.control import SetEndpointID, ControlHdr
+
+# Craft an MCTP packet
+pkt = (
+    TransportHdr(src=10, dst=0, som=1, eom=1, msg_type=0)
+    / ControlHdr(rq=True, cmd_code=1, instance_id=0x11)
+    / SetEndpointID(op=0, eid=29)
+)
+
+# Decode a packet
+from pymctp.layers import mctp
+data = bytes([0x01, 0x0b, 0x0a, 0xc5, 0x00, 0x00, 0x0a, 0x00, 0xff, 0x01, 0x01, 0x0a, 0x02, 0x00, 0x04, 0x01, 0x00])
+decoded = mctp.TransportHdrPacket(data)
+print(decoded.summary())
+```
 
 ## Features
 
-- Utilizes Scapy, a powerful Python library used for interactive packet manipulation and network protocol analysis
-- Supports crafting and decoding MCTP packets
-- Easy-to-use API
-- Extensible interface for Physical and Virtual device exercisers:
-    - Support for Total Phase Aardvark I2C exerciser
-    - Support for QEMU I2C-socket and I3C-chardev drivers
+- **Protocol Support**: MCTP Control, PLDM, IPMI, VDM, NVMe-MI
+- **Extensible Architecture**: Plugin system for layers and exercisers
+- **Hardware Interfaces**: Support for physical and virtual devices
+- **Scapy Integration**: Built on Scapy for powerful packet manipulation
 
-### Currently Supported Protocols
-* MCTP Control messages: `crafting` and `decoding`
-* PLDM Base and Type 2 messages: `decoding`
-* Very basic decoding of MCTP Vendor Defined Messages: `decoding`
-* IPMI `MasterWriteRead` messages: `decoding`
+## Documentation
 
-## Installation
+- **[Core Library Documentation](packages/pymctp/README.md)** - Full API and usage guide
+- **[Extension Development](EXTENSIONS.md)** - Creating custom OEM extensions
+- **[Migration Guide](MIGRATION.md)** - Upgrading from older versions
 
-You can install PyMCTP using pip:
+## Development
 
-```console
-pip install pymctp
-```
+This is a monorepo containing multiple Python packages. Each package can be developed and published independently.
 
-## Usage
-
-### Decoding MCTP Packets
-
-Here is a simple example of how to use the PyMCTP library to decode an MCTP Transport packet
-```python
-from pymctp.layers import mctp
-data = "01 0b 0a c5 00 00 0a 00 ff 01 01 0a 02 00 04 01 00"
-bdata = bytes([int(x, 16) for x in data.split(" ")])
-pkt = mctp.TransportHdrPacket(bdata)
-print(f"{pkt.summary()}")
-```
+### Repository Structure
 
 ```
-MCTP 0:5 (0B <-- 0A) (S:E) CTRL / CONTROL RSP (instance_id: 0, cmd_code=10, completion_code=0) / GetRoutingTableEntries (next_hdl=0xFF, cnt=1)  [0x0A:1]
+pymctp/
+├── packages/
+│   ├── pymctp/                          # Core library
+│   ├── pymctp-sample-vendorextension/   # Sample vendor extension (example/template)
+│   ├── pymctp-exerciser-aardvark/       # Aardvark exerciser
+│   ├── pymctp-exerciser-qemu/           # QEMU exercisers
+│   └── pymctp-exerciser-serial/         # Serial exerciser
+├── tests/                               # Shared tests
+├── examples/                            # Example scripts
+├── EXTENSIONS.md                        # Extension development guide
+└── MIGRATION.md                         # Migration guide
 ```
 
-Here is a simple example of how to decode an MCTP-over-SMBUS packet:
-```python
-from pymctp.layers import mctp
-data = "20 0F 0C 65 01 0A 43 D0 00 1A 01 00 00 43 00 F4"
-bdata = bytes([int(x, 16) for x in data.split(" ")])
-pkt = mctp.SmbusTransportPacket(bdata)
-print(f"{pkt.summary()}")
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/jls5177/pymctp.git
+cd pymctp
+
+# Install core package in development mode
+pip install -e packages/pymctp
+
+# Install extensions/exercisers as needed
+pip install -e packages/pymctp-sample-vendorextension
+pip install -e packages/pymctp-exerciser-qemu
 ```
 
-```
-SMBUS (dst=0x20, src=0x65, byte_count=12, pec=0xF4) / MCTP 1:0 (0A <-- 43) (S:E) CTRL / CONTROL RSP (instance_id: 26, cmd_code=1, completion_code=0) / SetEndpointIDPacket (assign_status: accepted, eid_alloc_status: no_pool, eid_setting: 0x43, eid_pool_size: 0)
-```
+### Running Tests
 
-### Crafting MCTP Packets
+```bash
+# Run all tests
+pytest
 
-Here is an example of crafting a complete MCTP-over-SMBUS packet:
-```python
-from pymctp.layers.mctp import SmbusTransport, TransportHdr
-from pymctp.layers.mctp.control import SetEndpointID, SetEndpointIDOperation, ControlHdr
-from pymctp.types import MsgTypes, Smbus7bitAddress
-
-pkt = (
-    TransportHdr(src=10, dst=0, som=1, eom=1, to=1, tag=7, msg_type=MsgTypes.CTRL)
-    / ControlHdr(rq=True, cmd_code=ContrlCmdCodes.SET_ENDPOINT_ID, instance_id=0x11)
-    / SetEndpointID(op=SetEndpointIDOperation.SetEID, eid=29)
-)
-
-smbus_pkt = SmbusTransport(
-    dst_addr=Smbus7bitAddress(0x32),
-    src_addr=Smbus7bitAddress(0x10),
-    load=pkt
-)
+# Run tests for specific package
+pytest tests/layers/
 ```
 
-Here is the same packet decoded to show the raw payload that was generated:
-```ipython
->>> print(f"{hexdump(smbus_pkt)}")
-0000  64 0F 0A 21 01 00 0A CF 00 91 01 00 1D FC        d..!..........
-None
->>> print(f"{smbus_pkt.summary()}")
-SMBUS (dst=0x64, src=0x21, byte_count=10, pec=0xFC) / MCTP 0:7 (00 <-- 0A) (S:E:TO) CTRL / CONTROL REQ (instance_id: 17, cmd_code=1) / SetEndpointIDPacket (eid: 0x1D, op: set)
-```
+### Building Packages
 
-Once you have the fully crafted packet, you can convert it to a bytes object to get the raw payload:
-```ipython
->>> raw_bytes = raw(smbus_pkt)
->>> hexdump(raw_bytes)
-0000  64 0F 0A 21 01 00 0A CF 00 91 01 00 1D FC        d..!..........
->>> type(raw_bytes)
-bytes
+```bash
+# Build all packages
+./scripts/build-all.sh
+
+# Or build individually
+cd packages/pymctp
+python -m build
 ```
 
 ## Contributing
 
-Contributions are welcome! If you would like to contribute to PyMCTP, please follow these steps:
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 1. Fork the repository
-1. Create a new branch (git checkout -b feature-branch)
-1. Make your changes
-1. Commit your changes (git commit -am 'Add new feature')
-1. Push to the branch (git push origin feature-branch)
-1. Create a new Pull Request
-
-Please ensure that your code follows the project's coding standards and includes appropriate tests.
+2. Create a feature branch (`git checkout -b feature-name`)
+3. Make your changes
+4. Run tests (`pytest`)
+5. Submit a pull request
 
 ## License
 
-`pymctp` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Links
+
+- **PyPI**: https://pypi.org/project/pymctp/
+- **Documentation**: https://github.com/jls5177/pymctp#readme
+- **Issues**: https://github.com/jls5177/pymctp/issues
+- **Source**: https://github.com/jls5177/pymctp

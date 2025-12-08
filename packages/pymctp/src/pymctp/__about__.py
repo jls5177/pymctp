@@ -2,5 +2,4 @@
 #
 # SPDX-License-Identifier: MIT
 
-from .ipmi import *
-from .mctp import *
+__version__ = "0.2.0"

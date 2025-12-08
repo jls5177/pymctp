@@ -37,6 +37,19 @@ class GetMctpVersionSupportPacket(AllowRawSummary, Packet):
         ],
     )
 
+    # def extract_padding(self, p):
+    #     """Required to ensure remaining bytes are properly transferred into next entry"""
+    #     return b"", p
+    #
+    # def to_dict(self) -> dict[str, Any]:
+    #     data = {}
+    #     for f in self.fields_desc:
+    #         value = getattr(self, f.name)
+    #         if value is type(None):
+    #             value = None
+    #         data[f.name] = value
+    #     return data
+
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} ("
         if self.underlayer.getfieldval("rq") == 0:
