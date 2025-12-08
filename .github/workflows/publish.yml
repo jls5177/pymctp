@@ -66,9 +66,6 @@ jobs:
           - package: pymctp-exerciser-qemu
           - package: pymctp-exerciser-serial
 
-    environment:
-      name: pypi
-      url: https://pypi.org/p/${{ matrix.package }}
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
@@ -142,10 +139,6 @@ jobs:
             print-hash: true
           - package: pymctp-exerciser-serial
             print-hash: true
-
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/${{ matrix.package }}
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
