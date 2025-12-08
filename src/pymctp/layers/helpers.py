@@ -31,13 +31,17 @@ class AllowRawSummary:
 
     def _do_summary(self):
         # type: () -> Tuple[int, str, List[Any]]
-        if "load" in self.fields:
+        if "load" in self.fields and self.load:
             found, s, needed = self.load._do_summary()  # noqa: SLF001
             if self.payload and self.payload.original:
                 pld = conf.raw_layer(self.payload.original)
                 s = f"{s} / {pld}"
-        else:
+        elif self.payload:
             found, s, needed = self.payload._do_summary()  # noqa: SLF001
+        else:
+            needed = []
+            s = ""
+            found = 0
         ret = ""
         # if not found or self.__class__ in needed:
         ret = self.mysummary()

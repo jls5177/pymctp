@@ -11,7 +11,7 @@ from ..types import AnyPacketType, VendorCapabilitySet, VendorIdFormat
 from .control import (
     AutobindControlMsg,
     ControlHdr,
-    set_control_fields,
+    set_control_fields, ControlHdrPacket,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
@@ -36,6 +36,16 @@ class GetVendorDefinedMessageSupportPacket(AllowRawSummary, Packet):
             XShortField("command_set_type", 0),
         ],
     )
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = "GetVendorDefinedMessageSupport ("
+        if self.underlayer.getfieldval("rq") == 1:
+            summary += f"sel={self.vendor_id_set_selector}"
+        else:
+            summary += f"next_sel={self.next_vendor_id_set_selector}"
+            summary += f", vendor_id={self.vendor_id:04X}, cmd_set_type={self.command_set_type:04X}"
+        summary += ")"
+        return summary, [GetVendorDefinedMessageSupportPacket, ControlHdrPacket]
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.supported_vdm_msg_types or self.vendor_id_set_selector >= len(ctx.supported_vdm_msg_types):

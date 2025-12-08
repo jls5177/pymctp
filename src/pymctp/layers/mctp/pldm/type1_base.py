@@ -8,11 +8,11 @@ from scapy.fields import FieldListField, XByteEnumField, XByteField, XLEIntField
 from scapy.packet import Packet
 
 from ..transport import TransportHdrPacket
-from ..types import AnyPacketType
+from ..types import AnyPacketType, EndpointContext
 from .pldm import AutobindPLDMMsg, PldmHdrPacket, set_pldm_fields
 from .types import (
     PldmControlCmdCodes,
-    PldmTypeCodes,
+    PldmTypeCodes, CompletionCodes,
 )
 
 
@@ -26,8 +26,18 @@ class SetTIDPacket(Packet):
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = f"SETTID (tid: {self.tid})"
+        summary = f"SETTID ("
+        if self.underlayer.getfieldval("rq") == 1:
+            summary += f"tid: {self.tid}"
+        summary += ")"
         return summary, [PldmHdrPacket, TransportHdrPacket]
+
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCodes, AnyPacketType]:
+        cmplt_code = CompletionCodes.SUCCESS
+        hdr = PldmHdrPacket(rq=False, cmd_code=PldmControlCmdCodes.GetTID)
+        pldm_ctx = ctx.msg_type_context['pldm']
+        pldm_ctx['tid'] = self.tid
+        return cmplt_code, SetTIDPacket(_underlayer=hdr)
 
 
 @AutobindPLDMMsg(PldmTypeCodes.CONTROL, PldmControlCmdCodes.GetTID)
@@ -40,8 +50,17 @@ class GetTIDPacket(Packet):
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = f"GETTID (tid: {self.tid})"
+        summary = f"GETTID ("
+        if self.underlayer.getfieldval("rq") == 0:
+            summary += f"tid: {self.tid}"
+        summary += ")"
         return summary, [PldmHdrPacket, TransportHdrPacket]
+
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCodes, AnyPacketType]:
+        cmplt_code = CompletionCodes.SUCCESS
+        hdr = PldmHdrPacket(rq=False, cmd_code=PldmControlCmdCodes.GetTID)
+        pldm_ctx = ctx.msg_type_context['pldm']
+        return cmplt_code, GetTIDPacket(tid=pldm_ctx.get('tid', 2), _underlayer=hdr)
 
 
 class GetPLDMVersionOperation(IntEnum):
@@ -105,6 +124,13 @@ class GetPLDMTypesPacket(Packet):
         ],
     )
 
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCodes, AnyPacketType]:
+        cmplt_code = CompletionCodes.SUCCESS
+        hdr = PldmHdrPacket(rq=False, cmd_code=PldmControlCmdCodes.GetPLDMTypes)
+        # pldm_ctx = ctx.msg_type_context['pldm']
+        type1 = PLDMTypesByte1.CONTROL | PLDMTypesByte1.PLATFORM_MONITORING
+        return cmplt_code, GetPLDMTypesPacket(PLDMTypes1=type1, _underlayer=hdr)
+
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = "GetPLDMTypes ("
         if self.underlayer.getfieldval("rq") == 1:
@@ -159,8 +185,10 @@ class GetPLDMCommandsPacket(Packet):
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = "GetPLDMTypes ("
+        summary = "GetPLDMCommands ("
         if self.underlayer.getfieldval("rq") == 0:
             summary += f"{self.cmds}"
+        else:
+            summary += f"type={self.PLDMType}, version={self.Version:04X}"
         summary += ")"
         return summary, [PldmHdrPacket, TransportHdrPacket]

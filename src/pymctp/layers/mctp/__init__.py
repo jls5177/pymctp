@@ -18,6 +18,7 @@ from .transport import (
     SmbusTransport,
     SmbusTransportPacket,
     TrimmedSmbusTransportPacket,
+    TrimmedSmbusTransport,
     UartTransport,
     UartTransportPacket,
 )

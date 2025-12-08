@@ -13,6 +13,7 @@ from scapy.plist import PacketList, _PacketIterable  # imported for type hinting
 from scapy.sendrecv import AsyncSniffer
 from scapy.supersocket import SuperSocket
 
+from ..layers import TransportHdrPacket
 from ..layers.interfaces import AnyPacketType
 from ..layers.mctp.control import ControlHdrPacket
 from ..layers.mctp.types import EndpointContext, ICanReply
@@ -61,6 +62,7 @@ class SimpleEndpointAM(AnsweringMachine):
         socket: SuperSocket | None = None,
         context: EndpointContext | None = None,
         timeout: float | None = None,
+        downstream_endpoints: map | None = None,
         **kwargs,
     ):
         """
@@ -77,6 +79,7 @@ class SimpleEndpointAM(AnsweringMachine):
         self.session = session
         if self.session:
             self.session.am = self
+        self.downstream_endpoints = downstream_endpoints or {}
 
         self.sniffer: AsyncSniffer | None = None
         super().__init__(timeout=timeout, **kwargs)
@@ -119,6 +122,16 @@ class SimpleEndpointAM(AnsweringMachine):
             return req.is_request()
         return req.haslayer(ControlHdrPacket) and req.getlayer(ControlHdrPacket).rq == 1
 
+    def get_context_for_endpoint(self, req: Packet):
+        if not req.haslayer(TransportHdrPacket):
+            return self.context
+        hdrPkt = req.getlayer(TransportHdrPacket)
+        dst_eid = hdrPkt.dst
+        if not dst_eid or self.context.eid == dst_eid or not self.downstream_endpoints:
+            return self.context
+        return self.downstream_endpoints.get(dst_eid, None)
+
+
     def make_reply(self, req: Packet | ICanReply) -> _PacketIterable:
         """
         Creates a reply to the incoming request (pre-confirmed by is_request())
@@ -128,7 +141,9 @@ class SimpleEndpointAM(AnsweringMachine):
         """
         rsp = None
         if isinstance(req, ICanReply):
-            rsp = req.make_reply(self.context)
+            ctx = self.get_context_for_endpoint(req)
+            if ctx:
+                rsp = req.make_reply(ctx)
         # TODO: add any custom responses here
         return rsp
 

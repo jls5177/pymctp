@@ -27,7 +27,9 @@ class PrintableRawPacket(Raw):
         self._mysummary_cls = classes
 
     def mysummary(self):
-        if self.load == ALL_1s_BLOCK[: len(self.load)]:
+        if not len(self.load):
+            summary = "Empty"
+        elif self.load == ALL_1s_BLOCK[: len(self.load)]:
             summary = f"Padded [0xff] * {len(self.load)}"
         else:
             # add CRC to make it easy to compare raw payloads
@@ -52,8 +54,10 @@ def set_printable_raw_layer():
     conf.raw_layer = PrintableRawPacket
 
 
-def str_to_bytes(byte_string: str) -> bytes:
-    return bytes([int(x, 16) for x in byte_string.split(" ")])
+def str_to_bytes(byte_string: str, token: str=" ") -> bytes:
+    if not byte_string:
+        return b""
+    return bytes([int(x, 16) for x in byte_string.split(token)])
 
 
 def str_to_pkt(byte_string: str, pkt_cls: type[Packet]) -> Packet:

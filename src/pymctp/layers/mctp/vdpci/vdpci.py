@@ -101,7 +101,7 @@ class VdPciHdrPacket(Packet):
             vdpci_hdr: VdPciHdrPacket = self.getlayer(VdPciHdrPacket)
             hdr_data = bytes(vdpci_hdr)
             data = bytes(vdpci_hdr.payload)
-            vendor_id = self.vendor_id
+            vendor_id = self.vendor_id_enum
             resp_info = ctx.get_response(MsgTypes.VDPCI, data, vendor_id.name, str(self.vdm_cmd_code))
             if resp_info:
                 print(f"***> VDPCI Request Matched: {resp_info.description}")
@@ -117,6 +117,10 @@ class VdPciHdrPacket(Packet):
             vdm_cmd_code=self.vdm_cmd_code,
         )
         return (rsp / payload_resp) if payload_resp else rsp
+
+    @property
+    def vendor_id_enum(self) -> VdPCIVendorIds:
+        return VdPCIVendorIds(self.vendor_id)
 
 
 def VdPciHdr(*args, rq: bool | RqBit = RqBit.RESPONSE, vendor_id: int = 0, vdm_cmd_code: int = 0) -> VdPciHdrPacket:

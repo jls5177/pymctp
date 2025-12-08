@@ -2,4 +2,8 @@
 #
 # SPDX-License-Identifier: MIT
 
-from .transport import TransportHdrPacket
+from .transport import (
+    TransportHdrPacket,
+    MasterWriteReadRequestPacket,
+    MasterWriteReadResponsePacket,
+)

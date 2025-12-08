@@ -10,6 +10,8 @@ from scapy.config import conf
 from scapy.fields import AnyField, BitEnumField, BitField, ConditionalField, XBitField, XByteField
 from scapy.packet import Packet, Raw, bind_layers
 
+from ..control import IControlMsgCanReply
+from ...helpers import AllowRawSummary
 from ...interfaces import ICanSetMySummaryClasses
 from .. import EndpointContext
 from ..transport import AutobindMessageType, MsgTypes, SmbusTransportPacket, TransportHdrPacket
@@ -26,7 +28,7 @@ DEFAULT_HDR_VERSION = 0
 
 
 @AutobindMessageType(MsgTypes.PLDM)
-class PldmHdrPacket(Packet):
+class PldmHdrPacket(AllowRawSummary, Packet):
     name = "PLDM"
     fields_desc = [
         BitEnumField("rq", 0, 1, RqBit),
@@ -51,8 +53,6 @@ class PldmHdrPacket(Packet):
         return summary, [TransportHdrPacket, SmbusTransportPacket]
 
     def do_dissect_payload(self, s: bytes) -> None:
-        if not s:
-            return
         cls = self.guess_payload_class(s)
         try:
             p = cls(s, _internal=1, _underlayer=self)
@@ -62,9 +62,11 @@ class PldmHdrPacket(Packet):
             if conf.debug_dissector and cls is not None:
                 raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
-        self.add_payload(p)
+        # skip adding empty RAW payloads
+        if s or not isinstance(cls, conf.raw_layer.__class__):
+            self.add_payload(p)
         if isinstance(p, ICanSetMySummaryClasses):
-            p.set_mysummary_classes([PldmHdrPacket, TransportHdrPacket])
+            p.set_mysummary_classes([self.__class__, self.underlayer.__class__])
 
     def answers(self, other: Packet) -> int:
         if not other.haslayer(PldmHdrPacket):
@@ -94,22 +96,30 @@ class PldmHdrPacket(Packet):
         completion_code = CompletionCodes.ERROR_UNSUPPORTED_CMD
         payload_resp = None
 
+        if self.payload and isinstance(self.payload, IControlMsgCanReply):
+            completion_code, payload_resp = self.payload.make_ctrl_reply(ctx)
+
         # Check if we have a premade response
-        if ctx.mctp_responses:
+        if not payload_resp and ctx.mctp_responses:
             pldm_hdr: PldmHdrPacket = self.getlayer(PldmHdrPacket)
             data = bytes(pldm_hdr)
             rqDInstanceID, req_data = data[0], data[1:]
             resp_info = ctx.get_response(MsgTypes.PLDM, req_data)
             if resp_info:
-                print(f"***> PLDM Request  ({len(resp_info.data)} bytes): {resp_info.description}")
-                resp_data = Raw(resp_info.data)
+                # print(f"***> PLDM Request  ({len(resp_info.data)} bytes): {resp_info.description}")
+                raw_data = bytes([rqDInstanceID & 0x7F]) + resp_info.data
+                resp_data = PldmHdr(raw_data)
+                # resp_data = conf.raw_layer(resp_info.data)
 
                 delay = resp_info.processing_delay
                 if delay:
                     time.sleep(delay / 1000.0)
-                return Raw(bytes([rqDInstanceID & 0x7F])) / resp_data
+                # return conf.raw_layer(bytes([rqDInstanceID & 0x7F])) / resp_data
+                return resp_data
         # TODO: add support to auto-respond to pldm msgs
+        return self.build_reply(ctx, payload_resp)
 
+    def build_reply(self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes, completion_code: int | None = 0) -> AnyPacketType:
         rsp = PldmHdr(
             rq=False,
             instance_id=self.instance_id,

@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: 2024 Justin Simon <justin@simonctl.com>
 #
 # SPDX-License-Identifier: MIT
+import binascii
+from typing import Self
 
 import crc8
+import crcmod.predefined
 from scapy.compat import raw
 from scapy.config import conf
-from scapy.fields import BitEnumField, BitField, ConditionalField, LenField, PacketLenField, XByteField
+from scapy.fields import BitEnumField, BitField, ConditionalField, LenField, PacketLenField, XByteField, XLEShortField, \
+    XShortField
 from scapy.layers.l2 import CookedLinux, CookedLinuxV2
 from scapy.packet import Packet, bind_layers
 from scapy.plist import PacketList
@@ -75,6 +79,8 @@ class TransportHdrPacket(AllowRawSummary, Packet):
 
     def answers(self, rq_pkt: Packet) -> int:
         # the endpoint EID should match
+        if not rq_pkt:
+            return 0
         if rq_pkt.dst not in (self.src, 0):
             print(f"mismatched eid: {rq_pkt.dst} != {self.src}")
             return 0
@@ -100,11 +106,16 @@ class TransportHdrPacket(AllowRawSummary, Packet):
 
     def make_reply(self, ctx: EndpointContext) -> AnyPacketType:
         payload_resp = None
+        if self.dst not in (ctx.eid, 0):
+            print(f"mismatched dst eid: {self.dst} != {ctx.eid}")
+            return None
         if self.payload and isinstance(self.payload, ICanReply):
             payload_resp = self.payload.make_reply(ctx)
             if not payload_resp:
                 return None
+        return self.build_reply(ctx, payload_resp)
 
+    def build_reply(self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes) -> AnyPacketType:
         if isinstance(payload_resp, PacketList | list):
             # TODO: Implement multiple payloads from upper layers
             msg = "multiple payloads are not yet supported"
@@ -306,6 +317,9 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
             payload_resp = self.load.make_reply(ctx)
             if not payload_resp:
                 return None
+        return self.build_reply(ctx, payload_resp)
+
+    def build_reply(self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes) -> AnyPacketType:
 
         dst = self.dst_addr_7bit()
         src = self.src_addr_7bit()
@@ -327,6 +341,14 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
 
         return packets
 
+    @classmethod
+    def build_reply_pkt(cls, dst_phy_addr: Smbus7bitAddress, src_phy_addr: Smbus7bitAddress):
+        pass
+
+    def copy(self, load: AnyPacketType | None = None) -> Self:
+        clone: SmbusTransportPacket = super().copy()
+        clone.load = load
+        return clone
 
 class TrimmedSmbusTransportPacket(SmbusTransportPacket):
     name = "SMBUS/I2C"
@@ -336,7 +358,7 @@ class TrimmedSmbusTransportPacket(SmbusTransportPacket):
         LenField("byte_count", None, fmt="B", adjust=lambda x: 0 if not x else (x + 1)),
         XByteField("src_addr", 0),
         PacketLenField("load", None, TransportHdrPacket, length_from=lambda x: x.byte_count - 1),
-        ExtendedConditionalField(XByteField("pec", None), lambda pkt, s: len(s) == 1 or len(s) >= pkt.byte_count),
+        ExtendedConditionalField(XByteField("pec", None), lambda pkt, s: len(s) == 1 or len(s) >= (pkt.byte_count + 3)),
     ]
 
 
@@ -366,6 +388,32 @@ def SmbusTransport(
         pec = int.from_bytes(val, byteorder="little")
     return SmbusTransportPacket(
         dst_addr=dst_addr, src_addr=src_addr, command_code=command_code, byte_count=byte_count, load=load, pec=pec
+    )
+
+def TrimmedSmbusTransport(
+    *args,
+    dst_addr: int | Smbus7bitAddress = 0,
+    src_addr: int | Smbus7bitAddress = 1,
+    byte_count: int | None = None,
+    command_code: int = 0x0F,
+    load: AnyPacketType = None,
+    pec: int | None = None,
+) -> TrimmedSmbusTransportPacket:
+    if len(args):
+        return TrimmedSmbusTransportPacket(*args)
+    if isinstance(src_addr, Smbus7bitAddress):
+        src_addr = src_addr.read()
+    if not byte_count:
+        byte_count = len(load) if load else 0
+    byte_count += 1
+    if not pec:
+        crc = crc8.crc8()
+        crc.update(bytes([dst_addr, command_code, byte_count, src_addr]))
+        crc.update(raw(load))
+        val = crc.digest()
+        pec = int.from_bytes(val, byteorder="little")
+    return TrimmedSmbusTransportPacket(
+        src_addr=src_addr, command_code=command_code, byte_count=byte_count, load=load, pec=pec
     )
 
 
