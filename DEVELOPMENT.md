@@ -241,8 +241,6 @@ for pkg in packages/pymctp packages/pymctp-sample-vendorextension packages/pymct
 done
 ```
 
-**Note**: The `pymctp-oem-microsoft` package is not published publicly.
-
 ## Common Development Tasks
 
 ### Adding a New Package

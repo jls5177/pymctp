@@ -218,7 +218,7 @@ python -m build
 
 ### OEM Extensions
 
-- **Example**: `packages/pymctp-oem-microsoft/`
+- **Example**: `packages/pymctp-sample-vendorextension/`
 - **Purpose**: Vendor-specific protocol extensions
 
 **Guidelines**:

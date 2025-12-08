@@ -178,17 +178,14 @@ PyMCTP supports an extensible plugin architecture that allows OEM-specific imple
 
 ### Available Extensions
 
-- **pymctp-oem-microsoft**: Microsoft OEM-specific MCTP and IPMI layers
-  - Microsoft VDM (Vendor Defined Messages) protocols
-  - Cerberus challenge protocol
-  - Microsoft-specific IPMI commands
+Extensions provide OEM-specific MCTP and IPMI layer implementations for vendor-specific protocols.
 
 ### Installing Extensions
 
 Extensions can be installed independently using pip:
 
 ```bash
-pip install pymctp-oem-microsoft
+pip install pymctp-<extension-name>
 ```
 
 Once installed, extensions are automatically discovered and loaded when you import pymctp. No additional configuration is required.
@@ -209,7 +206,7 @@ your_extension_name = "your_package.layers"
 
 The entry point should reference a module that imports all your layer definitions. When pymctp initializes, it will automatically discover and load your extension, registering all layer bindings.
 
-See the [pymctp-oem-microsoft](packages/pymctp-oem-microsoft) package for a complete example.
+See the [pymctp-sample-vendorextension](packages/pymctp-sample-vendorextension) package for a complete example.
 
 ## Exercisers
 

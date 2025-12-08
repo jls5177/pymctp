@@ -302,8 +302,6 @@ Key files to review:
 - [layers/mctp/sample_vendor.py](packages/pymctp-sample-vendorextension/src/pymctp_sample_vendorextension/layers/mctp/sample_vendor.py) - Complete packet definitions and bindings
 - [README.md](packages/pymctp-sample-vendorextension/README.md) - Usage guide
 
-> **Note**: The Microsoft OEM extension (`pymctp-oem-microsoft`) is also available in the repository as a reference, but is not published publicly.
-
 ## Troubleshooting
 
 ### Extension Not Loading
