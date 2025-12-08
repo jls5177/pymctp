@@ -87,11 +87,16 @@ license-add = "reuse annotate -c \"Justin Simon <justin@simonctl.com>\" -l MIT -
 dependencies = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "coverage[toml]>=7.0.0",
+]
+pre-install-commands = [
+    "pip install -e packages/pymctp",
 ]
 
 [tool.hatch.envs.test.scripts]
 run = "pytest {args:tests/}"
 cov = "pytest --cov=pymctp --cov-report=html --cov-report=term {args:tests/}"
+xml = "pytest --cov=pymctp --cov-report=xml {args:tests/}"
 
 # Ruff configuration (applies to all packages)
 [tool.ruff]
@@ -116,3 +121,24 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401", "I001", "E501"]
 "tests/**/*" = ["PLR2004", "S101", "TID252", "ARG001", "C408"]
+
+# Coverage configuration
+[tool.coverage.run]
+source_pkgs = ["pymctp"]
+branch = true
+parallel = true
+omit = [
+    "packages/pymctp/src/pymctp/__about__.py",
+    "packages/*/tests/*",
+    "tests/*",
+]
+
+[tool.coverage.paths]
+pymctp = ["packages/pymctp/src/pymctp", "*/pymctp/src/pymctp"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "no cov",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

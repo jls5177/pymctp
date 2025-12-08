@@ -97,13 +97,12 @@ jobs:
       run: |
         hatch run license-check
     - name: Test with coverage
-      working-directory: packages/pymctp
       run: |
-        hatch run coverage:xml
+        hatch run test:xml
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        files: packages/pymctp/coverage.xml
+        files: coverage.xml
         fail_ci_if_error: true
         verbose: true
