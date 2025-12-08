@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pymctp-sample-vendorextension"
-version = "0.2.2"
+version = "0.2.3"
 description = "Sample vendor extension for pymctp - demonstrates how to create custom MCTP layers"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -31,7 +31,7 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = [
-    "pymctp>=0.2.2",
+    "pymctp>=0.2.3",
 ]
 
 [project.urls]
