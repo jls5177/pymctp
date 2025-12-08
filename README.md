@@ -129,38 +129,55 @@ pymctp/
 
 ### Development Setup
 
+This project uses [uv](https://docs.astral.sh/uv/) for fast, reliable dependency management.
+
 ```bash
 # Clone the repository
 git clone https://github.com/jls5177/pymctp.git
 cd pymctp
 
-# Install core package in development mode
-pip install -e packages/pymctp
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install extensions/exercisers as needed
-pip install -e packages/pymctp-sample-vendorextension
-pip install -e packages/pymctp-exerciser-qemu
+# Install all workspace packages and dependencies
+uv sync --all-extras
 ```
 
 ### Running Tests
 
 ```bash
 # Run all tests
-pytest
+make test
 
-# Run tests for specific package
-pytest tests/layers/
+# Run tests with coverage
+make test-cov
+
+# Generate XML coverage report (for CI)
+make test-xml
+```
+
+### Code Quality
+
+```bash
+# Format code
+make format-all
+
+# Check formatting and linting
+make format-check
+
+# Validate license headers
+make license-check
 ```
 
 ### Building Packages
 
 ```bash
 # Build all packages
-./scripts/build-all.sh
+make build-all
 
 # Or build individually
 cd packages/pymctp
-python -m build
+uv run python -m build
 ```
 
 ## Contributing

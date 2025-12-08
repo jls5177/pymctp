@@ -24,7 +24,6 @@ authors = [
 dependencies = [
     # Build tools
     "build>=1.0.0",
-    "hatch>=1.7.0",
     "twine>=4.0.0",
 
     # Testing
@@ -34,6 +33,9 @@ dependencies = [
     # Linting and formatting
     "ruff>=0.1.0",
     "reuse>=4.0.0",
+
+    # Development
+    "ipython",
 
     # Documentation
     "pytz",
@@ -50,53 +52,31 @@ all = [
     "pymctp-exerciser-serial",
 ]
 
-[tool.hatch.envs.default]
-type = "virtual"
-path = ".venv"
-
-# Install all local packages in editable mode
-dependencies = [
-    "ipython",
+# uv workspace configuration
+[tool.uv.workspace]
+members = [
+    "packages/pymctp",
+    "packages/pymctp-sample-vendorextension",
+    "packages/pymctp-exerciser-aardvark",
+    "packages/pymctp-exerciser-qemu",
+    "packages/pymctp-exerciser-serial",
 ]
 
-[tool.hatch.envs.default.scripts]
-# Convenient scripts for development
-install-all = """
-    pip install -e packages/pymctp
-    pip install -e packages/pymctp-sample-vendorextension
-    pip install -e packages/pymctp-exerciser-aardvark
-    pip install -e packages/pymctp-exerciser-qemu
-    pip install -e packages/pymctp-exerciser-serial
-"""
+# Workspace sources for optional dependencies
+[tool.uv.sources]
+pymctp = { workspace = true }
+pymctp-sample-vendorextension = { workspace = true }
+pymctp-exerciser-aardvark = { workspace = true }
+pymctp-exerciser-qemu = { workspace = true }
+pymctp-exerciser-serial = { workspace = true }
 
-build-all = "bash scripts/build-all.sh"
-clean = "bash scripts/clean.sh"
-test-all = "pytest tests/"
-format-all = """
-    ruff format packages/
-    ruff check --fix packages/
-"""
-format-check = """
-    ruff format --check packages/
-    ruff check packages/
-"""
-license-check = "reuse lint"
-license-add = "reuse annotate -c \"Justin Simon <justin@simonctl.com>\" -l MIT --merge-copyrights -r"
-
-[tool.hatch.envs.test]
-dependencies = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "coverage[toml]>=7.0.0",
+# uv development dependencies
+[tool.uv]
+dev-dependencies = [
+    "ipython>=8.0.0",
 ]
-pre-install-commands = [
-    "pip install -e packages/pymctp",
-]
-
-[tool.hatch.envs.test.scripts]
-run = "pytest {args:tests/}"
-cov = "pytest --cov=pymctp --cov-report=html --cov-report=term {args:tests/}"
-xml = "pytest --cov=pymctp --cov-report=xml {args:tests/}"
+# Don't build/install the root project - it's just a workspace coordinator
+package = false
 
 # Ruff configuration (applies to all packages)
 [tool.ruff]

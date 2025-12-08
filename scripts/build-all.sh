@@ -23,7 +23,7 @@ for package in "${PACKAGES[@]}"; do
     echo "Building: $package"
     echo "=========================================="
     cd "$package"
-    python -m build
+    uv run python -m build
     cd - > /dev/null
 done
 
