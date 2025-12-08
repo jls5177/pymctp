@@ -21,5 +21,5 @@ except ImportError:
     # pymctp not installed or exerciser module not available
     pass
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 __all__ = ["QemuI2CNetDevSocket", "QemuI3CCharDevSocket"]
