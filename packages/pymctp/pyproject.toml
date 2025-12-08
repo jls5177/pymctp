@@ -37,7 +37,8 @@ dependencies = [
     "mashumaro>=3.5",
     "crcmod-plus",
     "click>=8.0",
-    "pytz"
+    "pytz",
+    "tzlocal",
 ]
 
 # Optional dependencies for exercisers (for backward compatibility)
