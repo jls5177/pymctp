@@ -26,7 +26,7 @@ def is_dst_active(zonename: str) -> bool:
     return bool(datetime.now(pytz.timezone(zonename)).dst())
 
 
-FIXED_DATE = '2024-03-20 '
+FIXED_DATE = "2024-03-20 "
 DEFAULT_TZ = pytz.timezone(get_localzone_name())
 DEFAULT_DST = is_dst_active(get_localzone_name())
 timestampRE = r"([\d]{2}:[\d]{2}:[\d]{2}\.[\d]{6,9})"
@@ -61,7 +61,7 @@ def _parse_timestamp(line: str):
 
 def _parse_line(line: str):
     line = line.strip()
-    if not line.startswith('0x') or line.count("  ") < 2:
+    if not line.startswith("0x") or line.count("  ") < 2:
         return None, bytes()
     offset, data_line, *_ = line.split("  ")
     return int(offset[:-1], 16), bytes.fromhex(data_line)
@@ -78,7 +78,7 @@ def _read_ascii_file(ascii_file: Path):
                 if next_request:
                     try:
                         mctp_packet = TransportHdr(next_request)
-                    except:
+                    except Exception:
                         mctp_packet = Raw(next_request)
 
                     mctp_packet.timestamp = next_request_timestamp
@@ -95,7 +95,7 @@ def _read_ascii_file(ascii_file: Path):
         if next_request:
             try:
                 mctp_packet = TransportHdr(next_request)
-            except:
+            except Exception:
                 mctp_packet = Raw(next_request)
             mctp_packet.timestamp = next_request_timestamp
             yield mctp_packet
@@ -107,8 +107,9 @@ def _read_pcap_file(pcap_file: Path):
             yield packet
 
 
-def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext,
-                     debug: bool = True) -> MctpResponseList | None:
+def import_pcap_dump(
+    resp_file: Path, endpoint_dump: bool, ctx: EndpointContext, debug: bool = True
+) -> MctpResponseList | None:
     if resp_file.name.endswith(".dump") or resp_file.name.endswith(".pcap"):
         packet_generator = _read_pcap_file(resp_file)
         file_type = "pcap"
@@ -119,13 +120,13 @@ def import_pcap_dump(resp_file: Path, endpoint_dump: bool, ctx: EndpointContext,
         return None
     pending_reqs: list[AnyPacketType] = []
     responses: OrderedDictType[int, MctpResponse] = OrderedDict()
-    responseList: dict[MsgTypes, list[MctpResponse|dict[str, dict[int, list[MctpResponse]]]]] = defaultdict(list)
+    responseList: dict[MsgTypes, list[MctpResponse | dict[str, dict[int, list[MctpResponse]]]]] = defaultdict(list)
     fragments = bytes()
     for resp_packet in packet_generator:
         if debug:
             if file_type == "pcap":
                 tx_packet = resp_packet.pkttype == 4
-                prefix = '<TX<' if tx_packet else '>RX>'
+                prefix = "<TX<" if tx_packet else ">RX>"
             else:
                 prefix = ">"
         if not resp_packet.haslayer(TransportHdrPacket):

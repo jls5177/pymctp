@@ -142,7 +142,7 @@ class AutobindVDMMsg:
         bind_layers(
             VdPciHdrPacket,
             cls,
-            vid=vid.value if type(vid) == VdPCIVendorIds else vid,
+            vid=vid.value if isinstance(vid, VdPCIVendorIds) else vid,
             vdm_cmd_code=cmd_code.value if hasattr(cmd_code, "value") else cmd_code,
         )
         if not hasattr(cls, "name") or cls.name is None:

@@ -78,9 +78,12 @@ class AardvarkI2CSocket(SuperSocket):
         """
         if disable_first:
             self._dev.disable_i2c_slave()
-        ret = api.py_aa_i2c_slave_enable(self._dev.handle, self._slave_address.address,
-                                         maxTxBytes or self._dev.BUFFER_SIZE,
-                                         maxRxBytes or self._dev.BUFFER_SIZE)
+        ret = api.py_aa_i2c_slave_enable(
+            self._dev.handle,
+            self._slave_address.address,
+            maxTxBytes or self._dev.BUFFER_SIZE,
+            maxRxBytes or self._dev.BUFFER_SIZE,
+        )
         _raise_error_if_negative(ret)
 
     def connect(self) -> bool:
@@ -99,7 +102,7 @@ class AardvarkI2CSocket(SuperSocket):
                 # self.enable_i2c_slave(disable_first=False)
                 # self.packet_queue.put([0xff])
                 # self._dev.i2c_slave_response = self.packet_queue.queue[0]
-                self._dev.i2c_slave_response = [0xff]
+                self._dev.i2c_slave_response = [0xFF]
             # else:
             # self.enable_i2c_slave(disable_first=False)
             self._dev.i2c_bitrate = self._bitrate
@@ -135,7 +138,7 @@ class AardvarkI2CSocket(SuperSocket):
             with self._lock:
                 # API uses 7bit addresses but payload has 8bit address in the first byte
                 if self._slave_only:
-                    padding = [0xff] * (64 - len(sx) + 1)
+                    padding = [0xFF] * (64 - len(sx) + 1)
                     packet = sx[1:] + bytes(padding)
                     # packet = sx[1:]
                     print(f"DEBUG: packet len: {len(packet)}, queue_len: {len(self.packet_queue.queue)}")
@@ -229,7 +232,7 @@ class AardvarkI2CSocket(SuperSocket):
                 if not self.packet_queue.empty():
                     # grab the head of the queue
                     self._dev.i2c_slave_response = self.packet_queue.queue[0]
-                    print(f"DEBUG: setup next packet")
+                    print("DEBUG: setup next packet")
                 # else:
                 #     self.packet_queue.put([0xff])
                 #     self._dev.i2c_slave_response = self.packet_queue.queue[0]
@@ -244,7 +247,7 @@ class AardvarkI2CSocket(SuperSocket):
             #     self.enable_i2c_slave(maxTxBytes=0)
         # POLL_I2C_READ == I2C WRITE from controller
         if pyaardvark.POLL_I2C_READ in events:
-            self._dev.i2c_slave_response = [0xff]
+            self._dev.i2c_slave_response = [0xFF]
             return [self]
         if events and pyaardvark.POLL_I2C_WRITE not in events:
             print(f"DEBUG: events {events}")
@@ -278,7 +281,7 @@ class AardvarkI2CSocket(SuperSocket):
             with self._lock:
                 # API uses 7bit addresses but payload has 8bit address in the first byte
                 if self._slave_only:
-                    padding = [0xff] * (64 - len(sx) + 1)
+                    padding = [0xFF] * (64 - len(sx) + 1)
                     packet = sx[1:] + bytes(padding)
                     # packet = sx[1:]
                     print(f"DEBUG: packet len: {len(packet)}, queue_len: {len(self.packet_queue.queue)}")

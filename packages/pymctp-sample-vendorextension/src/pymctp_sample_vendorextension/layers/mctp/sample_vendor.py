@@ -33,14 +33,14 @@ class SampleVendorPacket(Packet):
         ByteField("status", 0),  # Status/flags field
         ByteField("sequence", 0),  # Sequence number
         ByteField("data_len", None),  # Length of data field
-        StrLenField(
-            "data", b"", length_from=lambda pkt: pkt.data_len if pkt.data_len is not None else len(pkt.data)
-        ),
+        StrLenField("data", b"", length_from=lambda pkt: pkt.data_len if pkt.data_len is not None else len(pkt.data)),
     ]
 
     def mysummary(self):
         """Custom packet summary for display."""
-        return f"SAMPLE-VENDOR (cmd={self.command:#04x}, status={self.status}, seq={self.sequence}, len={self.data_len})"
+        return (
+            f"SAMPLE-VENDOR (cmd={self.command:#04x}, status={self.status}, seq={self.sequence}, len={self.data_len})"
+        )
 
 
 class SampleVendorGetVersionRequest(Packet):

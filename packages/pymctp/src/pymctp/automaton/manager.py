@@ -65,6 +65,7 @@ class CharDevSocketConfig(DataClassDictMixin):
     def close_socket(self):
         self.socket.close()
 
+
 @dataclasses.dataclass()
 class TTYSocketConfig(DataClassDictMixin):
     type = ConfigTypes.TTY
@@ -192,7 +193,9 @@ class EndpointConfig(DataClassDictMixin):
 
     class Config(BaseConfig):
         serialization_strategy = {
-            AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig : {"deserialize": deserialize_supersocket}
+            AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig: {
+                "deserialize": deserialize_supersocket
+            }
         }
 
 
@@ -211,8 +214,14 @@ class EndpointManager:
         socket = cfg.config.socket
         session = EndpointSession(context=cfg.context, socket=socket)
 
-        am = SimpleEndpointAM(socket=socket, context=cfg.context, session=session, verbose=verbose,
-                              prn=prn or session.on_packet_received, downstream_endpoints=cfg.downstream_endpoints)
+        am = SimpleEndpointAM(
+            socket=socket,
+            context=cfg.context,
+            session=session,
+            verbose=verbose,
+            prn=prn or session.on_packet_received,
+            downstream_endpoints=cfg.downstream_endpoints,
+        )
         if cfg.context.is_bus_owner:
             # TODO: add discovery flow answering machine here
             pass

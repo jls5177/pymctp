@@ -11,7 +11,8 @@ from ..types import AnyPacketType, VendorCapabilitySet, VendorIdFormat
 from .control import (
     AutobindControlMsg,
     ControlHdr,
-    set_control_fields, ControlHdrPacket,
+    set_control_fields,
+    ControlHdrPacket,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 

@@ -28,15 +28,18 @@ except RuntimeError:
 class TTYSerialSocket(SuperSocket):
     desc = "read/write to a TTY"
 
-    def __init__(self, tty,
-                 baudrate=115200,
-                 parity=serial.PARITY_NONE,
-                 stopbits=serial.STOPBITS_ONE,
-                 poll_period_ms=10,
-                 id_str="",
-                 dump_hex=True,
-                 dump_packet=False,
-                 **kwargs):
+    def __init__(
+        self,
+        tty,
+        baudrate=115200,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        poll_period_ms=10,
+        id_str="",
+        dump_hex=True,
+        dump_packet=False,
+        **kwargs,
+    ):
         self.tty = tty
         if serial is None:
             msg = "Failed to load pyserial library. Confirm if environment is bootstrapped."
@@ -56,12 +59,13 @@ class TTYSerialSocket(SuperSocket):
 
     def connect(self):
         try:
-            self._dev = serial.Serial(self.tty,
-                                     baudrate=self._baudrate,
-                                     parity=self._parity,
-                                     stopbits=self._stopbits,
-                                     timeout=0,
-                                     )
+            self._dev = serial.Serial(
+                self.tty,
+                baudrate=self._baudrate,
+                parity=self._parity,
+                stopbits=self._stopbits,
+                timeout=0,
+            )
             self._dev.reset_input_buffer()
             return True
         except serial.SerialException as err:
@@ -132,7 +136,7 @@ class TTYSerialSocket(SuperSocket):
             print(f"DEBUG: not enough data to parse, frame_count: {byte_count}, rx_buffer_len: {len(self._rx_buffer)}")
             return None
         # only process the first frame, including any escape characters
-        frame_end += self._rx_buffer[1:byte_count+3].count(0x7D)
+        frame_end += self._rx_buffer[1 : byte_count + 3].count(0x7D)
         if len(self._rx_buffer) > frame_end:
             rx_data, self._rx_buffer = self._rx_buffer[:frame_end], self._rx_buffer[frame_end:]
         else:
@@ -188,4 +192,3 @@ class TTYSerialSocket(SuperSocket):
         elif len(self._rx_buffer) > 0 and self._rx_buffer.count(0x7E) % 2 == 0:
             return [self]
         return []
-

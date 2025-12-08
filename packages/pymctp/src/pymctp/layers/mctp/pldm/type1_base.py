@@ -12,7 +12,8 @@ from ..types import AnyPacketType, EndpointContext
 from .pldm import AutobindPLDMMsg, PldmHdrPacket, set_pldm_fields
 from .types import (
     PldmControlCmdCodes,
-    PldmTypeCodes, CompletionCodes,
+    PldmTypeCodes,
+    CompletionCodes,
 )
 
 
@@ -26,7 +27,7 @@ class SetTIDPacket(Packet):
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = f"SETTID ("
+        summary = "SETTID ("
         if self.underlayer.getfieldval("rq") == 1:
             summary += f"tid: {self.tid}"
         summary += ")"
@@ -35,8 +36,8 @@ class SetTIDPacket(Packet):
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCodes, AnyPacketType]:
         cmplt_code = CompletionCodes.SUCCESS
         hdr = PldmHdrPacket(rq=False, cmd_code=PldmControlCmdCodes.GetTID)
-        pldm_ctx = ctx.msg_type_context['pldm']
-        pldm_ctx['tid'] = self.tid
+        pldm_ctx = ctx.msg_type_context["pldm"]
+        pldm_ctx["tid"] = self.tid
         return cmplt_code, SetTIDPacket(_underlayer=hdr)
 
 
@@ -50,7 +51,7 @@ class GetTIDPacket(Packet):
     )
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = f"GETTID ("
+        summary = "GETTID ("
         if self.underlayer.getfieldval("rq") == 0:
             summary += f"tid: {self.tid}"
         summary += ")"
@@ -59,8 +60,8 @@ class GetTIDPacket(Packet):
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCodes, AnyPacketType]:
         cmplt_code = CompletionCodes.SUCCESS
         hdr = PldmHdrPacket(rq=False, cmd_code=PldmControlCmdCodes.GetTID)
-        pldm_ctx = ctx.msg_type_context['pldm']
-        return cmplt_code, GetTIDPacket(tid=pldm_ctx.get('tid', 2), _underlayer=hdr)
+        pldm_ctx = ctx.msg_type_context["pldm"]
+        return cmplt_code, GetTIDPacket(tid=pldm_ctx.get("tid", 2), _underlayer=hdr)
 
 
 class GetPLDMVersionOperation(IntEnum):

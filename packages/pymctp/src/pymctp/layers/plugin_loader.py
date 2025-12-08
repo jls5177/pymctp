@@ -36,10 +36,10 @@ def discover_and_load_extensions() -> List[str]:
 
     try:
         # Python 3.10+ syntax
-        eps = entry_points(group='pymctp.extensions')
+        eps = entry_points(group="pymctp.extensions")
     except TypeError:
         # Python 3.8-3.9 syntax
-        eps = entry_points().get('pymctp.extensions', [])
+        eps = entry_points().get("pymctp.extensions", [])
 
     for ep in eps:
         try:
@@ -71,10 +71,10 @@ def load_extensions_silent() -> List[str]:
 
     try:
         # Python 3.10+ syntax
-        eps = entry_points(group='pymctp.extensions')
+        eps = entry_points(group="pymctp.extensions")
     except TypeError:
         # Python 3.8-3.9 syntax
-        eps = entry_points().get('pymctp.extensions', [])
+        eps = entry_points().get("pymctp.extensions", [])
 
     for ep in eps:
         try:

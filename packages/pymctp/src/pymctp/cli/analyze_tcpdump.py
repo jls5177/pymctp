@@ -95,9 +95,7 @@ def parse_text_file(
     return packets
 
 
-def parse_pcap_file(
-    filename: pathlib.Path, timezone_str: str, is_dst: bool
-) -> List[Tuple[datetime, AnyPacketType]]:
+def parse_pcap_file(filename: pathlib.Path, timezone_str: str, is_dst: bool) -> List[Tuple[datetime, AnyPacketType]]:
     """Parse pcap/dump file."""
     packets: List[Tuple[datetime, AnyPacketType]] = list()
     tz = pytz.timezone(timezone_str)

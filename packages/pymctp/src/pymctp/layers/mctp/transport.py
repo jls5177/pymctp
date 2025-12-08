@@ -8,8 +8,16 @@ import crc8
 import crcmod.predefined
 from scapy.compat import raw
 from scapy.config import conf
-from scapy.fields import BitEnumField, BitField, ConditionalField, LenField, PacketLenField, XByteField, XLEShortField, \
-    XShortField
+from scapy.fields import (
+    BitEnumField,
+    BitField,
+    ConditionalField,
+    LenField,
+    PacketLenField,
+    XByteField,
+    XLEShortField,
+    XShortField,
+)
 from scapy.layers.l2 import CookedLinux, CookedLinuxV2
 from scapy.packet import Packet, bind_layers
 from scapy.plist import PacketList
@@ -323,7 +331,6 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
         return self.build_reply(ctx, payload_resp)
 
     def build_reply(self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes) -> AnyPacketType:
-
         dst = self.dst_addr_7bit()
         src = self.src_addr_7bit()
 
@@ -352,6 +359,7 @@ class SmbusTransportPacket(AllowRawSummary, Packet):
         clone: SmbusTransportPacket = super().copy()
         clone.load = load
         return clone
+
 
 class TrimmedSmbusTransportPacket(SmbusTransportPacket):
     name = "SMBUS/I2C"
@@ -392,6 +400,7 @@ def SmbusTransport(
     return SmbusTransportPacket(
         dst_addr=dst_addr, src_addr=src_addr, command_code=command_code, byte_count=byte_count, load=load, pec=pec
     )
+
 
 def TrimmedSmbusTransport(
     *args,
@@ -524,9 +533,7 @@ def UartTransport(
         crc16.update(bytes(load) if load else b"")
         fcs = crc16.crcValue
         # print(f"fcs={fcs:04X}")
-    return UartTransportPacket(
-        byte_count=byte_count, load=load, fcs=fcs
-    )
+    return UartTransportPacket(byte_count=byte_count, load=load, fcs=fcs)
 
 
 class AutobindMessageType:
@@ -549,4 +556,4 @@ bind_layers(CookedLinuxV2, TransportHdrPacket, proto=0xFA)
 bind_layers(SmbusTransportPacket, TransportHdrPacket, command_code=0x0F)
 
 # Add the MCTP-over-UART transport
-bind_layers(UartTransportPacket, TransportHdrPacket, frame_start=0x7e, frame_end=0x7e)
+bind_layers(UartTransportPacket, TransportHdrPacket, frame_start=0x7E, frame_end=0x7E)

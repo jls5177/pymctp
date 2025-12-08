@@ -19,6 +19,7 @@ from scapy.utils import linehexdump
 from pymctp.layers.mctp import SmbusTransport
 import select
 
+
 class QemuI2CNetDevSocket(SuperSocket):
     desc = "read/write to a Qemu NetDev Socket"
 
@@ -50,7 +51,7 @@ class QemuI2CNetDevSocket(SuperSocket):
             try:
                 iface2 = network_name(iface)
                 self.iface = iface2
-            except:
+            except Exception:
                 self.iface = iface
         else:
             self.iface = "any"
@@ -121,7 +122,6 @@ class QemuI2CNetDevSocket(SuperSocket):
             return []
 
         # Extract the actual socket file descriptors
-        self = qemu_sockets[0]
         socket_fds = [sock.ins for sock in qemu_sockets]
 
         # Use select.select() with a timeout (remain or default to 0.1 seconds)

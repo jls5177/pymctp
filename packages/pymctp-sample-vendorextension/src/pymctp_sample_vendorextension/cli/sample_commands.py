@@ -99,11 +99,11 @@ def info():
     click.echo("Sample Vendor Protocol Information")
     click.echo("=" * 50)
     click.echo(f"Vendor ID: 0x{SAMPLE_VENDOR_ID:04X} (example only)")
-    click.echo(f"\nSupported Commands:")
-    click.echo(f"  0x00 - General message")
-    click.echo(f"  0x01 - Get Version")
-    click.echo(f"\nNote: This is a sample/template vendor extension.")
-    click.echo(f"Replace with your actual vendor ID and commands.")
+    click.echo("\nSupported Commands:")
+    click.echo("  0x00 - General message")
+    click.echo("  0x01 - Get Version")
+    click.echo("\nNote: This is a sample/template vendor extension.")
+    click.echo("Replace with your actual vendor ID and commands.")
 
 
 # You can export either individual commands or command groups

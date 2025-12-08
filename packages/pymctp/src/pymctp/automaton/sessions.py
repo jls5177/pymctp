@@ -128,8 +128,9 @@ class EndpointSession(DefaultSession):
             del self.context.reassembly_list[msg_id]
 
             # Special case: treat msg_type==0x7F and unsupported payload as an echo command
-            if mctp_pkt_hdr.haslayer(Raw) and (mctp_pkt_hdr.msg_type == 0x7f or
-                                               (mctp_pkt_hdr.msg_type == 0x01 and True)):
+            if mctp_pkt_hdr.haslayer(Raw) and (
+                mctp_pkt_hdr.msg_type == 0x7F or (mctp_pkt_hdr.msg_type == 0x01 and True)
+            ):
                 # strip off the transport header from the msg payload
                 mctp_pkt_hdr_len = len(mctp_pkt_hdr) - len(mctp_pkt_hdr.payload)
                 # fragment the response payload with the transport header
@@ -146,7 +147,7 @@ class EndpointSession(DefaultSession):
                 self.am.send_reply(response_pkts)
                 return
             rq_pkt = rq_pkt.getlayer(SmbusTransportPacket).copy(mctp_pkt_hdr)
-        elif som and eom and mctp_pkt_hdr.haslayer(Raw) and (mctp_pkt_hdr.msg_type == 0x7f):
+        elif som and eom and mctp_pkt_hdr.haslayer(Raw) and (mctp_pkt_hdr.msg_type == 0x7F):
             # strip off the transport header from the msg payload
             # mctp_pkt_hdr_len = len(mctp_pkt_hdr) - len(mctp_pkt_hdr.payload)
             # fragment the response payload with the transport header

@@ -133,7 +133,9 @@ class AutobindControlMsg:
     def __call__(self, cls: type[Packet]):
         cmd_code = self.cmd_code
         # print(f"Binding cls {cls} to cmd_code {cmd_code}:{self.is_request}")
-        bind_layers(ControlHdrPacket, cls, cmd_code=cmd_code.value if type(cmd_code) == ContrlCmdCodes else cmd_code)
+        bind_layers(
+            ControlHdrPacket, cls, cmd_code=cmd_code.value if isinstance(cmd_code, ContrlCmdCodes) else cmd_code
+        )
         if not hasattr(cls, "name") or cls.name is None:
             cls.name = cls.__name__
         if not hasattr(cls, "cmd_code") or cls.cmd_code is None:

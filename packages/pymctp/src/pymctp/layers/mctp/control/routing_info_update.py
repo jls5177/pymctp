@@ -19,6 +19,7 @@ from .control import (
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
+
 class RoutingInfoUpdateEntry1BAddressPacket(AllowRawSummary, Packet):
     name = "RoutingInfoUpdateEntryPacket"
 
@@ -60,7 +61,9 @@ class RoutingInfoUpdatePacket(AllowRawSummary, Packet):
     fields_desc = set_control_fields(
         rq_fields=[
             FieldLenField("entry_count", None, fmt="B", count_of="entries"),
-            PacketListField("entries", [], RoutingInfoUpdateEntry1BAddressPacket, count_from=lambda pkt: pkt.entry_count),
+            PacketListField(
+                "entries", [], RoutingInfoUpdateEntry1BAddressPacket, count_from=lambda pkt: pkt.entry_count
+            ),
         ],
     )
 
@@ -68,9 +71,10 @@ class RoutingInfoUpdatePacket(AllowRawSummary, Packet):
         summary = f"{self.name} [{self.entry_count}] ("
         if self.underlayer.getfieldval("rq") == RqBit.REQUEST.value:
             entries = [entry.mysummary()[0] for entry in self.entries]
-            summary += '; '.join(entries)
-        summary += f")"
+            summary += "; ".join(entries)
+        summary += ")"
         return summary, [ControlHdrPacket]
+
 
 if __name__ == "__main__":
     pkt = ControlHdrPacket(bytes([0, 0x85, 0x9, 0x2, 0x03, 0x01, 0x80, 0x30]))

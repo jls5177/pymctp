@@ -54,7 +54,7 @@ def set_printable_raw_layer():
     conf.raw_layer = PrintableRawPacket
 
 
-def str_to_bytes(byte_string: str, token: str=" ") -> bytes:
+def str_to_bytes(byte_string: str, token: str = " ") -> bytes:
     if not byte_string:
         return b""
     return bytes([int(x, 16) for x in byte_string.split(token)])

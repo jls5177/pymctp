@@ -202,7 +202,7 @@ class EndpointContext(DataClassDictMixin):
     routing_table_ready: bool = False
     routing_table: list[RoutingTableEntry] = dataclasses.field(default_factory=list)
     reassembly_list: dict[str, bytes] = dataclasses.field(default_factory=dict)
-    msg_type_context: dict[str, Any] = dataclasses.field(default_factory=lambda : defaultdict(dict))
+    msg_type_context: dict[str, Any] = dataclasses.field(default_factory=lambda: defaultdict(dict))
 
     class Config(BaseConfig):
         serialization_strategy = {list[MsgTypes]: {"deserialize": deserialize_msg_types}}

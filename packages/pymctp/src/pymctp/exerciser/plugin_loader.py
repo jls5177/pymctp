@@ -73,10 +73,10 @@ def discover_and_load_exercisers() -> List[str]:
 
     try:
         # Python 3.10+ syntax
-        eps = entry_points(group='pymctp.exercisers')
+        eps = entry_points(group="pymctp.exercisers")
     except TypeError:
         # Python 3.8-3.9 syntax
-        eps = entry_points().get('pymctp.exercisers', [])
+        eps = entry_points().get("pymctp.exercisers", [])
 
     for ep in eps:
         try:
@@ -108,10 +108,10 @@ def load_exercisers_silent() -> List[str]:
 
     try:
         # Python 3.10+ syntax
-        eps = entry_points(group='pymctp.exercisers')
+        eps = entry_points(group="pymctp.exercisers")
     except TypeError:
         # Python 3.8-3.9 syntax
-        eps = entry_points().get('pymctp.exercisers', [])
+        eps = entry_points().get("pymctp.exercisers", [])
 
     for ep in eps:
         try:

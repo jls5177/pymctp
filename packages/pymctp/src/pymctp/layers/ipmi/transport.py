@@ -80,7 +80,7 @@ class TransportHdrPacket(AllowRawSummary, Packet):
             p = cls(s, _internal=1, _underlayer=self)
         except KeyboardInterrupt:
             raise
-        except Exception as e:
+        except Exception:
             if conf.debug_dissector and cls is not None:
                 raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
@@ -151,9 +151,7 @@ def SsifTransport(
         crc.update(raw(load))
         val = crc.digest()
         pec = int.from_bytes(val, byteorder="little")
-    return SSIFTransportPacket(
-        dst_addr=dst_addr, command_code=command_code, byte_count=byte_count, load=load, pec=pec
-    )
+    return SSIFTransportPacket(dst_addr=dst_addr, command_code=command_code, byte_count=byte_count, load=load, pec=pec)
 
 
 class MasterWriteReadBusType(IntEnum):

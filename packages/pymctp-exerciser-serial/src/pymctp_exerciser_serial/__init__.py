@@ -12,10 +12,11 @@ from .tty_serial import TTYSerialSocket
 # Auto-register with pymctp when imported
 try:
     from pymctp.exerciser import register_exerciser
-    register_exerciser('serial', TTYSerialSocket)
+
+    register_exerciser("serial", TTYSerialSocket)
 except ImportError:
     # pymctp not installed or exerciser module not available
     pass
 
 __version__ = "0.2.0"
-__all__ = ['TTYSerialSocket']
+__all__ = ["TTYSerialSocket"]

@@ -131,7 +131,6 @@ class SimpleEndpointAM(AnsweringMachine):
             return self.context
         return self.downstream_endpoints.get(dst_eid, None)
 
-
     def make_reply(self, req: Packet | ICanReply) -> _PacketIterable:
         """
         Creates a reply to the incoming request (pre-confirmed by is_request())

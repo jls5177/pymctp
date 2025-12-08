@@ -13,10 +13,11 @@ from .aardvark_i2c import AardvarkI2CSocket
 # Auto-register with pymctp when imported
 try:
     from pymctp.exerciser import register_exerciser
-    register_exerciser('aardvark', AardvarkI2CSocket)
+
+    register_exerciser("aardvark", AardvarkI2CSocket)
 except ImportError:
     # pymctp not installed or exerciser module not available
     pass
 
 __version__ = "0.2.0"
-__all__ = ['AardvarkI2CSocket']
+__all__ = ["AardvarkI2CSocket"]

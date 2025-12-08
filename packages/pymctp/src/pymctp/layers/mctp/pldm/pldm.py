@@ -119,7 +119,9 @@ class PldmHdrPacket(AllowRawSummary, Packet):
         # TODO: add support to auto-respond to pldm msgs
         return self.build_reply(ctx, payload_resp)
 
-    def build_reply(self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes, completion_code: int | None = 0) -> AnyPacketType:
+    def build_reply(
+        self, ctx: EndpointContext, payload_resp: AnyPacketType | bytes, completion_code: int | None = 0
+    ) -> AnyPacketType:
         rsp = PldmHdr(
             rq=False,
             instance_id=self.instance_id,
@@ -166,7 +168,7 @@ class AutobindPLDMMsg:
         bind_layers(
             PldmHdrPacket,
             cls,
-            pldm_type=pldm_type.value if type(pldm_type) == PldmTypeCodes else pldm_type,
+            pldm_type=pldm_type.value if isinstance(pldm_type, PldmTypeCodes) else pldm_type,
             cmd_code=cmd_code.value if hasattr(cmd_code, "value") else cmd_code,
         )
         if not hasattr(cls, "name") or cls.name is None:

@@ -9,9 +9,7 @@ from scapy.config import conf
 from scapy.fields import BitEnumField, BitField, ShortEnumField, XByteField
 from scapy.packet import Packet, Raw, bind_layers, ConditionalField
 
-from .types import (
-    NvmeMIMessageType
-)
+from .types import NvmeMIMessageType
 from ..transport import (
     AutobindMessageType,
     MsgTypes,
@@ -27,6 +25,7 @@ class RqBit(IntEnum):
     RESPONSE = 1
     REQUEST = 0
 
+
 @AutobindMessageType(MsgTypes.NVMeMgmtMsg)
 class NvmeMIHdrPacket(Packet):
     name = "NVMe-MI"
@@ -40,19 +39,19 @@ class NvmeMIHdrPacket(Packet):
         # TODO: move to separate packet
         ConditionalField(
             XByteField("opcode", 0),
-            lambda pkt: pkt.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value]
+            lambda pkt: pkt.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value],
         ),
         ConditionalField(
             XByteField("unused5", 0),
-            lambda pkt: pkt.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value]
+            lambda pkt: pkt.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value],
         ),
         ConditionalField(
             XByteField("unused6", 0),
-            lambda pkt: pkt.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value]
+            lambda pkt: pkt.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value],
         ),
         ConditionalField(
             XByteField("unused7", 0),
-            lambda pkt: pkt.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value]
+            lambda pkt: pkt.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value],
         ),
     ]
 
@@ -61,9 +60,7 @@ class NvmeMIHdrPacket(Packet):
         nmint_field = self.get_field("nmimt")
         nmint_value = self.nmimt
         nmimt_str = nmint_field.i2s[nmint_value] if nmint_field and nmint_value in nmint_field.i2s else "UNKNOWN"
-        summary = (
-            f"{self.name} {rqType} (nmimt: 0x{self.nmimt:02X}, csi: 0x{self.csi:02X}"
-        )
+        summary = f"{self.name} {rqType} (nmimt: 0x{self.nmimt:02X}, csi: 0x{self.csi:02X}"
         if self.nmimt in [NvmeMIMessageType.CMD.value, NvmeMIMessageType.ADMIN_CMD.value]:
             summary += f", opcode: 0x{self.opcode:02X}"
         summary += f") {nmimt_str}"

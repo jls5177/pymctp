@@ -32,10 +32,10 @@ def __getattr__(name):
     to work by looking up the exerciser in the registry.
     """
     exerciser_map = {
-        'AardvarkI2CSocket': 'aardvark',
-        'QemuI2CNetDevSocket': 'qemu-i2c',
-        'QemuI3CCharDevSocket': 'qemu-i3c',
-        'TTYSerialSocket': 'serial',
+        "AardvarkI2CSocket": "aardvark",
+        "QemuI2CNetDevSocket": "qemu-i2c",
+        "QemuI3CCharDevSocket": "qemu-i3c",
+        "TTYSerialSocket": "serial",
     }
 
     if name in exerciser_map:
@@ -51,10 +51,10 @@ def __getattr__(name):
 
 
 __all__ = [
-    'register_exerciser',
-    'get_exerciser',
-    'list_exercisers',
-    'discover_and_load_exercisers',
-    'load_exercisers_silent',
-    '__all_exerciser_packages__',
+    "register_exerciser",
+    "get_exerciser",
+    "list_exercisers",
+    "discover_and_load_exercisers",
+    "load_exercisers_silent",
+    "__all_exerciser_packages__",
 ]
