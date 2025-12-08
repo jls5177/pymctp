@@ -26,6 +26,7 @@ from .transport import (
 from .control import ControlHdrPacket
 from .pldm import PldmHdrPacket
 from .vdpci import VdPciHdrPacket
+from .nvmemi import NvmeMIHdrPacket
 
 # Import any utilities
 from .context_utils import import_pcap_dump
