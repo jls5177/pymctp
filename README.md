@@ -100,12 +100,16 @@ print(decoded.summary())
 ## Documentation
 
 - **[Core Library Documentation](packages/pymctp/README.md)** - Full API and usage guide
-- **[Extension Development](EXTENSIONS.md)** - Creating custom OEM extensions
-- **[Migration Guide](MIGRATION.md)** - Upgrading from older versions
+- **[Extension Development](EXTENSIONS.md)** - Creating custom OEM/layer extensions
+- **[CLI Extension Development](CLI-EXTENSIONS.md)** - Creating custom CLI commands
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to the project
+- **[Development Guide](DEVELOPMENT.md)** - Development setup, building, and testing
 
 ## Development
 
 This is a monorepo containing multiple Python packages. Each package can be developed and published independently.
+
+**For detailed development instructions, see [DEVELOPMENT.md](DEVELOPMENT.md)**
 
 ### Repository Structure
 

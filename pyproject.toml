@@ -2,161 +2,111 @@
 #
 # SPDX-License-Identifier: MIT
 
+# Root-level monorepo configuration
+# This file helps coordinate development across all packages
+
 [build-system]
-requires = ["hatchling", "hatch-regex-commit"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pymctp"
-dynamic = ["version"]
-description = "PyMCTP is a tool to craft/decode DMTF MCTP communication packets"
+name = "pymctp-monorepo"
+version = "0.2.0"
+description = "PyMCTP monorepo - development workspace for all pymctp packages"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { file = "LICENSE" }
-keywords = []
+license = { text = "MIT" }
 authors = [
   { name = "Justin Simon", email = "justin@simonctl.com" }
 ]
-classifiers = [
-  "Development Status :: 4 - Beta",
-  "Intended Audience :: Developers",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
-  "Topic :: Software Development :: Libraries",
-  "Topic :: Utilities",
-]
+
+# Development dependencies needed across all packages
 dependencies = [
-    "scapy>=2.5.0",
-    "crc8>=0.1.0",
-    "pyaardvark>=0.7.1",
-    "mashumaro>=3.5"
+    # Build tools
+    "build>=1.0.0",
+    "hatch>=1.7.0",
+    "twine>=4.0.0",
+
+    # Testing
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+
+    # Linting and formatting
+    "ruff>=0.1.0",
+    "reuse>=4.0.0",
+
+    # Documentation
+    "pytz",
+    "tzlocal",
 ]
 
-[project.urls]
-Documentation = "https://github.com/jls5177/pymctp#readme"
-Issues = "https://github.com/jls5177/pymctp/issues"
-Source = "https://github.com/jls5177/pymctp"
-
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.hatch.version]
-source = "regex_commit"
-path = "src/pymctp/__about__.py"
-#commit_extra_args = ["-e"]
-tag_sign = false
-
-[tool.hatch.build.targets.sdist]
-exclude = [
-    ".history",
-    ".ruff_cache",
-    ".venv",
-    ".vscode",
-    "dist",
+[project.optional-dependencies]
+# Install all packages in development mode
+all = [
+    "pymctp",
+    "pymctp-sample-vendorextension",
+    "pymctp-exerciser-aardvark",
+    "pymctp-exerciser-qemu",
+    "pymctp-exerciser-serial",
 ]
-
-[tool.hatch.envs.types]
-extra-dependencies = [
-  "mypy>=1.0.0",
-]
-[tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/pymctp tests}"
 
 [tool.hatch.envs.default]
 type = "virtual"
 path = ".venv"
+
+# Install all local packages in editable mode
 dependencies = [
-    "pytest",
-    "pytest-cov",
-    "reuse >= 4.0",
+    "ipython",
 ]
 
 [tool.hatch.envs.default.scripts]
-license-check = "reuse lint"
-add-license = "reuse annotate -c \"$(git config --get user.name) <$(git config --get user.email)>\" -l MIT --merge-copyrights -r ."
+# Convenient scripts for development
+install-all = """
+    pip install -e packages/pymctp
+    pip install -e packages/pymctp-sample-vendorextension
+    pip install -e packages/pymctp-exerciser-aardvark
+    pip install -e packages/pymctp-exerciser-qemu
+    pip install -e packages/pymctp-exerciser-serial
+"""
 
-# Ruff
+build-all = "bash scripts/build-all.sh"
+clean = "bash scripts/clean.sh"
+test-all = "pytest tests/"
+format-all = """
+    ruff format packages/
+    ruff check --fix packages/
+"""
+
+[tool.hatch.envs.test]
+dependencies = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[tool.hatch.envs.test.scripts]
+run = "pytest {args:tests/}"
+cov = "pytest --cov=pymctp --cov-report=html --cov-report=term {args:tests/}"
+
+# Ruff configuration (applies to all packages)
 [tool.ruff]
 target-version = "py310"
 line-length = 120
-exclude = ["./.history", "./.venv"]
+exclude = ["./.history", "./.venv", "**/dist", "**/__pycache__"]
 
 [tool.ruff.lint]
 ignore = [
-    # Allow boolean positional values in function calls, like `dict.get(... True)`
     "FBT001", "FBT002", "FBT003",
-    # Ignore complexity
     "C901",
     "RUF012",
-    # Allow unused arguments (for now)
     "ARG001", "ARG002", "ARG005",
-    # Allow wildcard imports (for now)
     "F403", "F405",
-    # Allow relative imports (for now)
     "TID252", "F401",
-    # Allow "print" (for now)
     "T201",
-    # Allow UpperCamelCase function names
     "N801", "N802", "N806",
-    # Allow asserts in code
     "S101",
-    # Allow magic values (for now)
     "PLR2004",
 ]
-unfixable = [
-    # Don't touch unused imports
-    "F401",
-    # Don't touch unused variables
-    "F841",
-    "TRY", "T201",
-]
-
-[tool.ruff.lint.flake8-tidy-imports]
-ban-relative-imports = "all"
-
-[tool.ruff.lint.isort]
-known-first-party = ["pymctp"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401", "I001", "E501"]
-".github/**" = ["D"]
 "tests/**/*" = ["PLR2004", "S101", "TID252", "ARG001", "C408"]
-"/*.py" = ["E402", "F401", "I001", "E501"]
-
-
-# Coverage
-[tool.coverage.run]
-source_pkgs = ["pymctp", "tests"]
-branch = true
-parallel = true
-omit = [
-  "src/pymctp/__about__.py",
-]
-
-[tool.coverage.paths]
-pymctp = ["src/pymctp", "*/pymctp/src/pymctp"]
-tests = ["tests", "*/pymctp/tests"]
-
-[tool.coverage.report]
-exclude_lines = [
-  "no cov",
-  "if __name__ == .__main__.:",
-  "if TYPE_CHECKING:",
-]
-
-[tool.hatch.envs.coverage]
-detached = true
-dependencies = [
-    "coverage[toml]",
-]
-
-[tool.hatch.envs.coverage.scripts]
-combine = "coverage combine {args}"
-html = "coverage html --skip-covered --skip-empty"
-xml = "coverage xml --skip-empty"

@@ -39,34 +39,24 @@ Each package is independently versioned and can be published separately to PyPI.
 
 ## Development Setup
 
-### Prerequisites
+For detailed development setup instructions, build procedures, and workflows, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-- Python 3.8 or higher
-- pip
-- git
-
-### Clone and Install
+### Quick Start
 
 ```bash
 # Clone the repository
 git clone https://github.com/jls5177/pymctp.git
 cd pymctp
 
-# Install all packages in development mode
-./scripts/install-dev.sh
-
-# Or install specific packages manually
-pip install -e packages/pymctp
-pip install -e packages/pymctp-exerciser-qemu
-```
-
-### Virtual Environment (Recommended)
-
-```bash
+# Create virtual environment (recommended)
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install all packages in development mode
 ./scripts/install-dev.sh
 ```
+
+For alternative installation methods, testing, building, and advanced workflows, see the [Development Guide](DEVELOPMENT.md).
 
 ## Making Changes
 
