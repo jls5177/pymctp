@@ -8,6 +8,7 @@ import click
 
 from pymctp.__about__ import __version__
 from pymctp.cli.analyze_tcpdump import analyze_tcpdump
+from pymctp.cli.extensions import extensions
 from pymctp.cli.plugin_loader import discover_cli_commands_silent
 
 
@@ -20,6 +21,7 @@ def cli():
 
 # Register built-in commands
 cli.add_command(analyze_tcpdump)
+cli.add_command(extensions)
 
 # Discover and register extension commands from other packages
 discover_cli_commands_silent(cli)
