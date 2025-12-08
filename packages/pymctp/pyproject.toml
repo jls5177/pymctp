@@ -35,7 +35,9 @@ dependencies = [
     "scapy>=2.5.0",
     "crc8>=0.1.0",
     "mashumaro>=3.5",
-    "crcmod-plus"
+    "crcmod-plus",
+    "click>=8.0",
+    "pytz"
 ]
 
 # Optional dependencies for exercisers (for backward compatibility)
@@ -53,6 +55,9 @@ all-exercisers = [
 Documentation = "https://github.com/jls5177/pymctp#readme"
 Issues = "https://github.com/jls5177/pymctp/issues"
 Source = "https://github.com/jls5177/pymctp"
+
+[project.scripts]
+pymctp = "pymctp.cli.main:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true

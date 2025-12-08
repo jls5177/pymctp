@@ -43,6 +43,11 @@ Source = "https://github.com/jls5177/pymctp"
 [project.entry-points."pymctp.extensions"]
 sample-vendor = "pymctp_sample_vendorextension.layers"
 
+# Register CLI command extensions
+[project.entry-points."pymctp.cli_commands"]
+craft-sample-vendor = "pymctp_sample_vendorextension.cli.sample_commands:craft_sample_vendor"
+sample-vendor = "pymctp_sample_vendorextension.cli.sample_commands:sample_vendor"
+
 [tool.hatch.build.targets.sdist]
 exclude = [
     ".history",

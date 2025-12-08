@@ -17,6 +17,7 @@ This guide explains how to create and distribute pymctp extensions for OEM-speci
 - [Registering Your Extension](#registering-your-extension)
 - [Testing Your Extension](#testing-your-extension)
 - [Publishing Your Extension](#publishing-your-extension)
+- [CLI Extensions](#cli-extensions)
 
 ## Overview
 
@@ -337,9 +338,64 @@ Key files to review:
   print(VdPciHdrPacket._overload_fields)
   ```
 
+## CLI Extensions
+
+In addition to layer extensions, you can also extend the `pymctp` command-line interface with custom commands!
+
+Extension packages can add their own CLI commands that automatically appear in the `pymctp` command-line tool. This is useful for vendor-specific analysis tools, packet crafting utilities, or custom workflows.
+
+### Quick Example
+
+Add CLI commands to your extension by:
+
+1. Creating Click commands in your package:
+```python
+# your_package/cli/commands.py
+import click
+
+@click.command()
+def my_command():
+    """My custom command."""
+    click.echo("Hello from my extension!")
+```
+
+2. Registering them in `pyproject.toml`:
+```toml
+[project.entry-points."pymctp.cli_commands"]
+my-command = "your_package.cli.commands:my_command"
+```
+
+3. Installing your package:
+```bash
+pip install your-package
+pymctp my-command  # Your command is now available!
+```
+
+### Full Documentation
+
+For complete details on creating CLI extensions, including:
+- Single commands vs. command groups
+- Best practices for naming and organization
+- Error handling and help text
+- Complete examples
+
+See the dedicated [CLI-EXTENSIONS.md](CLI-EXTENSIONS.md) guide.
+
+### Example Implementation
+
+The [pymctp-sample-vendorextension](packages/pymctp-sample-vendorextension) package includes example CLI extensions:
+- Single command: `craft-sample-vendor`
+- Command group: `sample-vendor` with subcommands
+
+Check these files:
+- [cli/sample_commands.py](packages/pymctp-sample-vendorextension/src/pymctp_sample_vendorextension/cli/sample_commands.py) - CLI implementations
+- [pyproject.toml](packages/pymctp-sample-vendorextension/pyproject.toml) - Entry point registration
+
 ## Additional Resources
 
 - [Scapy Documentation](https://scapy.readthedocs.io/)
+- [Click Documentation](https://click.palletsprojects.com/) - CLI framework
 - [Python Packaging Guide](https://packaging.python.org/)
 - [Entry Points Specification](https://packaging.python.org/specifications/entry-points/)
 - [PyMCTP Repository](https://github.com/jls5177/pymctp)
+- [CLI Extensions Guide](CLI-EXTENSIONS.md) - Detailed CLI extension documentation

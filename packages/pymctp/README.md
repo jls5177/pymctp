@@ -23,6 +23,9 @@ SPDX-License-Identifier: MIT
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
+  - [Command-Line Tools](#command-line-tools)
+  - [Decoding MCTP Packets](#decoding-mctp-packets)
+  - [Crafting MCTP Packets](#crafting-mctp-packets)
 - [Extensions](#extensions)
 - [Contributing](#contributing)
 - [License](#license)
@@ -63,6 +66,44 @@ pip install pymctp[serial]    # Serial/UART
 ```
 
 ## Usage
+
+### Command-Line Tools
+
+PyMCTP includes command-line tools for analyzing MCTP packet captures:
+
+```bash
+# Show help
+pymctp --help
+
+# Analyze a pcap file
+pymctp analyze-tcpdump capture.pcap
+
+# Analyze text dump with custom timezone and date
+pymctp analyze-tcpdump dump.txt --timezone America/New_York --date 2024-03-20
+```
+
+The `analyze-tcpdump` command supports:
+- PCAP files (`.pcap`, `.dump`) - standard packet capture format
+- Text dumps - hex dump output from tcpdump
+- Automatic MCTP packet decoding and display
+- Configurable timezone and date handling for timestamps
+
+Run `pymctp analyze-tcpdump --help` for all available options.
+
+#### Extensible CLI
+
+The pymctp CLI can be extended by other packages! Vendor extension packages can add their own commands:
+
+```bash
+# After installing a vendor extension package
+pip install pymctp-sample-vendorextension
+
+# Vendor-specific commands are automatically available
+pymctp sample-vendor info
+pymctp craft-sample-vendor --command 0x10 --data "deadbeef"
+```
+
+See [CLI-EXTENSIONS.md](../../CLI-EXTENSIONS.md) for details on creating your own CLI extensions.
 
 ### Decoding MCTP Packets
 
