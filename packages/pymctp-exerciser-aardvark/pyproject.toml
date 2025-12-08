@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pymctp-exerciser-aardvark"
-version = "0.2.0"
+version = "0.2.2"
 description = "Total Phase Aardvark I2C exerciser for pymctp"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -31,7 +31,7 @@ classifiers = [
   "Topic :: System :: Hardware",
 ]
 dependencies = [
-    "pymctp>=0.2.0",
+    "pymctp>=0.2.2",
     "pyaardvark>=0.7.1",
 ]
 

@@ -19,5 +19,5 @@ except ImportError:
     # pymctp not installed or exerciser module not available
     pass
 
-__version__ = "0.2.0"
+__version__ = "0.2.2"
 __all__ = ["AardvarkI2CSocket"]
