@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pymctp-exerciser-serial"
-version = "0.2.4"
+version = "0.2.5"
 description = "TTY/Serial port exerciser for pymctp"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -31,7 +31,7 @@ classifiers = [
   "Topic :: System :: Hardware",
 ]
 dependencies = [
-    "pymctp>=0.2.4",
+    "pymctp>=0.2.5",
     "pyserial",
 ]
 
