@@ -94,7 +94,6 @@ jobs:
       run: |
         hatch run format-check
     - name: Validate license headers
-      working-directory: packages/pymctp
       run: |
         hatch run license-check
     - name: Test with coverage

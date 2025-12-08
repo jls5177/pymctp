@@ -80,6 +80,8 @@ format-check = """
     ruff format --check packages/
     ruff check packages/
 """
+license-check = "reuse lint"
+license-add = "reuse annotate -c \"Justin Simon <justin@simonctl.com>\" -l MIT --merge-copyrights -r"
 
 [tool.hatch.envs.test]
 dependencies = [
