@@ -1,0 +1,85 @@
+import argparse
+import binascii
+import functools
+import sys
+import threading
+import time
+import crc8
+
+from scapy.config import conf
+from scapy.packet import Packet, Raw
+from scapy.utils import hexdump
+from scapy.compat import raw
+
+from pymctp.automaton.manager import EndpointManager
+from pymctp.automaton.sessions import HandlerResponse
+from pymctp.layers import MasterWriteReadRequestPacket
+from pymctp.layers.ipmi.transport import MasterWriteReadBusType
+from pymctp.layers.mctp import *
+from pymctp.layers.mctp.control import SetEndpointIDPacket, GetRoutingTableEntries, GetMctpVersionSupport, \
+    DiscoveryNotify, GetEndpointIDPacket, ControlHdr, SetEndpointID, SetEndpointIDOperation, ContrlCmdCodes
+from pymctp_oem_microsoft.layers.mctp.vdpci.cerberus_challenge import ErrorResponsePacket
+from pymctp.utils import str_to_bytes
+
+
+def build_i2ctransfer_cmd():
+    load = (TransportHdr(dst=0, src=10, som=True, eom=True, pkt_seq=0, to=True, tag=3) /
+            ControlHdr(rq=True, instance_id=16, cmd_code=ContrlCmdCodes.SetEndpointID) /
+            SetEndpointID(op=SetEndpointIDOperation.ForceEID, eid=66))
+    dst_i2c_addr = Smbus7bitAddress(0xB0 >> 1)
+    req = SmbusTransport(load=load, src_addr=Smbus7bitAddress(0x20 >> 1), dst_addr=dst_i2c_addr)
+    print(req.summary())
+    req_bytes = raw(req)
+    output_str = binascii.hexlify(req_bytes[1:], b' ', 1).decode()
+    print(output_str)
+    length = len(req_bytes) - 1
+    hex_str = " ".join(f"0x{x}" for x in output_str.split())
+    print(hex_str)
+    print(f"i2ctransfer -y -f 20 w{length}@0x{dst_i2c_addr.address:02x} {hex_str}")
+
+
+def build_master_write_read_cmd():
+
+    load = (TransportHdr(dst=64, src=9, som=True, eom=True, pkt_seq=0, to=True, tag=5) /
+            ControlHdr(rq=True, instance_id=7) /
+            GetEndpointIDPacket())
+    req = TrimmedSmbusTransport(load=load, src_addr=0x10)
+    print(req.summary())
+    req_bytes = raw(req)
+    print(binascii.hexlify(req_bytes))
+
+    ipmi_req = MasterWriteReadRequestPacket(channel=1,
+                                            bus_type=MasterWriteReadBusType.PUBLIC.value,
+                                            bus=0,
+                                            read_count=32,
+                                            load=req)
+    print(ipmi_req.summary())
+
+    output_str = binascii.hexlify(bytes([0x06, 0x52]) + raw(ipmi_req), b' ', 1).decode()
+    print(" ".join(f"0x{x}" for x in output_str.split()))
+
+
+def build_master_write_read_cmd_getsocbootmode():
+    load = (TransportHdr(dst=66, src=9, som=True, eom=True, pkt_seq=0, to=True, tag=5, msg_type=MsgTypes.VDPCI) /
+            Raw(str_to_bytes("14 14 0 e5 0")))
+    req = TrimmedSmbusTransport(load=load, src_addr=0x10)
+    print(req.summary())
+    req_bytes = raw(req)
+    print(binascii.hexlify(req_bytes))
+
+    ipmi_req = MasterWriteReadRequestPacket(channel=1,
+                                            bus_type=MasterWriteReadBusType.PUBLIC.value,
+                                            bus=0,
+                                            read_count=32,
+                                            load=req)
+    print(ipmi_req.summary())
+
+    output_str = binascii.hexlify(bytes([0x06, 0x52]) + raw(ipmi_req), b' ', 1).decode()
+    print(" ".join(f"0x{x}" for x in output_str.split()))
+
+
+if __name__ == '__main__':
+    # err = ErrorResponsePacket(str_to_bytes("04 0f 15 00 7f"))
+    # print(err.summary())
+    # build_master_write_read_cmd_getsocbootmode()
+    build_i2ctransfer_cmd()

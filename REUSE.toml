@@ -1,0 +1,16 @@
+version = 1
+SPDX-PackageName = "pymctp"
+SPDX-PackageSupplier = "Justin Simon <justin@simonctl.com>"
+SPDX-PackageDownloadLocation = "https://github.com/jls5177/pymctp"
+
+[[annotations]]
+path = [".claude/settings.local.json", ".gitignore", ".python-version", "uv.lock", "Makefile"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2024 Justin Simon <justin@simonctl.com>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["packages/**/README.md", "MIGRATION.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2024 Justin Simon <justin@simonctl.com>"
+SPDX-License-Identifier = "MIT"

@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: 2024 Justin Simon <justin.simon@microsoft.com>
+#
+# SPDX-License-Identifier: MIT
+
+# Root-level monorepo configuration
+# This file helps coordinate development across all packages
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pymctp-internal"
+version = "0.1.0"
+description = "PyMCTP Internal - Microsoft OEM extensions (internal use only)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+  { name = "Justin Simon", email = "justin.simon@microsoft.com" }
+]
+
+# Development dependencies
+dependencies = [
+    # Core pymctp library (from PyPI)
+    "pymctp>=0.2.8",
+
+    # Build tools
+    "build>=1.0.0",
+
+    # Testing
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+
+    # Linting and formatting
+    "ruff>=0.1.0",
+    "reuse>=4.0.0",
+
+    # Development
+    "ipython",
+
+    # Documentation
+    "pytz",
+    "tzlocal",
+]
+
+[project.optional-dependencies]
+# Install all packages in development mode
+all = [
+    "pymctp-oem-microsoft",
+]
+
+# uv workspace configuration
+[tool.uv.workspace]
+members = [
+    "packages/pymctp-oem-microsoft",
+]
+
+# Workspace sources for optional dependencies
+[tool.uv.sources]
+pymctp-oem-microsoft = { workspace = true }
+
+# uv development dependencies
+[tool.uv]
+dev-dependencies = [
+    "ipython>=8.0.0",
+]
+# Don't build/install the root project - it's just a workspace coordinator
+package = false
+
+# Ruff configuration (applies to all packages)
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = ["./.history", "./.venv", "**/dist", "**/__pycache__"]
+
+[tool.ruff.lint]
+ignore = [
+    "FBT001", "FBT002", "FBT003",
+    "C901",
+    "RUF012",
+    "ARG001", "ARG002", "ARG005",
+    "F403", "F405",
+    "TID252", "F401",
+    "T201",
+    "N801", "N802", "N806",
+    "S101",
+    "PLR2004",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402", "F401", "I001", "E501"]
+"tests/**/*" = ["PLR2004", "S101", "TID252", "ARG001", "C408"]
+
+# Coverage configuration
+[tool.coverage.run]
+source_pkgs = ["pymctp_oem_microsoft"]
+branch = true
+parallel = true
+omit = [
+    "packages/pymctp-oem-microsoft/src/pymctp_oem_microsoft/__about__.py",
+    "packages/*/tests/*",
+    "tests/*",
+]
+
+[tool.coverage.paths]
+pymctp_oem_microsoft = ["packages/pymctp-oem-microsoft/src/pymctp_oem_microsoft", "*/pymctp-oem-microsoft/src/pymctp_oem_microsoft"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "no cov",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

@@ -1,0 +1,43 @@
+from enum import IntEnum
+
+
+class MsftVdmCommandSets(IntEnum):
+    BASE = 0
+    BMC = 1
+    ROT = 2
+    BMC_1P = 4
+
+
+class MsftVdmBaseCmdCodes(IntEnum):
+    STATUS = 0
+    CMD_SET_SUPPORT = 1
+    CAP_NEGOTIATION = 2
+    GET_TEMP = 3
+    HEARTBEAT_CTRL = 4
+    HEARTBEAT = 5
+
+
+class CompletionCodes(IntEnum):
+    SUCCESS = 0
+    """Command completed successfully."""
+
+    FAILURE = 0xFF
+    """General command processing failure."""
+
+    ERROR_INVALID_COMMAND = 0xFE
+    """The command is unknown."""
+
+    ERROR_UNSUPPORTED_CMD = 0xFD
+    """The command is a known command but is not supported by this device."""
+
+    ERROR_MALFORMED_CMD = 0xFC
+    """A supported command is not structured correctly."""
+
+    ERROR_UNSUPPORTED_PARAMETER = 0xFB
+    """An argument provided with the request is not valid for the device."""
+
+    ERROR_RESOURCE_UNAVAILABLE = 0xFA
+    """The requested operation uses a resource that is currently not available."""
+
+    ERROR_UNSUPPORTED_PROTOCOL_VER = 0xF9
+    """The message protocol version is not supported by the device."""
