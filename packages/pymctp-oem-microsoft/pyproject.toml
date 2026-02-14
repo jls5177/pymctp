@@ -32,6 +32,9 @@ classifiers = [
 ]
 dependencies = [
     "pymctp>=0.2.8",
+    "click>=8.0",
+    "pytz",
+    "tzlocal",
 ]
 
 [project.urls]
@@ -42,6 +45,10 @@ Source = "https://github.com/jls5177/pymctp"
 # Register this package as a pymctp extension
 [project.entry-points."pymctp.extensions"]
 microsoft = "pymctp_oem_microsoft.layers"
+
+# Register CLI commands
+[project.entry-points."pymctp.cli_commands"]
+analyze-ipmi-audit-log = "pymctp_oem_microsoft.cli.analyze_ipmi_audit_log:analyze_ipmi_audit_log"
 
 [tool.hatch.version]
 source = "regex_commit"
