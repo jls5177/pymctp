@@ -23,22 +23,17 @@ authors = [
 # Development dependencies
 dependencies = [
     # Core pymctp library (from PyPI)
-    "pymctp>=0.2.8",
-
+    "pymctp[all-exercisers]>=0.2.9",
     # Build tools
     "build>=1.0.0",
-
     # Testing
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-
     # Linting and formatting
     "ruff>=0.1.0",
     "reuse>=4.0.0",
-
     # Development
     "ipython",
-
     # Documentation
     "pytz",
     "tzlocal",

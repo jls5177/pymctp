@@ -5,7 +5,10 @@ class MsftVdmCommandSets(IntEnum):
     BASE = 0
     BMC = 1
     ROT = 2
+    LION = 3
     BMC_1P = 4
+    FIPS = 5
+    TIP = 6
 
 
 class CompletionCodes(IntEnum):

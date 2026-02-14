@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.8"
 resolution-markers = [
     "python_full_version >= '3.11'",
@@ -782,6 +782,15 @@ wheels = [
 ]
 
 [[package]]
+name = "future"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/b2/4140c69c6a66432916b26158687e821ba631a4c9273c474343badf84d3ba/future-1.0.0.tar.gz", hash = "sha256:bd2968309307861edae1458a4f8a4f3598c03be43b97521076aebf5d94c07b05", size = 1228490, upload-time = "2024-02-21T11:52:38.461Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl", hash = "sha256:929292d34f5872e70396626ef385ec22355a1fae8ad29e1a734c3e43f9fbc216", size = 491326, upload-time = "2024-02-21T11:52:35.956Z" },
+]
+
+[[package]]
 name = "importlib-metadata"
 version = "8.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1331,6 +1340,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pyaardvark"
+version = "0.8.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "future" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/91/aa/3fbb02bdb95b676a3a366449fc0c097bfa0158881f1b1cbe20781d2a2f4d/pyaardvark-0.8.1.tar.gz", hash = "sha256:0cc5c5c29198ababee5bb710ae5dd724a350cf0d06440d0814090876ae35f11f", size = 266538, upload-time = "2024-04-16T15:44:34.9Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/8d/0a993fbf40ec406d0162034876ae9b926972f844653ab3e77cbef29bba3d/pyaardvark-0.8.1-py3-none-any.whl", hash = "sha256:a96176124444d6b860486561afd2aaceeb5b7ad201bf05626729edee00e6c73f", size = 263312, upload-time = "2024-04-16T15:44:33.576Z" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.19.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1341,7 +1362,7 @@ wheels = [
 
 [[package]]
 name = "pymctp"
-version = "0.2.8"
+version = "0.2.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1356,9 +1377,55 @@ dependencies = [
     { name = "tzlocal", version = "5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "tzlocal", version = "5.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/73/89/2ce76b3d1a8612440ba69afec1eff4191c89239afcc796a7179a529e3407/pymctp-0.2.8.tar.gz", hash = "sha256:64e2d6c2ea0aa40c852157506898bfe45ff75c7beff4304b527f0fd3fdcb9eb4", size = 46767, upload-time = "2025-12-08T23:54:04.641Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/a1/9a82dd7ad7a5476102cd192d5c7ee1fddeba3f9207b919dc137d639935e0/pymctp-0.2.9.tar.gz", hash = "sha256:f89de534c0de7fb45ece8603d7e1a196298e2d3e96a54b214b740bc2a984bc9b", size = 61867, upload-time = "2026-02-14T22:46:56.439Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/cd/7d919d4fcd8e7a01911275c498ea6855ae6d187bb6f57e1ee16d990a758f/pymctp-0.2.8-py3-none-any.whl", hash = "sha256:b22038479b40ce610c57ddf51ff8d1cb251ab26c7310925254a5a8987ef152b6", size = 72632, upload-time = "2025-12-08T23:54:03.247Z" },
+    { url = "https://files.pythonhosted.org/packages/89/b1/bc55b9b8ecc4b079c1fa450d5996fdda11620e8e0f55b906333c1288adfa/pymctp-0.2.9-py3-none-any.whl", hash = "sha256:7fd52edfd58df67b5163e8fb0e38af82798749f68285e2e8f6994008ceafdc79", size = 107448, upload-time = "2026-02-14T22:46:54.366Z" },
+]
+
+[package.optional-dependencies]
+all-exercisers = [
+    { name = "pymctp-exerciser-aardvark" },
+    { name = "pymctp-exerciser-qemu" },
+    { name = "pymctp-exerciser-serial" },
+]
+
+[[package]]
+name = "pymctp-exerciser-aardvark"
+version = "0.2.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyaardvark" },
+    { name = "pymctp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/50/7c/41328660736d7c76f9a6212a791243f21b995f6a2ec40e2053e28431e36f/pymctp_exerciser_aardvark-0.2.5.tar.gz", hash = "sha256:6262918322b1029fe56c5fae6d46d679f99d2a1d330d2bb8e7d3e2eac784c215", size = 5730, upload-time = "2025-12-08T17:42:35.557Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/a6/fb085990ca9711dded8f0ba2e7c34bb410d05cfee4bf9aa4c842029f3498/pymctp_exerciser_aardvark-0.2.5-py3-none-any.whl", hash = "sha256:ad6e83e40e716dea26744d74741d72141744beef88afad39dfdd62bc41453b9a", size = 6049, upload-time = "2025-12-08T17:42:34.444Z" },
+]
+
+[[package]]
+name = "pymctp-exerciser-qemu"
+version = "0.2.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "crc8" },
+    { name = "pymctp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2d/c5/c64aad074edff8123637e651a1d4d40ade879b46c80a10e05bb96cf7ef83/pymctp_exerciser_qemu-0.2.5.tar.gz", hash = "sha256:eed6bea97bd958d1f603be5d74fcbae33c69b6bfa4f6f6d524edfc3d5dfe1e70", size = 9051, upload-time = "2025-12-08T17:42:37.835Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/11/454418949dd3b6838b7478f7fe4200bc00b45abdc9ccf2853d1e7cbcacd5/pymctp_exerciser_qemu-0.2.5-py3-none-any.whl", hash = "sha256:88bf503038b837bacc03f435fdd37a7250fdad3c5baf7867a3f01cc0cb609592", size = 9926, upload-time = "2025-12-08T17:42:35.85Z" },
+]
+
+[[package]]
+name = "pymctp-exerciser-serial"
+version = "0.2.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pymctp" },
+    { name = "pyserial" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/27/e0/147b5df69112f73b72191141da20b892d97bc651f1d9f52d3fbbf4fe94c4/pymctp_exerciser_serial-0.2.5.tar.gz", hash = "sha256:42c04d64b97c8a4bebc00ecafc21dceb7c8d717a55f16d48ea7577b796a691b9", size = 4511, upload-time = "2025-12-08T15:47:00.504Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/15/426633e639143582db628777f8e066451d76e16ccf502d79a763e7ca18ce/pymctp_exerciser_serial-0.2.5-py3-none-any.whl", hash = "sha256:4312055d75711722e8db85a6352fdc5ad89847da5ac78ab2e682bed928636006", size = 4799, upload-time = "2025-12-08T15:46:59.196Z" },
 ]
 
 [[package]]
@@ -1372,7 +1439,7 @@ dependencies = [
     { name = "ipython", version = "8.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
     { name = "ipython", version = "8.37.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "ipython", version = "9.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pymctp" },
+    { name = "pymctp", extra = ["all-exercisers"] },
     { name = "pytest", version = "8.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1404,7 +1471,7 @@ dev = [
 requires-dist = [
     { name = "build", specifier = ">=1.0.0" },
     { name = "ipython" },
-    { name = "pymctp", specifier = ">=0.2.8" },
+    { name = "pymctp", extras = ["all-exercisers"], specifier = ">=0.2.9" },
     { name = "pymctp-oem-microsoft", marker = "extra == 'all'", editable = "packages/pymctp-oem-microsoft" },
     { name = "pytest", specifier = ">=7.0.0" },
     { name = "pytest-cov", specifier = ">=4.0.0" },
@@ -1422,11 +1489,21 @@ dev = [{ name = "ipython", specifier = ">=8.0.0" }]
 name = "pymctp-oem-microsoft"
 source = { editable = "packages/pymctp-oem-microsoft" }
 dependencies = [
+    { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "click", version = "8.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pymctp" },
+    { name = "pytz" },
+    { name = "tzlocal", version = "5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "tzlocal", version = "5.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pymctp", specifier = ">=0.2.8" }]
+requires-dist = [
+    { name = "click", specifier = ">=8.0" },
+    { name = "pymctp", specifier = ">=0.2.9" },
+    { name = "pytz" },
+    { name = "tzlocal" },
+]
 
 [[package]]
 name = "pyproject-hooks"
@@ -1435,6 +1512,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e7/82/28175b2414effca1cdac8dc99f76d660e7a4fb0ceefa4b4ab8f5f6742925/pyproject_hooks-1.2.0.tar.gz", hash = "sha256:1e859bd5c40fae9448642dd871adf459e5e2084186e8d2c2a79a824c970da1f8", size = 19228, upload-time = "2024-09-29T09:24:13.293Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bd/24/12818598c362d7f300f18e74db45963dbcb85150324092410c8b49405e42/pyproject_hooks-1.2.0-py3-none-any.whl", hash = "sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913", size = 10216, upload-time = "2024-09-29T09:24:11.978Z" },
+]
+
+[[package]]
+name = "pyserial"
+version = "3.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/7d/ae3f0a63f41e4d2f6cb66a5b57197850f919f59e558159a4dd3a818f5082/pyserial-3.5.tar.gz", hash = "sha256:3c77e014170dfffbd816e6ffc205e9842efb10be9f58ec16d3e8675b4925cddb", size = 159125, upload-time = "2020-11-23T03:59:15.045Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/bc/587a445451b253b285629263eb51c2d8e9bcea4fc97826266d186f96f558/pyserial-3.5-py2.py3-none-any.whl", hash = "sha256:c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0", size = 90585, upload-time = "2020-11-23T03:59:13.41Z" },
 ]
 
 [[package]]

@@ -9,6 +9,7 @@ from scapy.packet import Packet, bind_layers
 
 from pymctp.layers.helpers import AllowRawSummary
 from pymctp.layers.mctp.types import AnyPacketType
+from ..types import MsftVdmCommandSets
 from .msft_vdm import MsftVdmProtocolPacket
 from .types import MsftVdmBmcCmdCodes
 
@@ -73,7 +74,7 @@ class GetSystemDevicesCmdPacket(Packet):
 
 bind_layers(
     MsftVdmProtocolPacket, GetSystemDevicesCmdPacket,
-    cmd=MsftVdmBmcCmdCodes.BMC_GET_SYSTEM_DEVICES,
+    cmd_set=MsftVdmCommandSets.BMC, cmd=MsftVdmBmcCmdCodes.BMC_GET_SYSTEM_DEVICES,
 )
 
 
@@ -129,7 +130,7 @@ class GetDeviceStringCmdPacket(Packet):
 
 bind_layers(
     MsftVdmProtocolPacket, GetDeviceStringCmdPacket,
-    cmd=MsftVdmBmcCmdCodes.BMC_GET_DEVICE_STRING,
+    cmd_set=MsftVdmCommandSets.BMC, cmd=MsftVdmBmcCmdCodes.BMC_GET_DEVICE_STRING,
 )
 
 
@@ -182,5 +183,5 @@ class GetDeviceEidCmdPacket(Packet):
 
 bind_layers(
     MsftVdmProtocolPacket, GetDeviceEidCmdPacket,
-    cmd=MsftVdmBmcCmdCodes.BMC_GET_DEVICE_EID,
+    cmd_set=MsftVdmCommandSets.BMC, cmd=MsftVdmBmcCmdCodes.BMC_GET_DEVICE_EID,
 )
