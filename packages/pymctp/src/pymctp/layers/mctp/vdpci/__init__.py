@@ -5,3 +5,6 @@
 from .vdpci import AutobindVDMMsg, RqBit, VdPciHdr, VdPciHdrPacket
 
 from .types import VdPCIVendorIds
+
+# Import cerberus submodule to register bind_layers
+from . import cerberus as cerberus  # noqa: F401

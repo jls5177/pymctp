@@ -50,8 +50,6 @@ class VdPciHdrPacket(Packet):
         return summary, [TransportHdrPacket, SmbusTransportPacket, TrimmedSmbusTransportPacket]
 
     def do_dissect_payload(self, s: bytes) -> None:
-        if not s:
-            return
         cls = self.guess_payload_class(s)
         try:
             p = cls(s, _internal=1, _underlayer=self)
@@ -61,7 +59,8 @@ class VdPciHdrPacket(Packet):
             if conf.debug_dissector and cls is not None:
                 raise
             p = conf.raw_layer(s, _internal=1, _underlayer=self)
-        self.add_payload(p)
+        if s or cls is not conf.raw_layer:
+            self.add_payload(p)
         if isinstance(p, ICanSetMySummaryClasses):
             p.set_mysummary_classes([VdPciHdrPacket, TransportHdrPacket])
 
