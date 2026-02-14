@@ -5,20 +5,23 @@ import sys
 import threading
 import time
 import crc8
+from pymctp.layers.mctp.vdpci import VdPCIVendorIds
 
 from scapy.config import conf
 from scapy.packet import Packet, Raw
 from scapy.utils import hexdump
 from scapy.compat import raw
 
-from pymctp.automaton.manager import EndpointManager
-from pymctp.automaton.sessions import HandlerResponse
+# from pymctp.automaton.manager import EndpointManager
+# from pymctp.automaton.sessions import HandlerResponse
 from pymctp.layers import MasterWriteReadRequestPacket
 from pymctp.layers.ipmi.transport import MasterWriteReadBusType
 from pymctp.layers.mctp import *
 from pymctp.layers.mctp.control import SetEndpointIDPacket, GetRoutingTableEntries, GetMctpVersionSupport, \
     DiscoveryNotify, GetEndpointIDPacket, ControlHdr, SetEndpointID, SetEndpointIDOperation, ContrlCmdCodes
-from pymctp_oem_microsoft.layers.mctp.vdpci.cerberus_challenge import ErrorResponsePacket
+from pymctp_oem_microsoft.layers.mctp.vdpci.cerberus import ErrorResponsePacket
+from pymctp_oem_microsoft.layers.mctp.vdpci.msft_vdm.bmc import GetSystemDevicesRequestPacket
+from pymctp_oem_microsoft.layers.mctp.vdpci import MsftVdmProtocolPacket
 from pymctp.utils import str_to_bytes
 
 
@@ -78,8 +81,21 @@ def build_master_write_read_cmd_getsocbootmode():
     print(" ".join(f"0x{x}" for x in output_str.split()))
 
 
+def build_mvdp_req():
+    req = (VdPciHdrPacket(vendor_id=VdPCIVendorIds.Msft, rq=1, vdm_cmd_code=0xFF) /
+           MsftVdmProtocolPacket(cmd_set=1, protocol_version=0, cmd=0x13) /
+           GetSystemDevicesRequestPacket(start_index=0, entry_count=0, filter_props=0))
+    print(req.summary())
+    req_bytes = raw(req)
+    print(binascii.hexlify(req_bytes))
+
+    output_str = binascii.hexlify(bytes([0x7e]) + req_bytes, b' ', 1).decode()
+    print(" ".join(f"0x{x}" for x in output_str.split()))
+
+
 if __name__ == '__main__':
     # err = ErrorResponsePacket(str_to_bytes("04 0f 15 00 7f"))
     # print(err.summary())
     # build_master_write_read_cmd_getsocbootmode()
-    build_i2ctransfer_cmd()
+    # build_i2ctransfer_cmd()
+    build_mvdp_req()
