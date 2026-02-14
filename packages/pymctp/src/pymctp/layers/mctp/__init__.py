@@ -26,6 +26,7 @@ from .transport import (
 # Import the main Packets for each MsgType to perform autobinding
 from .control import ControlHdrPacket
 from .pldm import PldmHdrPacket
+from .spdm import SpdmHdrPacket
 from .vdpci import VdPciHdrPacket
 from .nvmemi import NvmeMIHdrPacket
 
