@@ -8,15 +8,6 @@ class MsftVdmCommandSets(IntEnum):
     BMC_1P = 4
 
 
-class MsftVdmBaseCmdCodes(IntEnum):
-    STATUS = 0
-    CMD_SET_SUPPORT = 1
-    CAP_NEGOTIATION = 2
-    GET_TEMP = 3
-    HEARTBEAT_CTRL = 4
-    HEARTBEAT = 5
-
-
 class CompletionCodes(IntEnum):
     SUCCESS = 0
     """Command completed successfully."""
