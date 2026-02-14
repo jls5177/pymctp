@@ -16,6 +16,7 @@ from .types import MsftVdmBmcCmdCodes
 
 # --- GET_SYSTEM_DEVICES (0x13) ---
 
+
 class GetSystemDevicesRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-GetSystemDevices-Req"
     fields_desc = [
@@ -26,8 +27,7 @@ class GetSystemDevicesRequestPacket(AllowRawSummary, Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = (
-            f"{self.name} (start={self.start_index}, max={self.max_entry_count}, "
-            f"filter=0x{self.filter_properties:04X})"
+            f"{self.name} (start={self.start_index}, max={self.max_entry_count}, filter=0x{self.filter_properties:04X})"
         )
         return summary, [MsftVdmProtocolPacket]
 
@@ -44,10 +44,7 @@ class GetSystemDevicesResponsePacket(AllowRawSummary, Packet):
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = (
-            f"{self.name} (start={self.start_index}, count={self.entry_count}, "
-            f"remaining={self.remaining_count})"
-        )
+        summary = f"{self.name} (start={self.start_index}, count={self.entry_count}, remaining={self.remaining_count})"
         return summary, [MsftVdmProtocolPacket]
 
     def is_request(self, check_payload: bool = True) -> bool:
@@ -73,12 +70,15 @@ class GetSystemDevicesCmdPacket(Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, GetSystemDevicesCmdPacket,
-    cmd_set=MsftVdmCommandSets.BMC, cmd=MsftVdmBmcCmdCodes.BMC_GET_SYSTEM_DEVICES,
+    MsftVdmProtocolPacket,
+    GetSystemDevicesCmdPacket,
+    cmd_set=MsftVdmCommandSets.BMC,
+    cmd=MsftVdmBmcCmdCodes.BMC_GET_SYSTEM_DEVICES,
 )
 
 
 # --- GET_DEVICE_STRING (0x14) ---
+
 
 class GetDeviceStringRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-GetDeviceString-Req"
@@ -129,12 +129,15 @@ class GetDeviceStringCmdPacket(Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, GetDeviceStringCmdPacket,
-    cmd_set=MsftVdmCommandSets.BMC, cmd=MsftVdmBmcCmdCodes.BMC_GET_DEVICE_STRING,
+    MsftVdmProtocolPacket,
+    GetDeviceStringCmdPacket,
+    cmd_set=MsftVdmCommandSets.BMC,
+    cmd=MsftVdmBmcCmdCodes.BMC_GET_DEVICE_STRING,
 )
 
 
 # --- GET_DEVICE_EID (0x15) ---
+
 
 class GetDeviceEidRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-GetDeviceEid-Req"
@@ -147,10 +150,7 @@ class GetDeviceEidRequestPacket(AllowRawSummary, Packet):
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = (
-            f"{self.name} (vid=0x{self.vendor_id:04X}, did=0x{self.device_id:04X}, "
-            f"inst={self.instance})"
-        )
+        summary = f"{self.name} (vid=0x{self.vendor_id:04X}, did=0x{self.device_id:04X}, inst={self.instance})"
         return summary, [MsftVdmProtocolPacket]
 
     def is_request(self, check_payload: bool = True) -> bool:
@@ -182,6 +182,8 @@ class GetDeviceEidCmdPacket(Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, GetDeviceEidCmdPacket,
-    cmd_set=MsftVdmCommandSets.BMC, cmd=MsftVdmBmcCmdCodes.BMC_GET_DEVICE_EID,
+    MsftVdmProtocolPacket,
+    GetDeviceEidCmdPacket,
+    cmd_set=MsftVdmCommandSets.BMC,
+    cmd=MsftVdmBmcCmdCodes.BMC_GET_DEVICE_EID,
 )

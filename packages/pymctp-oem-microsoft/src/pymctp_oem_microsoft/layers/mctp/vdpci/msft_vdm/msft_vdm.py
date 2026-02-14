@@ -63,6 +63,9 @@ class MsftVdmProtocolPacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    VdPciHdrPacket, MsftVdmProtocolPacket,
-    vendor_id=VdPCIVendorIds.Msft, rq=1, vdm_cmd_code=0xFF,
+    VdPciHdrPacket,
+    MsftVdmProtocolPacket,
+    vendor_id=VdPCIVendorIds.Msft,
+    rq=1,
+    vdm_cmd_code=0xFF,
 )

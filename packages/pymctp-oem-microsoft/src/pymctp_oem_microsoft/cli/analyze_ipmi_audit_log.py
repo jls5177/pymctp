@@ -42,25 +42,25 @@ class IPMILogLine:
     data: bytearray = field(init=False)
 
     def __post_init__(self):
-        for field in fields(self):
-            value = getattr(self, field.name)
-            if field.name == "data":
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if f.name == "data":
                 continue
-            elif field.name == "data_str":
-                object.__setattr__(self, field.name, field.type(value))
+            elif f.name == "data_str":
+                object.__setattr__(self, f.name, f.type(value))
                 value = convert_line_to_bytearray(value)
                 object.__setattr__(self, "data", bytearray(value))
                 continue
-            elif field.name == "timestamp":
+            elif f.name == "timestamp":
                 timestamp = datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f")
                 utc_timestamp = pytz.utc.localize(timestamp)
                 value = utc_timestamp
-                object.__setattr__(self, field.name, value)
+                object.__setattr__(self, f.name, value)
                 continue
 
-            if type(value) is str and field.type is int:
+            if type(value) is str and f.type is int:
                 value = convert_hex_str_to_integer(value)
-            object.__setattr__(self, field.name, field.type(value) if type(value) is not field.type else value)
+            object.__setattr__(self, f.name, f.type(value) if type(value) is not f.type else value)
         if self.req_type == "Res" and self.netfn % 2 == 0:
             object.__setattr__(self, "netfn", self.netfn + 1)
 

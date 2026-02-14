@@ -19,6 +19,7 @@ from .types import MsftVdmBaseCmdCodes
 
 # --- STATUS (0x00) - response only ---
 
+
 class StatusResponsePacket(AllowRawSummary, Packet):
     name = "MsftVdm-Status"
     fields_desc = [
@@ -35,12 +36,15 @@ class StatusResponsePacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, StatusResponsePacket,
-    cmd_set=MsftVdmCommandSets.BASE, cmd=MsftVdmBaseCmdCodes.STATUS,
+    MsftVdmProtocolPacket,
+    StatusResponsePacket,
+    cmd_set=MsftVdmCommandSets.BASE,
+    cmd=MsftVdmBaseCmdCodes.STATUS,
 )
 
 
 # --- CMD_SET_SUPPORT (0x01) ---
+
 
 class CmdSetSupportRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-CmdSetSupport-Req"
@@ -73,8 +77,7 @@ class CmdSetEntryPacket(Packet):
     fields_desc = [
         ByteEnumField("cmd_set_id", 0, MsftVdmCommandSets),
         FieldLenField("version_count", None, count_of="versions", fmt="B"),
-        PacketListField("versions", [], ProtocolVersionPacket,
-                        count_from=lambda pkt: pkt.version_count),
+        PacketListField("versions", [], ProtocolVersionPacket, count_from=lambda pkt: pkt.version_count),
     ]
 
     def extract_padding(self, s):
@@ -95,8 +98,7 @@ class CmdSetSupportResponsePacket(AllowRawSummary, Packet):
     fields_desc = [
         XByteField("next_list_entry", 0),
         FieldLenField("entry_count", None, count_of="entries", fmt="B"),
-        PacketListField("entries", [], CmdSetEntryPacket,
-                        count_from=lambda pkt: pkt.entry_count),
+        PacketListField("entries", [], CmdSetEntryPacket, count_from=lambda pkt: pkt.entry_count),
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
@@ -121,12 +123,15 @@ class CmdSetSupportCmdPacket(Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, CmdSetSupportCmdPacket,
-    cmd_set=MsftVdmCommandSets.BASE, cmd=MsftVdmBaseCmdCodes.CMD_SET_SUPPORT,
+    MsftVdmProtocolPacket,
+    CmdSetSupportCmdPacket,
+    cmd_set=MsftVdmCommandSets.BASE,
+    cmd=MsftVdmBaseCmdCodes.CMD_SET_SUPPORT,
 )
 
 
 # --- CAP_NEGOTIATION (0x02) ---
+
 
 class CapNegotiationRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-CapNeg-Req"
@@ -180,12 +185,15 @@ class CapNegotiationCmdPacket(Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, CapNegotiationCmdPacket,
-    cmd_set=MsftVdmCommandSets.BASE, cmd=MsftVdmBaseCmdCodes.CAP_NEGOTIATION,
+    MsftVdmProtocolPacket,
+    CapNegotiationCmdPacket,
+    cmd_set=MsftVdmCommandSets.BASE,
+    cmd=MsftVdmBaseCmdCodes.CAP_NEGOTIATION,
 )
 
 
 # --- HEARTBEAT_CTRL (0x04) ---
+
 
 class HeartbeatControlRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-HeartbeatCtrl-Req"
@@ -202,20 +210,22 @@ class HeartbeatControlRequestPacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, HeartbeatControlRequestPacket,
-    cmd_set=MsftVdmCommandSets.BASE, cmd=MsftVdmBaseCmdCodes.HEARTBEAT_CTRL,
+    MsftVdmProtocolPacket,
+    HeartbeatControlRequestPacket,
+    cmd_set=MsftVdmCommandSets.BASE,
+    cmd=MsftVdmBaseCmdCodes.HEARTBEAT_CTRL,
 )
 
 
 # --- HEARTBEAT (0x05) ---
+
 
 class HeartbeatRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-Heartbeat-Req"
     fields_desc = [
         XLEShortField("timeout", 0),
         FieldLenField("cpu_count", None, count_of="health_entries", fmt="B"),
-        FieldListField("health_entries", [], XLEIntField("", 0),
-                        count_from=lambda pkt: pkt.cpu_count),
+        FieldListField("health_entries", [], XLEIntField("", 0), count_from=lambda pkt: pkt.cpu_count),
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
@@ -228,6 +238,8 @@ class HeartbeatRequestPacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, HeartbeatRequestPacket,
-    cmd_set=MsftVdmCommandSets.BASE, cmd=MsftVdmBaseCmdCodes.HEARTBEAT,
+    MsftVdmProtocolPacket,
+    HeartbeatRequestPacket,
+    cmd_set=MsftVdmCommandSets.BASE,
+    cmd=MsftVdmBaseCmdCodes.HEARTBEAT,
 )

@@ -8,7 +8,7 @@ Test FwVersionResponsePacket parsing from raw packet data.
 
 from pymctp.layers.mctp import TransportHdrPacket, VdPciHdrPacket
 from pymctp.layers import *
-from pymctp_oem_microsoft.layers.mctp.vdpci.cerberus_challenge import FwVersionResponsePacket
+from pymctp_oem_microsoft.layers.mctp.vdpci.cerberus import FwVersionResponsePacket
 from pymctp.utils import str_to_pkt
 
 
@@ -38,5 +38,5 @@ def test_fw_version_response_packet_parsing():
     assert fw_layer.version.rstrip(b"\x00") == b"4.0.3.0"
 
     # Verify the full module path of the layer
-    assert fw_layer.__class__.__module__ == "pymctp_oem_microsoft.layers.mctp.vdpci.cerberus_challenge"
+    assert fw_layer.__class__.__module__ == "pymctp.layers.mctp.vdpci.cerberus.get_fw_version"
     assert fw_layer.__class__.__name__ == "FwVersionResponsePacket"

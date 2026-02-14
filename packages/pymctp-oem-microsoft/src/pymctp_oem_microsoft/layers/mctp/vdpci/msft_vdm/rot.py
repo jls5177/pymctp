@@ -31,6 +31,7 @@ ROT_FEATURE_FLAGS = [f.name for f in RotFeature]
 
 # --- GET_ROT_CAPABILITIES (0x00) ---
 
+
 class GetRotCapabilitiesRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-GetRotCaps-Req"
     fields_desc = []
@@ -72,12 +73,15 @@ class GetRotCapabilitiesCmdPacket(Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, GetRotCapabilitiesCmdPacket,
-    cmd_set=MsftVdmCommandSets.ROT, cmd=MsftVdmRotCmdCodes.GET_ROT_CAPABILITIES,
+    MsftVdmProtocolPacket,
+    GetRotCapabilitiesCmdPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.GET_ROT_CAPABILITIES,
 )
 
 
 # --- RESET_ROT (0x01) - request only, no payload ---
+
 
 class ResetRotRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-ResetRot-Req"
@@ -94,12 +98,15 @@ class ResetRotRequestPacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, ResetRotRequestPacket,
-    cmd_set=MsftVdmCommandSets.ROT, cmd=MsftVdmRotCmdCodes.RESET_ROT,
+    MsftVdmProtocolPacket,
+    ResetRotRequestPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.RESET_ROT,
 )
 
 
 # --- SET_TIME (0x0B) - request only ---
+
 
 class SetTimeRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-SetTime-Req"
@@ -115,12 +122,15 @@ class SetTimeRequestPacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, SetTimeRequestPacket,
-    cmd_set=MsftVdmCommandSets.ROT, cmd=MsftVdmRotCmdCodes.SET_TIME,
+    MsftVdmProtocolPacket,
+    SetTimeRequestPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.SET_TIME,
 )
 
 
 # --- GET_INTRUSION_DETECTION (0x0C) ---
+
 
 class GetIntrusionDetectionRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-GetIntrusionDet-Req"
@@ -155,6 +165,7 @@ class GetIntrusionDetectionResponsePacket(AllowRawSummary, Packet):
 
 class GetIntrusionDetectionCmdPacket(Packet):
     """Both request and response are 1 byte; use TO bit to differentiate."""
+
     @classmethod
     def dispatch_hook(cls, _pkt=None, *args, **kargs):
         if _pkt is None:
@@ -172,12 +183,15 @@ class GetIntrusionDetectionCmdPacket(Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, GetIntrusionDetectionCmdPacket,
-    cmd_set=MsftVdmCommandSets.ROT, cmd=MsftVdmRotCmdCodes.GET_INTRUSION_DETECTION,
+    MsftVdmProtocolPacket,
+    GetIntrusionDetectionCmdPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.GET_INTRUSION_DETECTION,
 )
 
 
 # --- INTRUSION_EVENT (0x0D) - request only (notification from RoT) ---
+
 
 class IntrusionEventRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-IntrusionEvent"
@@ -193,12 +207,15 @@ class IntrusionEventRequestPacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, IntrusionEventRequestPacket,
-    cmd_set=MsftVdmCommandSets.ROT, cmd=MsftVdmRotCmdCodes.INTRUSION_EVENT,
+    MsftVdmProtocolPacket,
+    IntrusionEventRequestPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.INTRUSION_EVENT,
 )
 
 
 # --- PREPARE_FOR_WARM_RESET (0x10) ---
+
 
 class PrepareForWarmResetRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-PrepWarmReset-Req"
@@ -216,12 +233,15 @@ class PrepareForWarmResetRequestPacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, PrepareForWarmResetRequestPacket,
-    cmd_set=MsftVdmCommandSets.ROT, cmd=MsftVdmRotCmdCodes.PREPARE_FOR_WARM_RESET,
+    MsftVdmProtocolPacket,
+    PrepareForWarmResetRequestPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.PREPARE_FOR_WARM_RESET,
 )
 
 
 # --- WARM_RESET_COMPLETE (0x11) - request only, no payload ---
+
 
 class WarmResetCompleteRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-WarmResetComplete"
@@ -235,6 +255,8 @@ class WarmResetCompleteRequestPacket(AllowRawSummary, Packet):
 
 
 bind_layers(
-    MsftVdmProtocolPacket, WarmResetCompleteRequestPacket,
-    cmd_set=MsftVdmCommandSets.ROT, cmd=MsftVdmRotCmdCodes.WARM_RESET_COMPLETE,
+    MsftVdmProtocolPacket,
+    WarmResetCompleteRequestPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.WARM_RESET_COMPLETE,
 )

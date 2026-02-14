@@ -26,6 +26,7 @@ def _get_update_type_name(cmd_code: int) -> str:
 
 # --- SOC_INIT_FW_UPDATE ---
 
+
 class SocInitFwUpdateRequestPacket(AllowRawSummary, Packet):
     name = "Overlake-SocInitFwUpdate-Req"
     fields_desc = [XLEIntField("size", 0)]
@@ -47,6 +48,7 @@ bind_layers(
 
 
 # --- SOC_UPDATE_FW ---
+
 
 class SocUpdateFwRequestPacket(AllowRawSummary, Packet):
     """Request to send SoC FW update data. Payload follows as raw data."""
