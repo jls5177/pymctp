@@ -18,6 +18,7 @@ from scapy.packet import Raw
 from scapy.utils import PcapReader
 
 from pymctp.analyzers import AnalysisEngine, Severity
+from pymctp.analyzers.cerberus import CerberusLogTransferRule
 from pymctp.analyzers.mctp import FragmentationRule, TagReuseRule
 from pymctp.analyzers.plugin_loader import discover_analyzer_rules
 from pymctp.analyzers.spdm import (
@@ -148,6 +149,8 @@ def _build_builtin_rules(
         SpdmErrorResponseRule(),
         SpdmCertChainRule(),
         SpdmMeasurementsRule(),
+        # Cerberus
+        CerberusLogTransferRule(),
     ]
 
 

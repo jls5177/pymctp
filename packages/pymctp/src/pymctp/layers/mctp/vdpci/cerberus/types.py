@@ -93,9 +93,9 @@ class CerberusErrorCodes(IntEnum):
 class CerberusLogType(IntEnum):
     """Cerberus log types for READ_LOG command."""
 
-    DEBUG = 0
-    ATTESTATION = 1
-    TAMPER = 2
+    DEBUG = 1
+    ATTESTATION = 2
+    TAMPER = 3
 
 
 class CerberusUpdateType(IntEnum):
