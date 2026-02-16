@@ -1,7 +1,11 @@
+from enum import IntEnum
+
 from scapy.fields import (
+    ByteEnumField,
     ByteField,
     FieldLenField,
     FieldListField,
+    PacketListField,
     XByteField,
     XLEShortField,
 )
@@ -12,6 +16,19 @@ from pymctp.layers.mctp.types import AnyPacketType
 from ..types import MsftVdmCommandSets
 from .msft_vdm import MsftVdmProtocolPacket
 from .types import MsftVdmBmcCmdCodes
+
+
+class TransportType(IntEnum):
+    SMBUS = 1
+    PCIE_VDM = 2
+    USB = 3
+    KCS = 4
+    SERIAL = 5
+    I3C = 6
+    MMBI = 7
+    PCC = 8
+    UCIE = 9
+    VENDOR_DEFINED = 0xFF
 
 
 # --- GET_SYSTEM_DEVICES (0x13) ---
@@ -139,6 +156,24 @@ bind_layers(
 # --- GET_DEVICE_EID (0x15) ---
 
 
+class EidEntryPacket(Packet):
+    name = "EidEntry"
+    fields_desc = [
+        ByteField("eid", 0),
+        ByteEnumField("transport_type", 0, TransportType),
+    ]
+
+    def extract_padding(self, s):
+        return b"", s
+
+    def mysummary(self):
+        try:
+            transport = TransportType(self.transport_type).name
+        except ValueError:
+            transport = f"0x{self.transport_type:02X}"
+        return f"{self.eid}({transport})"
+
+
 class GetDeviceEidRequestPacket(AllowRawSummary, Packet):
     name = "MsftVdm-GetDeviceEid-Req"
     fields_desc = [
@@ -160,11 +195,14 @@ class GetDeviceEidRequestPacket(AllowRawSummary, Packet):
 class GetDeviceEidResponsePacket(AllowRawSummary, Packet):
     name = "MsftVdm-DeviceEid"
     fields_desc = [
-        ByteField("eid_count", 0),
+        FieldLenField("eid_count", None, count_of="entries", fmt="B"),
+        PacketListField("entries", [], EidEntryPacket, count_from=lambda pkt: pkt.eid_count),
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = f"{self.name} (count={self.eid_count})"
+        entry_strs = [e.mysummary() for e in self.entries] if self.entries else []
+        entries_str = ", ".join(entry_strs)
+        summary = f"{self.name} (eids=[{entries_str}])"
         return summary, [MsftVdmProtocolPacket]
 
     def is_request(self, check_payload: bool = True) -> bool:
