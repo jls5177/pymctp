@@ -105,10 +105,23 @@ from .types import (  # noqa: F401
     ChallengeCmdCodes,
     DiagCmdCodes,
     OverlakeCmdCodes,
+    PrivateCerberusCmdCodes,
 )
 
 # Private Overlake-specific packets (also registers bind_layers)
 from .overlake import (  # noqa: F401
     SocInitFwUpdateRequestPacket,
     SocUpdateFwRequestPacket,
+)
+
+# Private Microsoft Cerberus packets (also registers bind_layers)
+from .msft_cerberus import (  # noqa: F401
+    COMPONENT_MAP,
+    ComponentInstanceEntry,
+    ComponentInstanceInfoCmdPacket,
+    ComponentInstanceInfoResponsePacket,
+    ForceAttestationCmdPacket,
+    ForceAttestationRequestPacket,
+    ForceAttestationResponsePacket,
+    GetComponentInstanceInfoRequestPacket,
 )

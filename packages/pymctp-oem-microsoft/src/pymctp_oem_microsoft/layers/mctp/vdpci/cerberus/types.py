@@ -41,6 +41,13 @@ class OverlakeCmdCodes(IntEnum):
     GET_SOC_FWVERSION = 0xEF
 
 
+class PrivateCerberusCmdCodes(IntEnum):
+    """Private Cerberus protocol command codes (not publicly published)."""
+
+    GET_PCD_COMPONENT_INSTANCE_INFO = 0x8F
+    FORCE_ATTESTATION = 0x90
+
+
 class DiagCmdCodes(IntEnum):
     """Diagnostic and debug command codes (private)."""
 
@@ -108,6 +115,8 @@ class ChallengeCmdCodes(IntEnum):
     CERBERUS_PROTOCOL_UNSEAL_MESSAGE_RESULT = CerberusCmdCodes.UNSEAL_MESSAGE_RESULT
     CERBERUS_PROTOCOL_GET_CFM_SUPPORTED_COMPONENT_IDS = CerberusCmdCodes.GET_CFM_SUPPORTED_COMPONENT_IDS
     CERBERUS_PROTOCOL_GET_EXT_UPDATE_STATUS = CerberusCmdCodes.GET_EXT_UPDATE_STATUS
+    CERBERUS_PROTOCOL_GET_PCD_COMPONENT_INSTANCE_INFO = PrivateCerberusCmdCodes.GET_PCD_COMPONENT_INSTANCE_INFO
+    CERBERUS_PROTOCOL_FORCE_ATTESTATION = PrivateCerberusCmdCodes.FORCE_ATTESTATION
 
     # Overlake-specific
     OVERLAKE_PROTOCOL_GET_STORAGE = OverlakeCmdCodes.GET_STORAGE
