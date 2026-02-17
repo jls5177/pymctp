@@ -25,4 +25,4 @@ echo "✓ Package built successfully!"
 echo "=========================================="
 echo ""
 echo "Distribution files:"
-find packages/pymctp_oem_microsoft/dist -name "*.whl" -o -name "*.tar.gz" | sort
+find packages/pymctp-oem-microsoft/dist -name "*.whl" -o -name "*.tar.gz" | sort
