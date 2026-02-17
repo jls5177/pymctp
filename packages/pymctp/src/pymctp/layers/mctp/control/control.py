@@ -30,7 +30,7 @@ from ...interfaces import ICanSetMySummaryClasses
 from .. import EndpointContext
 from ..transport import AutobindMessageType, MsgTypes, SmbusTransportPacket, TransportHdrPacket
 from ..types import AnyPacketType
-from . import ContrlCmdCodes, IControlMsgCanReply
+from . import CompletionCodes, ContrlCmdCodes, IControlMsgCanReply
 
 
 class RqBit(IntEnum):
@@ -47,7 +47,9 @@ class ControlHdrPacket(AllowRawSummary, Packet):
         BitField("unused", 0, 1),
         XBitField("instance_id", 0, 5),
         Emph(ByteEnumField("cmd_code", 0, ContrlCmdCodes)),
-        ConditionalField(XByteField("completion_code", 0), lambda pkt: pkt.rq == RqBit.RESPONSE.value),
+        ConditionalField(
+            ByteEnumField("completion_code", 0, CompletionCodes), lambda pkt: pkt.rq == RqBit.RESPONSE.value
+        ),
     ]
 
     def do_dissect_payload(self, s: bytes) -> None:
@@ -66,9 +68,13 @@ class ControlHdrPacket(AllowRawSummary, Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         rqType = "REQ" if self.rq == RqBit.REQUEST.value else "RSP"
-        summary = f"CONTROL {rqType} (instance_id: {self.instance_id}, cmd_code={self.cmd_code}"
+        summary = f"{rqType} ({self.instance_id:02}, {self.cmd_code}"
         if self.rq == RqBit.RESPONSE.value:
-            summary += f", completion_code={self.completion_code})"
+            try:
+                cc_name = CompletionCodes(self.completion_code).name
+            except ValueError:
+                cc_name = f"0x{self.completion_code:02X}"
+            summary += f", {cc_name})"
         else:
             summary += ")"
         return summary, [TransportHdrPacket, SmbusTransportPacket]

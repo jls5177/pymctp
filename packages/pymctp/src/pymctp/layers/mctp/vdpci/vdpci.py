@@ -44,9 +44,7 @@ class VdPciHdrPacket(Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         rqType = "REQ" if self.is_request() else "RSP"
-        summary = (
-            f"{self.name} {rqType} (VID: {self.vendor_id:04X}, cmd_code: 0x{self.vdm_cmd_code:02X}, rq: {self.rq})"
-        )
+        summary = f"{rqType} ({self.vendor_id:04X}:0x{self.vdm_cmd_code:02X})"
         return summary, [TransportHdrPacket, SmbusTransportPacket, TrimmedSmbusTransportPacket]
 
     def do_dissect_payload(self, s: bytes) -> None:

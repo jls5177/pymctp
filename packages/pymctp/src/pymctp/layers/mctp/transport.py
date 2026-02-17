@@ -49,19 +49,13 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         summary = ""
         if self.underlayer and isinstance(self.underlayer, CookedLinux):
             summary += f"[{len(self.original):3}] / "
-        summary += f"MCTP {self.pkt_seq}:{self.tag} ({self.dst:02X} <-- {self.src:02X}) ("
-        flags = []
+        s = "S" if self.som == 1 else " "
+        e = "E" if self.eom == 1 else " "
+        t = "T" if self.to == 1 else " "
+        summary += f"MCTP {self.pkt_seq}:{self.tag} ({self.dst:02X}<-{self.src:02X}) ({s}{e}{t})"
         msg_type = None
         if self.som == 1:
-            flags += ["S"]
             msg_type = self.msg_type
-        if self.eom == 1:
-            flags += ["E"]
-        if self.to == 1:
-            flags += ["TO"]
-        if flags:
-            summary += ":".join(flags)
-        summary += ")"
         # allow unknown message types to be passed in
         if msg_type is not None:
             msg_type_name = getattr(MsgTypes(msg_type), "name", f"{msg_type:02X}")

@@ -332,9 +332,9 @@ def analyze_tcpdump(
 
             # Build the display line once
             if timestamp:
-                line = f"{pkt_id}: {timestamp.isoformat()}: {mctp_packet.summary()}"
+                line = f"{timestamp.isoformat()}: {mctp_packet.summary()}"
             else:
-                line = f"{pkt_id}: {mctp_packet.summary()}"
+                line = f"{mctp_packet.summary()}"
 
             # Print to terminal (suppressed in triage mode)
             if not triage:
