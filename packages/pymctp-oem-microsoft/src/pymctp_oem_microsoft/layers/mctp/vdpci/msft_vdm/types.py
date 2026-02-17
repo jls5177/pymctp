@@ -35,3 +35,5 @@ class MsftVdmRotCmdCodes(IntEnum):
     WARM_RESET_EVENT_CONTROL = 0x0F
     PREPARE_FOR_WARM_RESET = 0x10
     WARM_RESET_COMPLETE = 0x11
+    SEND_LOG = 0x12
+    READ_LOG = 0x13

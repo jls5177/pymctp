@@ -1,16 +1,19 @@
 from enum import IntEnum
 
 from scapy.fields import (
+    ConditionalField,
     FlagsField,
+    StrField,
     XByteField,
     XLEIntField,
+    XLEShortField,
 )
 from scapy.packet import Packet, bind_layers
 
 from pymctp.layers.helpers import AllowRawSummary
 from pymctp.layers.mctp.types import AnyPacketType
 from ..types import MsftVdmCommandSets
-from .msft_vdm import MsftVdmProtocolPacket
+from .msft_vdm import MsftVdmProtocolPacket, _is_response
 from .types import MsftVdmRotCmdCodes
 
 
@@ -259,4 +262,105 @@ bind_layers(
     WarmResetCompleteRequestPacket,
     cmd_set=MsftVdmCommandSets.ROT,
     cmd=MsftVdmRotCmdCodes.WARM_RESET_COMPLETE,
+)
+
+
+# --- SEND_LOG (0x12) ---
+
+
+class SendLogLogType(IntEnum):
+    SEL = 0x01
+    HCP_UEC_CPER = 0x02
+    MINI_CRASH = 0x03
+    SCP_CPER_DIE0 = 0x04
+    SCP_CPER_DIE1 = 0x05
+    UNKNOWN = 0xFF
+
+
+class SendLogHashType(IntEnum):
+    SHA2_256 = 0
+    SHA2_384 = 1
+    SHA2_512 = 2
+
+
+_HASH_DIGEST_LEN = {
+    SendLogHashType.SHA2_256: 32,
+    SendLogHashType.SHA2_384: 48,
+    SendLogHashType.SHA2_512: 64,
+}
+
+SEND_LOG_FLAGS = ["LogReadRequested"]
+
+
+def _send_log_read_requested(pkt: Packet) -> bool:
+    return bool(pkt.flags & 0x01)
+
+
+class SendLogRequestPacket(AllowRawSummary, Packet):
+    name = "MsftVdm-SendLog-Req"
+    fields_desc = [
+        XByteField("log_type", 0),
+        FlagsField("flags", 0, -8, SEND_LOG_FLAGS),
+        # Fields present only when LogReadRequested is set
+        ConditionalField(XLEShortField("log_id", 0), _send_log_read_requested),
+        ConditionalField(XLEIntField("total_length", 0), _send_log_read_requested),
+        ConditionalField(XByteField("hash_type", 0), _send_log_read_requested),
+        ConditionalField(
+            StrField("digest", b""),
+            _send_log_read_requested,
+        ),
+    ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        try:
+            lt = SendLogLogType(self.log_type).name
+        except ValueError:
+            lt = f"0x{self.log_type:02X}"
+
+        if _send_log_read_requested(self):
+            try:
+                ht = SendLogHashType(self.hash_type).name
+            except ValueError:
+                ht = f"0x{self.hash_type:02X}"
+            summary = f"{self.name} (type={lt}, log_id=0x{self.log_id:04X}, len={self.total_length}, hash={ht})"
+        else:
+            payload_len = len(self.payload) if self.payload else 0
+            summary = f"{self.name} (type={lt}, content_len={payload_len})"
+        return summary, [MsftVdmProtocolPacket]
+
+    def is_request(self, check_payload: bool = True) -> bool:
+        return True
+
+
+class SendLogResponsePacket(AllowRawSummary, Packet):
+    name = "MsftVdm-SendLog-Res"
+    fields_desc = []
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        return f"{self.name} ()", [MsftVdmProtocolPacket]
+
+    def is_request(self, check_payload: bool = True) -> bool:
+        return False
+
+
+class SendLogCmdPacket(Packet):
+    @classmethod
+    def dispatch_hook(cls, _pkt=None, *args, **kargs):
+        if _pkt is None:
+            return cls
+        underlayer = kargs.get("_underlayer")
+        if underlayer is not None:
+            try:
+                if _is_response(underlayer):
+                    return SendLogResponsePacket
+            except (AttributeError, KeyError):
+                pass
+        return SendLogRequestPacket
+
+
+bind_layers(
+    MsftVdmProtocolPacket,
+    SendLogCmdPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.SEND_LOG,
 )
