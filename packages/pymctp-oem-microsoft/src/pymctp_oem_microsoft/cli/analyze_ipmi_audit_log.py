@@ -5,18 +5,22 @@
 """Analyze IPMI audit log files containing IPMI and MCTP traffic."""
 
 import pathlib
+import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
-from typing import Dict, TextIO
 
 import click
 import pytz
 from scapy.config import conf
 from tzlocal import get_localzone_name
 
-from pymctp.layers import TransportHdrPacket, ipmi, mctp
+from pymctp.cli.triage import print_triage_report, setup_triage_engine, tally_mctp_packet, triage_options
+from pymctp.layers import TransportHdrPacket, ipmi
 from pymctp.utils.helpers import set_printable_raw_layer
+
+from pymctp_oem_microsoft.analyzers import IpmiMissingResponseRule, IpmiSlowResponseRule
 
 
 def is_dst_active(zonename: str) -> bool:
@@ -71,6 +75,17 @@ class IPMILogLine:
         return bytearray([self.netfn << 2, self.cmd]) + self.data
 
 
+_IPMI_LOG_RE = re.compile(
+    r"(?P<timestamp>.+?) (?P<intf>LAN|KCS|SSIF|OEM) - "
+    r"(?P<req_type>Res|Req) "
+    r"Ch:(?P<channel>[0-9]{1,2}); "
+    r"Nfn:(?P<netfn>[0-9a-fA-F]{1,2}); "
+    r"Cmd:(?P<cmd>[0-9a-fA-F]{1,2}); "
+    r"Data:(?P<data_str>[0-9a-fA-F ]*?)"
+    r"[ ]*?-"
+)
+
+
 def convert_hex_str_to_integer(value: str) -> int:
     """Convert hex string to integer."""
     return int(value, 16)
@@ -81,30 +96,18 @@ def convert_line_to_bytearray(line: str) -> list:
     return [convert_hex_str_to_integer(b) for b in line.split(" ") if b]
 
 
-def parse_ipmi_log_line(line: str) -> Dict[datetime, IPMILogLine]:
+def parse_ipmi_log_line(line: str) -> dict[datetime, IPMILogLine]:
     """Parse a single IPMI log line.
 
     Parses lines like:
     2011-04-06 01:34:22.396961 LAN - Res Ch:1; Nfn:6; Cmd:1; Data:0 20 1 2 8 2 4f 37 1 0 5d 8 0 0 0 0  -
     """
-    import re
-
-    ipmiLogLineRE = re.compile(
-        r"(?P<timestamp>.+?) (?P<intf>LAN|KCS|SSIF|OEM) - "
-        r"(?P<req_type>Res|Req) "
-        r"Ch:(?P<channel>[0-9]{1,2}); "
-        r"Nfn:(?P<netfn>[0-9a-fA-F]{1,2}); "
-        r"Cmd:(?P<cmd>[0-9a-fA-F]{1,2}); "
-        r"Data:(?P<data_str>[0-9a-fA-F ]*?)"
-        r"[ ]*?-"
-    )
-
-    parsedData = dict()
-    for match in ipmiLogLineRE.finditer(line):
+    parsed_data: dict[datetime, IPMILogLine] = {}
+    for match in _IPMI_LOG_RE.finditer(line):
         line_data = match.groupdict()
         ipmi_obj = IPMILogLine(**line_data)
-        parsedData[ipmi_obj.timestamp] = ipmi_obj
-    return parsedData
+        parsed_data[ipmi_obj.timestamp] = ipmi_obj
+    return parsed_data
 
 
 @click.command()
@@ -143,14 +146,15 @@ def parse_ipmi_log_line(line: str) -> Dict[datetime, IPMILogLine]:
     "--threshold",
     type=float,
     default=500.0,
-    help="Response time threshold in milliseconds for logging slow responses (default: 500ms)",
+    help="Response time threshold in milliseconds for IPMI slow response rule (default: 500ms)",
 )
 @click.option(
     "--no-missing-check",
     is_flag=True,
     default=False,
-    help="Disable missing response detection",
+    help="Disable IPMI missing response detection rule",
 )
+@triage_options
 def analyze_ipmi_audit_log(
     input_file: pathlib.Path | None,
     verbose: bool,
@@ -158,6 +162,13 @@ def analyze_ipmi_audit_log(
     show_all: bool,
     threshold: float,
     no_missing_check: bool,
+    triage: bool,
+    min_severity: str,
+    rules: tuple[str, ...],
+    response_timeout: float,
+    gap_threshold: float,
+    json_report: pathlib.Path | None,
+    packet_log: pathlib.Path | None,
 ):
     """Analyze IPMI audit log files containing IPMI and MCTP traffic.
 
@@ -167,7 +178,10 @@ def analyze_ipmi_audit_log(
 
     When an input file is provided, outputs are written to:
     - <input>.decoded.log - All decoded packets
-    - <input>.missing.log - Missing or slow responses
+    - <input>.missing.log - Missing or slow responses (legacy mode only)
+
+    Use --triage to enable the full analysis engine with all upstream and
+    IPMI-specific triage rules.
 
     Examples:
 
@@ -190,26 +204,50 @@ def analyze_ipmi_audit_log(
     \b
     # Adjust response time threshold
     pymctp analyze-ipmi-audit-log -i audit.log --threshold 1000
+
+    \b
+    # Run full triage analysis
+    pymctp analyze-ipmi-audit-log -i audit.log --triage
+
+    \b
+    # Triage with JSON report
+    pymctp analyze-ipmi-audit-log -i audit.log --triage --json-report report.json
     """
     set_printable_raw_layer()
 
-    # Determine input source and output files
+    # --- Build IPMI-specific rules ---
+    extra_rules = []
+    if not no_missing_check:
+        extra_rules.append(IpmiMissingResponseRule())
+    extra_rules.append(IpmiSlowResponseRule(threshold=timedelta(milliseconds=threshold)))
+
+    # --- Set up triage engine ---
+    engine, severity_level = setup_triage_engine(
+        triage, min_severity, rules, response_timeout, gap_threshold, extra_rules=extra_rules
+    )
+
+    # --- Determine input source and output files ---
     if input_file:
         fd = open(input_file, "r")
         decoded_output = open(f"{input_file}.decoded.log", "w")
-        missing_output = open(f"{input_file}.missing.log", "w") if not no_missing_check else None
         click.echo(f"Analyzing: {input_file}")
         click.echo(f"Writing decoded packets to: {input_file}.decoded.log")
-        if missing_output:
-            click.echo(f"Writing missing/slow responses to: {input_file}.missing.log")
     else:
         fd = sys.stdin
         decoded_output = sys.stdout
-        missing_output = None
-        no_missing_check = True  # Can't track missing responses without file context
+
+    # Legacy missing output file (when triage is not enabled)
+    missing_output = None
+    if input_file and not triage and not no_missing_check:
+        missing_output = open(f"{input_file}.missing.log", "w")
+        click.echo(f"Writing missing/slow responses to: {input_file}.missing.log")
+
+    packet_log_file = packet_log.open("w") if packet_log is not None else None
+    type_counts: Counter[str] = Counter()
+    pkt_count = 0
 
     try:
-        # Track request/response pairs for missing response detection
+        # Track request/response pairs for legacy (non-triage) missing response detection
         req_timestamp: datetime | None = None
         req_pkt: ipmi.TransportHdrPacket | None = None
         req_intf: str | None = None
@@ -227,43 +265,48 @@ def analyze_ipmi_audit_log(
                 continue
 
             for timestamp, cmd in parsed_data.items():
+                pkt_count += 1
                 ipmi_packet = ipmi.TransportHdrPacket(cmd.get_data())
 
-                # Handle missing response detection
-                if not no_missing_check:
-                    if ipmi_packet.is_request():
-                        # Check if previous request is missing a response
-                        if req_pkt and req_intf == "KCS":
-                            output_line = "Response missing for KCS request\n"
-                            output_line += f"{req_timestamp.isoformat()}: {req_pkt.summary()}\n"
-                            if missing_output:
-                                missing_output.write(output_line)
-                            if verbose:
-                                click.echo(output_line.strip(), err=True)
+                # Store interface info on the packet for IpmiMissingResponseRule
+                ipmi_packet.ipmi_intf = cmd.intf
 
-                        # Store new request
-                        req_timestamp = timestamp
-                        req_pkt = ipmi_packet
-                        req_intf = cmd.intf
-                    else:
-                        # This is a response
-                        if req_timestamp and req_pkt:
-                            elapsed_time: timedelta = timestamp - req_timestamp
-                            elapsed_time_ms = elapsed_time.total_seconds() * 1000
+                # Triage mode — feed to engine
+                if engine is not None:
+                    engine.feed(pkt_count, timestamp, ipmi_packet)
 
-                            if elapsed_time_ms > threshold:
-                                output_line = f"Slow response: {elapsed_time_ms:.2f} ms\n"
+                    # Tally MCTP message types if the packet has an MCTP layer
+                    if ipmi_packet.haslayer(TransportHdrPacket):
+                        tally_mctp_packet(ipmi_packet.getlayer(TransportHdrPacket), type_counts)
+                else:
+                    # Legacy mode — inline missing/slow response detection
+                    if not no_missing_check:
+                        if ipmi_packet.is_request():
+                            if req_pkt and req_intf == "KCS":
+                                output_line = "Response missing for KCS request\n"
                                 output_line += f"{req_timestamp.isoformat()}: {req_pkt.summary()}\n"
-                                output_line += f"{timestamp.isoformat()}: {ipmi_packet.summary()}\n"
                                 if missing_output:
                                     missing_output.write(output_line)
                                 if verbose:
                                     click.echo(output_line.strip(), err=True)
-
-                        # Clear request tracking
-                        req_pkt = None
-                        req_timestamp = None
-                        req_intf = None
+                            req_timestamp = timestamp
+                            req_pkt = ipmi_packet
+                            req_intf = cmd.intf
+                        else:
+                            if req_timestamp and req_pkt:
+                                elapsed_time: timedelta = timestamp - req_timestamp
+                                elapsed_time_ms = elapsed_time.total_seconds() * 1000
+                                if elapsed_time_ms > threshold:
+                                    output_line = f"Slow response: {elapsed_time_ms:.2f} ms\n"
+                                    output_line += f"{req_timestamp.isoformat()}: {req_pkt.summary()}\n"
+                                    output_line += f"{timestamp.isoformat()}: {ipmi_packet.summary()}\n"
+                                    if missing_output:
+                                        missing_output.write(output_line)
+                                    if verbose:
+                                        click.echo(output_line.strip(), err=True)
+                            req_pkt = None
+                            req_timestamp = None
+                            req_intf = None
 
                 # Filter packets for decoded output
                 if not show_all and (not ipmi_packet.payload or isinstance(ipmi_packet.payload, conf.raw_layer)):
@@ -272,17 +315,34 @@ def analyze_ipmi_audit_log(
                 if mctp_only and not ipmi_packet.haslayer(TransportHdrPacket):
                     continue
 
-                # Write to decoded output
-                pkt_summary = f"{timestamp.isoformat()}: {ipmi_packet.summary()}\n"
-                decoded_output.write(pkt_summary)
-                if decoded_output == sys.stdout:
-                    decoded_output.flush()
+                # Build display line
+                pkt_summary = f"{timestamp.isoformat()}: {ipmi_packet.summary()}"
+
+                # Print to terminal (suppressed in triage mode)
+                if not triage:
+                    decoded_output.write(pkt_summary + "\n")
+                    if decoded_output == sys.stdout:
+                        decoded_output.flush()
+
+                # Write to packet log file if requested
+                if packet_log_file is not None:
+                    packet_log_file.write(pkt_summary + "\n")
 
     finally:
-        # Clean up file handles
         if fd != sys.stdin:
             fd.close()
         if decoded_output != sys.stdout:
             decoded_output.close()
         if missing_output:
             missing_output.close()
+        if packet_log_file is not None:
+            packet_log_file.close()
+
+    click.echo(f"Total packets: {pkt_count}")
+
+    if packet_log is not None:
+        click.echo(f"Packet listing written to: {packet_log}")
+
+    # --- Triage report ---
+    if engine is not None:
+        print_triage_report(engine, severity_level, type_counts, json_report)
