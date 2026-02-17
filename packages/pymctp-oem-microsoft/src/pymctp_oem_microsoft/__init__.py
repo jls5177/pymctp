@@ -7,4 +7,4 @@
 This package provides Microsoft-specific MCTP and IPMI layer implementations.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

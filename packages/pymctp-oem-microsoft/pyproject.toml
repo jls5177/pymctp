@@ -60,7 +60,7 @@ tag_sign = false
 exclude = [
     ".history",
     ".ruff_cache",
-    ".venv",
+    ".venv*",
     ".vscode",
     "dist",
 ]
