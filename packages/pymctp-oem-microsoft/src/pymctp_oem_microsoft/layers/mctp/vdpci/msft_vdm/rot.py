@@ -298,14 +298,14 @@ _HASH_DIGEST_LEN = {
 
 def _format_log_type(val: int) -> str:
     try:
-        return RasLogType(val).name
+        return f"0x{val:02X}:{RasLogType(val).name}"
     except ValueError:
         return f"0x{val:02X}"
 
 
 def _format_hash_type(val: int) -> str:
     try:
-        return RasHashType(val).name
+        return f"0x{val:02X}:{RasHashType(val).name}"
     except ValueError:
         return f"0x{val:02X}"
 

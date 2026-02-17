@@ -168,7 +168,7 @@ class EidEntryPacket(Packet):
 
     def mysummary(self):
         try:
-            transport = TransportType(self.transport_type).name
+            transport = f"{self.transport_type}({TransportType(self.transport_type).name})"
         except ValueError:
             transport = f"0x{self.transport_type:02X}"
         return f"{self.eid}({transport})"

@@ -33,13 +33,13 @@ class MsftVdmProtocolPacket(AllowRawSummary, Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         try:
-            set_name = MsftVdmCommandSets(self.cmd_set).name
+            set_name = f"{self.cmd_set}({MsftVdmCommandSets(self.cmd_set).name})"
         except ValueError:
             set_name = f"0x{self.cmd_set:02X}"
         summary = f"MSFT-VDM (set={set_name}, cmd=0x{self.cmd:02X}, ver={self.protocol_version}"
         if _is_response(self):
             try:
-                cc_name = CompletionCodes(self.completion_code).name
+                cc_name = f"0x{self.completion_code:02X}({CompletionCodes(self.completion_code).name})"
             except ValueError:
                 cc_name = f"0x{self.completion_code:02X}"
             summary += f", cc={cc_name}"

@@ -85,7 +85,7 @@ class CmdSetEntryPacket(Packet):
 
     def mysummary(self):
         try:
-            name = MsftVdmCommandSets(self.cmd_set_id).name
+            name = f"{self.cmd_set_id}({MsftVdmCommandSets(self.cmd_set_id).name})"
         except ValueError:
             name = f"0x{self.cmd_set_id:02X}"
         ver_count = self.version_count if self.version_count is not None else len(self.versions)
