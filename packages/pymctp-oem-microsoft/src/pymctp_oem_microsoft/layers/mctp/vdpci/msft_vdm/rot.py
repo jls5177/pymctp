@@ -2,7 +2,9 @@ from enum import IntEnum
 
 from scapy.fields import (
     ConditionalField,
+    FieldLenField,
     FlagsField,
+    PacketListField,
     StrField,
     XByteField,
     XLEIntField,
@@ -268,7 +270,11 @@ bind_layers(
 # --- SEND_LOG (0x12) ---
 
 
-class SendLogLogType(IntEnum):
+# --- Shared enums for RAS log commands (SendLog / ReadLog) ---
+
+
+class RasLogType(IntEnum):
+    LIST_ALL = 0x00
     SEL = 0x01
     HCP_UEC_CPER = 0x02
     MINI_CRASH = 0x03
@@ -277,17 +283,32 @@ class SendLogLogType(IntEnum):
     UNKNOWN = 0xFF
 
 
-class SendLogHashType(IntEnum):
+class RasHashType(IntEnum):
     SHA2_256 = 0
     SHA2_384 = 1
     SHA2_512 = 2
 
 
 _HASH_DIGEST_LEN = {
-    SendLogHashType.SHA2_256: 32,
-    SendLogHashType.SHA2_384: 48,
-    SendLogHashType.SHA2_512: 64,
+    RasHashType.SHA2_256: 32,
+    RasHashType.SHA2_384: 48,
+    RasHashType.SHA2_512: 64,
 }
+
+
+def _format_log_type(val: int) -> str:
+    try:
+        return RasLogType(val).name
+    except ValueError:
+        return f"0x{val:02X}"
+
+
+def _format_hash_type(val: int) -> str:
+    try:
+        return RasHashType(val).name
+    except ValueError:
+        return f"0x{val:02X}"
+
 
 SEND_LOG_FLAGS = ["LogReadRequested"]
 
@@ -312,16 +333,10 @@ class SendLogRequestPacket(AllowRawSummary, Packet):
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        try:
-            lt = SendLogLogType(self.log_type).name
-        except ValueError:
-            lt = f"0x{self.log_type:02X}"
+        lt = _format_log_type(self.log_type)
 
         if _send_log_read_requested(self):
-            try:
-                ht = SendLogHashType(self.hash_type).name
-            except ValueError:
-                ht = f"0x{self.hash_type:02X}"
+            ht = _format_hash_type(self.hash_type)
             summary = f"{self.name} (type={lt}, log_id=0x{self.log_id:04X}, len={self.total_length}, hash={ht})"
         else:
             payload_len = len(self.payload) if self.payload else 0
@@ -363,4 +378,137 @@ bind_layers(
     SendLogCmdPacket,
     cmd_set=MsftVdmCommandSets.ROT,
     cmd=MsftVdmRotCmdCodes.SEND_LOG,
+)
+
+
+# --- READ_LOG (0x13) ---
+
+
+class ReadLogRequestPacket(AllowRawSummary, Packet):
+    name = "MsftVdm-ReadLog-Req"
+    fields_desc = [
+        XByteField("log_type", 0),
+        XLEShortField("log_id", 0),
+        XLEIntField("offset", 0),
+    ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        lt = _format_log_type(self.log_type)
+        summary = f"{self.name} (type={lt}, log_id=0x{self.log_id:04X}, offset={self.offset})"
+        return summary, [MsftVdmProtocolPacket]
+
+    def is_request(self, check_payload: bool = True) -> bool:
+        return True
+
+
+class LogInfoEntryPacket(Packet):
+    """Single log info entry in a ReadLog list response."""
+
+    name = "LogInfoEntry"
+    fields_desc = [
+        XByteField("log_type", 0),
+        XLEShortField("log_id", 0),
+        XLEIntField("total_length", 0),
+        XByteField("hash_type", 0),
+        StrField("digest", b""),
+    ]
+
+    def extract_padding(self, s: bytes) -> tuple[bytes, bytes]:
+        # Determine digest length from hash_type, consume only that many bytes
+        digest_len = _HASH_DIGEST_LEN.get(self.hash_type, 0)
+        # digest field already consumed everything; split it
+        actual_digest = bytes(self.digest)[:digest_len]
+        remaining = bytes(self.digest)[digest_len:]
+        self.digest = actual_digest
+        return remaining, b""
+
+    def mysummary(self) -> str:
+        lt = _format_log_type(self.log_type)
+        ht = _format_hash_type(self.hash_type)
+        return f"LogInfo(type={lt}, id=0x{self.log_id:04X}, len={self.total_length}, hash={ht})"
+
+
+class ReadLogListResponsePacket(AllowRawSummary, Packet):
+    """ReadLog response when request log_type==0 (list all logs)."""
+
+    name = "MsftVdm-ReadLog-List"
+    fields_desc = [
+        FieldLenField("entry_count", None, count_of="entries", fmt="B"),
+        PacketListField("entries", [], LogInfoEntryPacket, count_from=lambda pkt: pkt.entry_count),
+    ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        count = len(self.entries) if self.entries else 0
+        entry_strs = [e.mysummary() for e in self.entries] if self.entries else []
+        summary = f"{self.name} (count={count}, [{', '.join(entry_strs)}])"
+        return summary, [MsftVdmProtocolPacket]
+
+    def is_request(self, check_payload: bool = True) -> bool:
+        return False
+
+
+class ReadLogDataResponsePacket(AllowRawSummary, Packet):
+    """ReadLog response when request log_type!=0 (data read)."""
+
+    name = "MsftVdm-ReadLog-Data"
+    fields_desc = [
+        XByteField("log_type", 0),
+        XLEShortField("log_id", 0),
+        XLEIntField("offset", 0),
+        XByteField("hash_type", 0),
+        StrField("digest", b""),
+    ]
+
+    def pre_dissect(self, s: bytes) -> bytes:
+        """Split digest from trailing data based on hash_type."""
+        if len(s) >= 8:
+            hash_type_val = s[7]
+            digest_len = _HASH_DIGEST_LEN.get(hash_type_val, 0)
+            # Store boundary so post_dissect can split payload
+            self._data_offset = 8 + digest_len
+        else:
+            self._data_offset = len(s)
+        return s
+
+    def post_dissect(self, s: bytes) -> bytes:
+        """Separate digest field from remaining data payload."""
+        boundary = getattr(self, "_data_offset", len(self.digest) + 8) - 8
+        actual_digest = bytes(self.digest)[:boundary]
+        remaining = bytes(self.digest)[boundary:]
+        self.digest = actual_digest
+        return remaining
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        lt = _format_log_type(self.log_type)
+        ht = _format_hash_type(self.hash_type)
+        data_len = len(self.payload) if self.payload else 0
+        summary = (
+            f"{self.name} (type={lt}, log_id=0x{self.log_id:04X}, offset={self.offset}, hash={ht}, data_len={data_len})"
+        )
+        return summary, [MsftVdmProtocolPacket]
+
+    def is_request(self, check_payload: bool = True) -> bool:
+        return False
+
+
+class ReadLogCmdPacket(Packet):
+    @classmethod
+    def dispatch_hook(cls, _pkt=None, *args, **kargs):
+        if _pkt is None:
+            return cls
+        underlayer = kargs.get("_underlayer")
+        if underlayer is not None:
+            try:
+                if _is_response(underlayer):
+                    return ReadLogDataResponsePacket
+            except (AttributeError, KeyError):
+                pass
+        return ReadLogRequestPacket
+
+
+bind_layers(
+    MsftVdmProtocolPacket,
+    ReadLogCmdPacket,
+    cmd_set=MsftVdmCommandSets.ROT,
+    cmd=MsftVdmRotCmdCodes.READ_LOG,
 )
