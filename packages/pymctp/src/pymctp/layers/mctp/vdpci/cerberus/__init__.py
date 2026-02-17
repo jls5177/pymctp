@@ -10,6 +10,14 @@ from .types import (
     CerberusUpdateType,
 )
 
+from .rot_errors import (
+    ROT_ERROR_TABLE_PUBLIC,
+    RotErrorInfo,
+    RotErrorTable,
+    RotModuleErrors,
+    RotModuleId,
+)
+
 from .error import ErrorResponsePacket
 
 from .get_fw_version import (
