@@ -9,7 +9,7 @@ from scapy.packet import Packet
 
 from .. import EndpointContext
 from ..types import AnyPacketType
-from .control import AutobindControlMsg, ControlHdr, set_control_fields
+from .control import AutobindControlMsg, ControlHdr
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
@@ -24,20 +24,13 @@ class AllocateEIDAllocationStatus(IntEnum):
     REJECTED = 1
 
 
-@AutobindControlMsg(ContrlCmdCodes.AllocateEndpointIDs)
-class AllocateEndpointIDsPacket(Packet):
-    fields_desc = set_control_fields(
-        rq_fields=[
-            XByteEnumField("op", 0, AllocateEIDOperation),
-            XByteField("allocated_pool_size", 0),
-            XByteField("starting_eid", 0),
-        ],
-        rsp_fields=[
-            XByteEnumField("status", 0, AllocateEIDAllocationStatus),
-            XByteField("eid_pool_size", 0),
-            XByteField("first_eid", 0),
-        ],
-    )
+@AutobindControlMsg(ContrlCmdCodes.AllocateEndpointIDs, is_request=True)
+class AllocateEndpointIDsRequestPacket(Packet):
+    fields_desc = [
+        XByteEnumField("op", 0, AllocateEIDOperation),
+        XByteField("allocated_pool_size", 0),
+        XByteField("starting_eid", 0),
+    ]
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.is_bus_owner:
@@ -65,13 +58,26 @@ class AllocateEndpointIDsPacket(Packet):
         )
 
 
+@AutobindControlMsg(ContrlCmdCodes.AllocateEndpointIDs, is_request=False)
+class AllocateEndpointIDsResponsePacket(Packet):
+    fields_desc = [
+        XByteEnumField("status", 0, AllocateEIDAllocationStatus),
+        XByteField("eid_pool_size", 0),
+        XByteField("first_eid", 0),
+    ]
+
+
+# Keep backward compatibility alias
+AllocateEndpointIDsPacket = AllocateEndpointIDsRequestPacket
+
+
 def AllocateEndpointIDs(
     _pkt: bytes | bytearray = b"", /, *, op: AllocateEIDOperation, allocated_pool_size: int, starting_eid: int
-) -> AllocateEndpointIDsPacket:
+) -> AllocateEndpointIDsRequestPacket:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.AllocateEndpointIDs)
     if _pkt:
-        return AllocateEndpointIDsPacket(_pkt, _underlayer=hdr)
-    return AllocateEndpointIDsPacket(
+        return AllocateEndpointIDsRequestPacket(_pkt, _underlayer=hdr)
+    return AllocateEndpointIDsRequestPacket(
         op=op,
         allocated_pool_size=allocated_pool_size,
         starting_eid=starting_eid,
@@ -84,8 +90,8 @@ def AllocateEndpointIDsResponse(
 ):
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.AllocateEndpointIDs)
     if _pkt:
-        return AllocateEndpointIDsPacket(_pkt, _underlayer=hdr)
-    return AllocateEndpointIDsPacket(
+        return AllocateEndpointIDsResponsePacket(_pkt, _underlayer=hdr)
+    return AllocateEndpointIDsResponsePacket(
         status=status,
         eid_pool_size=eid_pool_size,
         first_eid=first_eid,

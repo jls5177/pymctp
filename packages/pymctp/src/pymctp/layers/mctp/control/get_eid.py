@@ -13,7 +13,6 @@ from .control import (
     AutobindControlMsg,
     ControlHdr,
     ControlHdrPacket,
-    set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
@@ -43,36 +42,10 @@ class EndpointIDType(IntEnum):
     different than the static value"""
 
 
-@AutobindControlMsg(ContrlCmdCodes.GetEndpointID)
-class GetEndpointIDPacket(Packet):
+@AutobindControlMsg(ContrlCmdCodes.GetEndpointID, is_request=True)
+class GetEndpointIDRequestPacket(Packet):
     name = "GetEndpointID"
-
-    fields_desc = set_control_fields(
-        rsp_fields=[
-            XByteField("eid", 0),
-            BitField("unused", 0, 2),
-            BitEnumField("endpoint_type", 0, 2, EndpointType),
-            BitField("unused2", 0, 2),
-            BitEnumField("endpoint_id_type", 0, 2, EndpointIDType),
-            XByteField("medium_specific", 0),
-        ],
-    )
-
-    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        summary = f"{self.name}"
-        if self.underlayer.getfieldval("rq") == 0:
-            summary += f" (eid: {self.eid:02X}, type: "
-            summary += "simple, " if self.endpoint_type == 0 else "busowner, "
-            if self.endpoint_id_type == EndpointIDType.DYNAMIC.value:
-                summary += "eid_type: dynamic"
-            elif self.endpoint_id_type == EndpointIDType.STATIC_EID_SUPPORTED.value:
-                summary += "eid_type: static_eid_supported"
-            elif self.endpoint_id_type == EndpointIDType.STATIC_EID_MATCH.value:
-                summary += "eid_type: static_eid_match"
-            elif self.endpoint_id_type == EndpointIDType.STATIC_EID_MISMATCH.value:
-                summary += "eid_type: static_eid_mismatch"
-            summary += ")"
-        return summary, [ControlHdrPacket, TransportHdrPacket]
+    fields_desc = []
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         cmplt_code = CompletionCodes.SUCCESS
@@ -91,11 +64,43 @@ class GetEndpointIDPacket(Packet):
         )
 
 
-def GetEndpointID(*args) -> GetEndpointIDPacket:
+@AutobindControlMsg(ContrlCmdCodes.GetEndpointID, is_request=False)
+class GetEndpointIDResponsePacket(Packet):
+    name = "GetEndpointID"
+    fields_desc = [
+        XByteField("eid", 0),
+        BitField("unused", 0, 2),
+        BitEnumField("endpoint_type", 0, 2, EndpointType),
+        BitField("unused2", 0, 2),
+        BitEnumField("endpoint_id_type", 0, 2, EndpointIDType),
+        XByteField("medium_specific", 0),
+    ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = f"{self.name}"
+        summary += f" (eid: {self.eid:02X}, type: "
+        summary += "simple, " if self.endpoint_type == 0 else "busowner, "
+        if self.endpoint_id_type == EndpointIDType.DYNAMIC.value:
+            summary += "eid_type: dynamic"
+        elif self.endpoint_id_type == EndpointIDType.STATIC_EID_SUPPORTED.value:
+            summary += "eid_type: static_eid_supported"
+        elif self.endpoint_id_type == EndpointIDType.STATIC_EID_MATCH.value:
+            summary += "eid_type: static_eid_match"
+        elif self.endpoint_id_type == EndpointIDType.STATIC_EID_MISMATCH.value:
+            summary += "eid_type: static_eid_mismatch"
+        summary += ")"
+        return summary, [ControlHdrPacket, TransportHdrPacket]
+
+
+# Keep backward compatibility alias
+GetEndpointIDPacket = GetEndpointIDRequestPacket
+
+
+def GetEndpointID(*args) -> GetEndpointIDRequestPacket:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.GetEndpointID)
     if len(args):
-        return GetEndpointIDPacket(*args, _underlayer=hdr)
-    return GetEndpointIDPacket(_underlayer=hdr)
+        return GetEndpointIDRequestPacket(*args, _underlayer=hdr)
+    return GetEndpointIDRequestPacket(_underlayer=hdr)
 
 
 def GetEndpointIDResponse(
@@ -104,15 +109,14 @@ def GetEndpointIDResponse(
     endpoint_type: EndpointType = EndpointType.SIMPLE,
     endpoint_id_type: EndpointIDType = EndpointIDType.DYNAMIC,
     medium_specific: int = 0,
-) -> GetEndpointIDPacket:
+) -> GetEndpointIDResponsePacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetEndpointID)
     if len(args):
-        return GetEndpointIDPacket(*args, _underlayer=hdr)
-    return GetEndpointIDPacket(
+        return GetEndpointIDResponsePacket(*args, _underlayer=hdr)
+    return GetEndpointIDResponsePacket(
         eid=eid,
         endpoint_type=endpoint_type,
         endpoint_id_type=endpoint_id_type,
         medium_specific=medium_specific,
-        # add a default underlayer to set the required "rq" field
         _underlayer=hdr,
     )

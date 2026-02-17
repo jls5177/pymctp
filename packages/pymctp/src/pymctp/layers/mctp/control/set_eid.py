@@ -9,7 +9,7 @@ from scapy.packet import Packet
 
 from .. import EndpointContext, TransportHdrPacket
 from ..types import AnyPacketType
-from .control import AutobindControlMsg, ControlHdr, ControlHdrPacket, set_control_fields
+from .control import AutobindControlMsg, ControlHdr, ControlHdrPacket
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
@@ -32,7 +32,7 @@ class SetEndpointIDOperation(IntEnum):
     ERROR_INVALID_DATA completion code shall be returned if this operation is not supported."""
 
     SetDiscoveredFlag = 3
-    """Set Discovered flag to the “discovered” state only. Do not change present EID setting. The EID value in byte 2
+    """Set Discovered flag to the "discovered" state only. Do not change present EID setting. The EID value in byte 2
     shall be ignored.
 
     Note that Discovered flag is only used for some physical transport bindings. An
@@ -51,49 +51,25 @@ class SetEndpointIDAllocationStatus(IntEnum):
     EID_POOL_ALREADY_ASSIGNED = 2
 
 
-@AutobindControlMsg(ContrlCmdCodes.SetEndpointID)
-class SetEndpointIDPacket(Packet):
-    fields_desc = set_control_fields(
-        rq_fields=[
-            BitField("reserved1", 0, 6),
-            BitEnumField("op", 0, 2, SetEndpointIDOperation),
-            XByteField("eid", 0),
-        ],
-        rsp_fields=[
-            BitField("reserved2", 0, 2),
-            BitEnumField("eid_assignment_status", 0, 2, SetEndpointIDAssignmentStatus),
-            BitField("reserved3", 0, 2),
-            BitEnumField("eid_allocation_status", 0, 2, SetEndpointIDAllocationStatus),
-            XByteField("eid_setting", 0),
-            XByteField("eid_pool_size", 0),
-        ],
-    )
+@AutobindControlMsg(ContrlCmdCodes.SetEndpointID, is_request=True)
+class SetEndpointIDRequestPacket(Packet):
+    fields_desc = [
+        BitField("reserved1", 0, 6),
+        BitEnumField("op", 0, 2, SetEndpointIDOperation),
+        XByteField("eid", 0),
+    ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} ("
-        if self.underlayer.getfieldval("rq") == 0:
-            summary += "assign_status: "
-            summary += "accepted, " if self.eid_assignment_status == 0 else "rejected, "
-
-            summary += "eid_alloc_status: "
-            if self.eid_allocation_status == SetEndpointIDAllocationStatus.NO_EID_POOL_REQUIRED.value:
-                summary += "no_pool, "
-            elif self.eid_allocation_status == SetEndpointIDAllocationStatus.EID_POOL_REQUIRED.value:
-                summary += "pool_required, "
-            elif self.eid_allocation_status == SetEndpointIDAllocationStatus.EID_POOL_ALREADY_ASSIGNED.value:
-                summary += "pool_assigned, "
-
-            summary += f"eid_setting: 0x{self.eid_setting:02X}, eid_pool_size: {self.eid_pool_size}"
-        else:
-            summary += f"eid: 0x{self.eid:02X}, op: "
-            if self.op == SetEndpointIDOperation.SetEID.value:
-                summary += "set"
-            elif self.op == SetEndpointIDOperation.ForceEID.value:
-                summary += "force"
-            elif self.op == SetEndpointIDOperation.ResetEID.value:
-                summary += "reset"
-            elif self.op == SetEndpointIDOperation.SetDiscoveredFlag.value:
-                summary += "set_disc"
+        summary += f"eid: 0x{self.eid:02X}, op: "
+        if self.op == SetEndpointIDOperation.SetEID.value:
+            summary += "set"
+        elif self.op == SetEndpointIDOperation.ForceEID.value:
+            summary += "force"
+        elif self.op == SetEndpointIDOperation.ResetEID.value:
+            summary += "reset"
+        elif self.op == SetEndpointIDOperation.SetDiscoveredFlag.value:
+            summary += "set_disc"
         summary += ")"
         return summary, [ControlHdrPacket, TransportHdrPacket]
 
@@ -129,11 +105,44 @@ class SetEndpointIDPacket(Packet):
         )
 
 
+@AutobindControlMsg(ContrlCmdCodes.SetEndpointID, is_request=False)
+class SetEndpointIDResponsePacket(Packet):
+    fields_desc = [
+        BitField("reserved2", 0, 2),
+        BitEnumField("eid_assignment_status", 0, 2, SetEndpointIDAssignmentStatus),
+        BitField("reserved3", 0, 2),
+        BitEnumField("eid_allocation_status", 0, 2, SetEndpointIDAllocationStatus),
+        XByteField("eid_setting", 0),
+        XByteField("eid_pool_size", 0),
+    ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = f"{self.name} ("
+        summary += "assign_status: "
+        summary += "accepted, " if self.eid_assignment_status == 0 else "rejected, "
+
+        summary += "eid_alloc_status: "
+        if self.eid_allocation_status == SetEndpointIDAllocationStatus.NO_EID_POOL_REQUIRED.value:
+            summary += "no_pool, "
+        elif self.eid_allocation_status == SetEndpointIDAllocationStatus.EID_POOL_REQUIRED.value:
+            summary += "pool_required, "
+        elif self.eid_allocation_status == SetEndpointIDAllocationStatus.EID_POOL_ALREADY_ASSIGNED.value:
+            summary += "pool_assigned, "
+
+        summary += f"eid_setting: 0x{self.eid_setting:02X}, eid_pool_size: {self.eid_pool_size}"
+        summary += ")"
+        return summary, [ControlHdrPacket, TransportHdrPacket]
+
+
+# Keep backward compatibility alias
+SetEndpointIDPacket = SetEndpointIDRequestPacket
+
+
 def SetEndpointID(*args, op: SetEndpointIDOperation, eid: int) -> Packet:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.SetEndpointID)
     if len(args):
-        return SetEndpointIDPacket(*args, _underlayer=hdr)
-    return SetEndpointIDPacket(
+        return SetEndpointIDRequestPacket(*args, _underlayer=hdr)
+    return SetEndpointIDRequestPacket(
         op=op,
         eid=eid,
         _underlayer=hdr,
@@ -149,12 +158,11 @@ def SetEndpointIDResponse(
 ) -> Packet:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.SetEndpointID)
     if len(args):
-        return SetEndpointIDPacket(*args, _underlayer=hdr)
-    return SetEndpointIDPacket(
+        return SetEndpointIDResponsePacket(*args, _underlayer=hdr)
+    return SetEndpointIDResponsePacket(
         eid_assignment_status=eid_assignment_status,
         eid_allocation_status=eid_allocation_status,
         eid_setting=eid_setting,
         eid_pool_size=eid_pool_size,
-        # add a default underlayer to set the required "rq" field
         _underlayer=hdr,
     )

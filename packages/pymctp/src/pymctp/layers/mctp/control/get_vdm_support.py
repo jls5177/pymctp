@@ -11,7 +11,6 @@ from ..types import AnyPacketType, VendorCapabilitySet, VendorIdFormat
 from .control import (
     AutobindControlMsg,
     ControlHdr,
-    set_control_fields,
     ControlHdrPacket,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
@@ -19,38 +18,20 @@ from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 NO_MORE_CAPABILITY_SETS = 0xFF
 
 
-@AutobindControlMsg(ContrlCmdCodes.GetVendorDefinedMessageSupport)
-class GetVendorDefinedMessageSupportPacket(AllowRawSummary, Packet):
-    fields_desc = set_control_fields(
-        rq_fields=[
-            XByteField("vendor_id_set_selector", 0),
-        ],
-        rsp_fields=[
-            XByteField("next_vendor_id_set_selector", 0),
-            ByteEnumField("vendor_id_format", 0, VendorIdFormat),
-            MultipleTypeField(
-                [
-                    (XIntField("vendor_id", 0), lambda pkt: pkt.vendor_id_format == VendorIdFormat.IANA_ENT_NUMBER),
-                ],
-                XShortField("vendor_id", 0),
-            ),
-            XShortField("command_set_type", 0),
-        ],
-    )
+@AutobindControlMsg(ContrlCmdCodes.GetVendorDefinedMessageSupport, is_request=True)
+class GetVendorDefinedMessageSupportRequestPacket(AllowRawSummary, Packet):
+    fields_desc = [
+        XByteField("vendor_id_set_selector", 0),
+    ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = "GetVendorDefinedMessageSupport ("
-        if self.underlayer.getfieldval("rq") == 1:
-            summary += f"sel={self.vendor_id_set_selector}"
-        else:
-            summary += f"next_sel={self.next_vendor_id_set_selector}"
-            summary += f", vendor_id={self.vendor_id:04X}, cmd_set_type={self.command_set_type:04X}"
+        summary += f"sel={self.vendor_id_set_selector}"
         summary += ")"
-        return summary, [GetVendorDefinedMessageSupportPacket, ControlHdrPacket]
+        return summary, [ControlHdrPacket]
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.supported_vdm_msg_types or self.vendor_id_set_selector >= len(ctx.supported_vdm_msg_types):
-            # invalid request
             return CompletionCodes.ERROR_INVALID_DATA, None
 
         cap_set: VendorCapabilitySet = ctx.supported_vdm_msg_types[self.vendor_id_set_selector]
@@ -67,11 +48,37 @@ class GetVendorDefinedMessageSupportPacket(AllowRawSummary, Packet):
         )
 
 
+@AutobindControlMsg(ContrlCmdCodes.GetVendorDefinedMessageSupport, is_request=False)
+class GetVendorDefinedMessageSupportResponsePacket(AllowRawSummary, Packet):
+    fields_desc = [
+        XByteField("next_vendor_id_set_selector", 0),
+        ByteEnumField("vendor_id_format", 0, VendorIdFormat),
+        MultipleTypeField(
+            [
+                (XIntField("vendor_id", 0), lambda pkt: pkt.vendor_id_format == VendorIdFormat.IANA_ENT_NUMBER),
+            ],
+            XShortField("vendor_id", 0),
+        ),
+        XShortField("command_set_type", 0),
+    ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = "GetVendorDefinedMessageSupport ("
+        summary += f"next_sel={self.next_vendor_id_set_selector}"
+        summary += f", vendor_id={self.vendor_id:04X}, cmd_set_type={self.command_set_type:04X}"
+        summary += ")"
+        return summary, [GetVendorDefinedMessageSupportResponsePacket, ControlHdrPacket]
+
+
+# Keep backward compatibility alias
+GetVendorDefinedMessageSupportPacket = GetVendorDefinedMessageSupportRequestPacket
+
+
 def GetVendorDefinedMessageSupport(_pkt: bytes | bytearray = b"", /, *, set_selector: int = 0):
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.GetVendorDefinedMessageSupport)
     if _pkt:
-        return GetVendorDefinedMessageSupportPacket(_pkt, _underlayer=hdr)
-    return GetVendorDefinedMessageSupportPacket(
+        return GetVendorDefinedMessageSupportRequestPacket(_pkt, _underlayer=hdr)
+    return GetVendorDefinedMessageSupportRequestPacket(
         vendor_id_set_selector=set_selector,
         _underlayer=hdr,
     )
@@ -88,8 +95,8 @@ def GetVendorDefinedMessageSupportResponse(
 ):
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetVendorDefinedMessageSupport)
     if _pkt:
-        return GetVendorDefinedMessageSupportPacket(_pkt, _underlayer=hdr)
-    return GetVendorDefinedMessageSupportPacket(
+        return GetVendorDefinedMessageSupportResponsePacket(_pkt, _underlayer=hdr)
+    return GetVendorDefinedMessageSupportResponsePacket(
         next_vendor_id_set_selector=set_selector,
         vendor_id_format=vendor_id_fmt,
         vendor_id=vendor_id,

@@ -15,7 +15,6 @@ from .control import (
     ControlHdr,
     ControlHdrPacket,
     RqBit,
-    set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
@@ -51,29 +50,28 @@ class RoutingInfoUpdateEntry1BAddressPacket(AllowRawSummary, Packet):
             summary += f"EID=0x{self.starting_eid:0X}"
         elif self.entry_count > 1:
             summary += f"EIDs=0x{self.starting_eid:0X}-{self.starting_eid + self.entry_count:0X}"
-        return summary, [ControlHdrPacket, RoutingInfoUpdatePacket]
+        return summary, [ControlHdrPacket, RoutingInfoUpdateRequestPacket]
 
 
-@AutobindControlMsg(ContrlCmdCodes.RoutingInformationUpdate)
-class RoutingInfoUpdatePacket(AllowRawSummary, Packet):
+@AutobindControlMsg(ContrlCmdCodes.RoutingInformationUpdate, is_request=True)
+class RoutingInfoUpdateRequestPacket(AllowRawSummary, Packet):
     name = "RoutingInfoUpdate"
 
-    fields_desc = set_control_fields(
-        rq_fields=[
-            FieldLenField("entry_count", None, fmt="B", count_of="entries"),
-            PacketListField(
-                "entries", [], RoutingInfoUpdateEntry1BAddressPacket, count_from=lambda pkt: pkt.entry_count
-            ),
-        ],
-    )
+    fields_desc = [
+        FieldLenField("entry_count", None, fmt="B", count_of="entries"),
+        PacketListField("entries", [], RoutingInfoUpdateEntry1BAddressPacket, count_from=lambda pkt: pkt.entry_count),
+    ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} [{self.entry_count}] ("
-        if self.underlayer.getfieldval("rq") == RqBit.REQUEST.value:
-            entries = [entry.mysummary()[0] for entry in self.entries]
-            summary += "; ".join(entries)
+        entries = [entry.mysummary()[0] for entry in self.entries]
+        summary += "; ".join(entries)
         summary += ")"
         return summary, [ControlHdrPacket]
+
+
+# Keep backward compatibility alias
+RoutingInfoUpdatePacket = RoutingInfoUpdateRequestPacket
 
 
 if __name__ == "__main__":

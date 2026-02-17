@@ -14,8 +14,6 @@ from .control import (
     AutobindControlMsg,
     ControlHdr,
     ControlHdrPacket,
-    RqBit,
-    set_control_fields,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
@@ -53,25 +51,15 @@ def NewRoutingTableEntry(entry: RoutingTableEntry) -> RoutingTableEntryPacket:
     return RoutingTableEntryPacket(**entry.to_dict())
 
 
-@AutobindControlMsg(ContrlCmdCodes.GetRoutingTableEntries)
-class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
+@AutobindControlMsg(ContrlCmdCodes.GetRoutingTableEntries, is_request=True)
+class GetRoutingTableEntriesRequestPacket(AllowRawSummary, Packet):
     name = "GetRoutingTableEntries"
 
-    fields_desc = set_control_fields(
-        rq_fields=[
-            XByteField("entry_handle", 0),
-        ],
-        rsp_fields=[
-            XByteField("next_entry_handle", 0),
-            FieldLenField("entry_count", None, fmt="B", count_of="entries"),
-            # TODO: implement routing table entry field
-            PacketListField("entries", [], RoutingTableEntryPacket, count_from=lambda pkt: pkt.entry_count),
-        ],
-    )
+    fields_desc = [
+        XByteField("entry_handle", 0),
+    ]
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
-        # if we made it hear then the msg_type is unsupported
-        # 0x80: message type number not supported
         if not ctx.routing_table_ready:
             return CompletionCodes.ERROR_NOT_READY, None
 
@@ -80,20 +68,39 @@ class GetRoutingTableEntriesPacket(AllowRawSummary, Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} ("
-        if self.underlayer.getfieldval("rq") == RqBit.REQUEST.value:
-            summary += f"hdl=0x{self.entry_handle:02X})"
-        else:
-            summary += f"next_hdl=0x{self.next_entry_handle:02X}, cnt={self.entry_count}) "
-            for entry in self.entries:
-                summary += f" [0x{entry.starting_eid:02X}:{entry.eid_range}]"
+        summary += f"hdl=0x{self.entry_handle:02X})"
         return summary, [ControlHdrPacket]
 
 
-def GetRoutingTableEntries(_pkt: bytes | bytearray = b"", /, *, entry_handle: int = 0) -> GetRoutingTableEntriesPacket:
+@AutobindControlMsg(ContrlCmdCodes.GetRoutingTableEntries, is_request=False)
+class GetRoutingTableEntriesResponsePacket(AllowRawSummary, Packet):
+    name = "GetRoutingTableEntries"
+
+    fields_desc = [
+        XByteField("next_entry_handle", 0),
+        FieldLenField("entry_count", None, fmt="B", count_of="entries"),
+        PacketListField("entries", [], RoutingTableEntryPacket, count_from=lambda pkt: pkt.entry_count),
+    ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = f"{self.name} ("
+        summary += f"next_hdl=0x{self.next_entry_handle:02X}, cnt={self.entry_count}) "
+        for entry in self.entries:
+            summary += f" [0x{entry.starting_eid:02X}:{entry.eid_range}]"
+        return summary, [ControlHdrPacket]
+
+
+# Keep backward compatibility alias
+GetRoutingTableEntriesPacket = GetRoutingTableEntriesRequestPacket
+
+
+def GetRoutingTableEntries(
+    _pkt: bytes | bytearray = b"", /, *, entry_handle: int = 0
+) -> GetRoutingTableEntriesRequestPacket:
     hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.GetRoutingTableEntries)
     if _pkt:
-        return GetRoutingTableEntriesPacket(_pkt, _underlayer=hdr)
-    return GetRoutingTableEntriesPacket(
+        return GetRoutingTableEntriesRequestPacket(_pkt, _underlayer=hdr)
+    return GetRoutingTableEntriesRequestPacket(
         entry_handle=entry_handle,
         _underlayer=hdr,
     )
@@ -101,14 +108,13 @@ def GetRoutingTableEntries(_pkt: bytes | bytearray = b"", /, *, entry_handle: in
 
 def GetRoutingTableEntriesResponse(
     _pkt: bytes | bytearray = b"", /, *, next_entry_handle: int, entries: list[int] | None = None
-) -> GetRoutingTableEntriesPacket:
+) -> GetRoutingTableEntriesResponsePacket:
     hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.GetRoutingTableEntries)
     if _pkt:
-        return GetRoutingTableEntriesPacket(_pkt, _underlayer=hdr)
-    return GetRoutingTableEntriesPacket(
+        return GetRoutingTableEntriesResponsePacket(_pkt, _underlayer=hdr)
+    return GetRoutingTableEntriesResponsePacket(
         next_entry_handle=next_entry_handle,
         entry_count=len(entries),
         entries=entries,
-        # add a default underlayer to set the required "rq" field
         _underlayer=hdr,
     )

@@ -7,21 +7,16 @@ This module defines the ControlHdrPacket class and related enums and functions
 for handling MCTP control header packets.
 """
 
-from collections.abc import Callable
 from enum import IntEnum
-from typing import Any
 
 from scapy.config import conf
 from scapy.fields import (
-    AnyField,
     BitEnumField,
     BitField,
     ByteEnumField,
     ConditionalField,
     Emph,
-    Field,
     XBitField,
-    XByteField,
 )
 from scapy.packet import Packet, bind_layers
 
@@ -133,57 +128,21 @@ def ControlHdr(
 
 
 class AutobindControlMsg:
-    def __init__(self, cmd_code: ContrlCmdCodes):
+    def __init__(self, cmd_code: ContrlCmdCodes, is_request: bool = True):
         self.cmd_code = cmd_code
+        self.is_request = is_request
 
     def __call__(self, cls: type[Packet]):
         cmd_code = self.cmd_code
-        # print(f"Binding cls {cls} to cmd_code {cmd_code}:{self.is_request}")
+        rq = RqBit.REQUEST.value if self.is_request else RqBit.RESPONSE.value
         bind_layers(
-            ControlHdrPacket, cls, cmd_code=cmd_code.value if isinstance(cmd_code, ContrlCmdCodes) else cmd_code
+            ControlHdrPacket,
+            cls,
+            cmd_code=cmd_code.value if isinstance(cmd_code, ContrlCmdCodes) else cmd_code,
+            rq=rq,
         )
         if not hasattr(cls, "name") or cls.name is None:
             cls.name = cls.__name__
         if not hasattr(cls, "cmd_code") or cls.cmd_code is None:
             cls.cmd_code = self.cmd_code
         return cls
-
-
-def set_control_fields(
-    rq_fields: list[AnyField] | None = None, rsp_fields: list[AnyField] | None = None
-) -> list[AnyField]:
-    rq_fields = rq_fields or []
-    rsp_fields = rsp_fields or []
-
-    def gen_conditional_field(fld: AnyField, cond: Callable[[Packet], bool]):
-        def default_cond(pkt):
-            return False
-
-        if isinstance(fld, ConditionalField):
-            # unwrap the conditional field
-            default_cond = fld.cond
-            fld = fld.fld
-        return ConditionalField(fld=fld, cond=lambda pkt: any([cond(pkt), default_cond(pkt)]))
-
-    def is_request(pkt: Packet) -> bool:
-        return pkt.underlayer.getfieldval("rq") == RqBit.REQUEST.value
-
-    def is_response(pkt: Packet) -> bool:
-        return pkt.underlayer.getfieldval("rq") == RqBit.RESPONSE.value
-
-    fields = [gen_conditional_field(fld, is_request) for fld in rq_fields]
-    fields += [gen_conditional_field(fld, is_response) for fld in rsp_fields]
-
-    return fields
-
-
-def response_fields(fields: list[AnyField]) -> list[AnyField]:
-    """Wraps the list of Fields in a ConditionalField that checks if 'rq==0'"""
-    return [ResponseField(fld) for fld in fields]
-
-
-class ResponseField(ConditionalField):
-    """Wraps the field within a ConditionalField that checks if 'rq==0'"""
-
-    def __init__(self, fld: Field[Any, Any]) -> None:
-        ConditionalField.__init__(self, fld, cond=lambda pkt: pkt.underlayer.getfieldval("rq") == 0)
