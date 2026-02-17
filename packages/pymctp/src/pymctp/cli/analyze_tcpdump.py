@@ -4,32 +4,20 @@
 
 """Analyze MCTP packet captures from tcpdump or pcap files."""
 
-import binascii
 import pathlib
 import re
 from collections import Counter
 from collections.abc import Iterator
-from datetime import datetime, timedelta
-from typing import List, Tuple
+from datetime import datetime
 
 import click
 import pytz
 from scapy.packet import Raw
 from scapy.utils import PcapReader
 
-from pymctp.analyzers import AnalysisEngine, Severity
-from pymctp.analyzers.cerberus import CerberusLogTransferRule
-from pymctp.analyzers.mctp import FragmentationRule, TagReuseRule
-from pymctp.analyzers.plugin_loader import discover_analyzer_rules
-from pymctp.analyzers.spdm import (
-    SpdmCertChainRule,
-    SpdmErrorResponseRule,
-    SpdmMeasurementsRule,
-    SpdmNegotiationSequenceRule,
-)
-from pymctp.analyzers.timing import InterPacketGapRule, ResponseTimeoutRule
+from pymctp.cli.triage import print_triage_report, setup_triage_engine, tally_mctp_packet, triage_options
 from pymctp.layers.mctp import TransportHdr, TransportHdrPacket
-from pymctp.layers.mctp.types import AnyPacketType, MsgTypes
+from pymctp.layers.mctp.types import AnyPacketType
 from pymctp.utils import set_printable_raw_layer
 
 timestampRE = r"([\d]{2}:[\d]{2}:[\d]{2}\.[\d]{6,9})"
@@ -129,31 +117,6 @@ def parse_pcap_file(
             yield (utc_timestamp, packet.getlayer(TransportHdrPacket))
 
 
-_SEVERITY_CHOICES = [s.name.lower() for s in Severity]
-
-
-def _build_builtin_rules(
-    response_timeout: float,
-    gap_threshold: float,
-) -> list:
-    """Instantiate all built-in analysis rules with the given parameters."""
-    return [
-        # Timing
-        ResponseTimeoutRule(timeout=timedelta(seconds=response_timeout)),
-        InterPacketGapRule(threshold=timedelta(seconds=gap_threshold)),
-        # MCTP transport
-        FragmentationRule(),
-        TagReuseRule(),
-        # SPDM
-        SpdmNegotiationSequenceRule(),
-        SpdmErrorResponseRule(),
-        SpdmCertChainRule(),
-        SpdmMeasurementsRule(),
-        # Cerberus
-        CerberusLogTransferRule(),
-    ]
-
-
 @click.command()
 @click.argument("capture_file", type=click.Path(exists=True, path_type=pathlib.Path))
 @click.option(
@@ -173,48 +136,7 @@ def _build_builtin_rules(
     default=None,
     help="Date for text dumps without dates (YYYY-MM-DD format, default: today's date)",
 )
-@click.option(
-    "--triage/--no-triage",
-    default=False,
-    help="Run analysis rules to detect protocol issues (default: disabled)",
-)
-@click.option(
-    "--min-severity",
-    type=click.Choice(_SEVERITY_CHOICES, case_sensitive=False),
-    default="warning",
-    help="Minimum severity level to report (default: warning)",
-)
-@click.option(
-    "--rules",
-    multiple=True,
-    help="Rule IDs to enable (default: all). May be repeated, e.g. --rules TIMING-001 --rules SPDM-SEQ-001",
-)
-@click.option(
-    "--response-timeout",
-    type=float,
-    default=5.0,
-    show_default=True,
-    help="Threshold in seconds for delayed response detection",
-)
-@click.option(
-    "--gap-threshold",
-    type=float,
-    default=10.0,
-    show_default=True,
-    help="Threshold in seconds for inter-packet gap detection",
-)
-@click.option(
-    "--json-report",
-    type=click.Path(path_type=pathlib.Path),
-    default=None,
-    help="Write triage findings to a JSON file",
-)
-@click.option(
-    "--packet-log",
-    type=click.Path(path_type=pathlib.Path),
-    default=None,
-    help="Write per-packet listing to a file (useful in triage mode where terminal output is suppressed)",
-)
+@triage_options
 def analyze_tcpdump(
     capture_file: pathlib.Path,
     timezone: str,
@@ -286,29 +208,7 @@ def analyze_tcpdump(
         packet_iter = parse_text_file(capture_file, timezone, dst, date)
 
     # --- Set up triage engine (if needed) before the single-pass loop ---
-    engine: AnalysisEngine | None = None
-    if triage:
-        severity_level = Severity[min_severity.upper()]
-
-        # Build rule set
-        all_rules = _build_builtin_rules(response_timeout, gap_threshold)
-
-        # Discover plugin rules from third-party packages
-        all_rules.extend(discover_analyzer_rules())
-
-        # Filter to specific rule IDs if requested
-        if rules:
-            rule_ids = set(rules)
-            all_rules = [r for r in all_rules if r.rule_id in rule_ids]
-            if not all_rules:
-                click.echo(
-                    f"Warning: no rules matched the requested IDs: {', '.join(rules)}",
-                    err=True,
-                )
-                return
-
-        engine = AnalysisEngine(all_rules)
-        engine.reset()
+    engine, severity_level = setup_triage_engine(triage, min_severity, rules, response_timeout, gap_threshold)
 
     # --- Single-pass: parse, display/log, tally, and feed to triage ---
     packet_log_file = packet_log.open("w") if packet_log is not None else None
@@ -322,13 +222,7 @@ def analyze_tcpdump(
                 mctp_packet.timestamp = timestamp
 
             # Tally message types (only SOM packets carry msg_type)
-            if hasattr(mctp_packet, "som") and mctp_packet.som:
-                try:
-                    type_counts[MsgTypes(mctp_packet.msg_type).name] += 1
-                except (ValueError, AttributeError):
-                    type_counts[f"0x{mctp_packet.msg_type:02X}"] += 1
-            elif hasattr(mctp_packet, "som"):
-                type_counts["(fragment)"] += 1
+            tally_mctp_packet(mctp_packet, type_counts)
 
             # Build the display line once
             if timestamp:
@@ -358,18 +252,4 @@ def analyze_tcpdump(
 
     # --- Triage report ---
     if engine is not None:
-        click.echo(f"\n{'=' * 60}")
-        click.echo(f"Triage Report  ({len(engine.rules)} rules active)")
-        click.echo(f"{'=' * 60}")
-
-        # Packet type breakdown
-        if type_counts:
-            breakdown = ", ".join(f"{count} {name}" for name, count in type_counts.most_common())
-            click.echo(f"Packet types: {breakdown}")
-
-        engine.finalize_analysis()
-        engine.print_report(min_severity=severity_level)
-
-        if json_report is not None:
-            json_report.write_text(engine.to_json(min_severity=severity_level))
-            click.echo(f"\nJSON report written to: {json_report}")
+        print_triage_report(engine, severity_level, type_counts, json_report)
