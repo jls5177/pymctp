@@ -7,11 +7,12 @@ import uuid
 from scapy.fields import UUIDField
 from scapy.packet import Packet
 
-from .. import EndpointContext
+from .. import EndpointContext, TransportHdrPacket
 from ..types import AnyPacketType
 from .control import (
     AutobindControlMsg,
     ControlHdr,
+    ControlHdrPacket,
 )
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
@@ -20,6 +21,9 @@ from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 class GetEndpointUUIDRequestPacket(Packet):
     name = "GetEndpointUUID"
     fields_desc = []
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        return f"{self.name} ()", [ControlHdrPacket, TransportHdrPacket]
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.endpoint_uuid:
@@ -31,6 +35,10 @@ class GetEndpointUUIDRequestPacket(Packet):
 class GetEndpointUUIDResponsePacket(Packet):
     name = "GetEndpointUUID"
     fields_desc = [UUIDField("uuid", None, uuid_fmt=UUIDField.FORMAT_BE)]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = f"{self.name} (uuid: {self.uuid})"
+        return summary, [ControlHdrPacket, TransportHdrPacket]
 
 
 # Keep backward compatibility alias

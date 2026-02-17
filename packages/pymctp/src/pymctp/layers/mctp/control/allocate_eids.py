@@ -7,9 +7,9 @@ from enum import IntEnum
 from scapy.fields import XByteEnumField, XByteField
 from scapy.packet import Packet
 
-from .. import EndpointContext
+from .. import EndpointContext, TransportHdrPacket
 from ..types import AnyPacketType
-from .control import AutobindControlMsg, ControlHdr
+from .control import AutobindControlMsg, ControlHdr, ControlHdrPacket
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
@@ -26,11 +26,17 @@ class AllocateEIDAllocationStatus(IntEnum):
 
 @AutobindControlMsg(ContrlCmdCodes.AllocateEndpointIDs, is_request=True)
 class AllocateEndpointIDsRequestPacket(Packet):
+    name = "AllocateEndpointIDs"
     fields_desc = [
         XByteEnumField("op", 0, AllocateEIDOperation),
         XByteField("allocated_pool_size", 0),
         XByteField("starting_eid", 0),
     ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = f"AllocateEndpointIDs (op: {AllocateEIDOperation(self.op).name}"
+        summary += f", pool_size: {self.allocated_pool_size}, eid: 0x{self.starting_eid:02X})"
+        return summary, [ControlHdrPacket, TransportHdrPacket]
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         if not ctx.is_bus_owner:
@@ -60,11 +66,17 @@ class AllocateEndpointIDsRequestPacket(Packet):
 
 @AutobindControlMsg(ContrlCmdCodes.AllocateEndpointIDs, is_request=False)
 class AllocateEndpointIDsResponsePacket(Packet):
+    name = "AllocateEndpointIDs"
     fields_desc = [
         XByteEnumField("status", 0, AllocateEIDAllocationStatus),
         XByteField("eid_pool_size", 0),
         XByteField("first_eid", 0),
     ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = f"AllocateEndpointIDs (status: {AllocateEIDAllocationStatus(self.status).name}"
+        summary += f", pool_size: {self.eid_pool_size}, first_eid: 0x{self.first_eid:02X})"
+        return summary, [ControlHdrPacket, TransportHdrPacket]
 
 
 # Keep backward compatibility alias

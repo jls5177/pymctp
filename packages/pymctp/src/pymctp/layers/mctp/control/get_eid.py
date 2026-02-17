@@ -47,6 +47,9 @@ class GetEndpointIDRequestPacket(Packet):
     name = "GetEndpointID"
     fields_desc = []
 
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        return f"{self.name} ()", [ControlHdrPacket, TransportHdrPacket]
+
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
         cmplt_code = CompletionCodes.SUCCESS
         endp_type = EndpointIDType.DYNAMIC

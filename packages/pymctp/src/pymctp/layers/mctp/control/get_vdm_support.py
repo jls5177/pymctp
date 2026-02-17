@@ -20,6 +20,7 @@ NO_MORE_CAPABILITY_SETS = 0xFF
 
 @AutobindControlMsg(ContrlCmdCodes.GetVendorDefinedMessageSupport, is_request=True)
 class GetVendorDefinedMessageSupportRequestPacket(AllowRawSummary, Packet):
+    name = "GetVendorDefinedMessageSupport"
     fields_desc = [
         XByteField("vendor_id_set_selector", 0),
     ]
@@ -50,6 +51,7 @@ class GetVendorDefinedMessageSupportRequestPacket(AllowRawSummary, Packet):
 
 @AutobindControlMsg(ContrlCmdCodes.GetVendorDefinedMessageSupport, is_request=False)
 class GetVendorDefinedMessageSupportResponsePacket(AllowRawSummary, Packet):
+    name = "GetVendorDefinedMessageSupport"
     fields_desc = [
         XByteField("next_vendor_id_set_selector", 0),
         ByteEnumField("vendor_id_format", 0, VendorIdFormat),

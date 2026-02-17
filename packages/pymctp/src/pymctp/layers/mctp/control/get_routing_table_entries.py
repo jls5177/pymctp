@@ -37,6 +37,10 @@ class RoutingTableEntryPacket(AllowRawSummary, Packet):
         """Required to ensure remaining bytes are properly transferred into next entry"""
         return b"", p
 
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = f"{self.name} (eid: 0x{self.starting_eid:02X}, range: {self.eid_range})"
+        return summary, [ControlHdrPacket]
+
     def to_dict(self) -> dict[str, Any]:
         data = {}
         for f in self.fields_desc:

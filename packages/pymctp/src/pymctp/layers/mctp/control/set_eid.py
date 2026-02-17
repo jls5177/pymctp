@@ -53,6 +53,7 @@ class SetEndpointIDAllocationStatus(IntEnum):
 
 @AutobindControlMsg(ContrlCmdCodes.SetEndpointID, is_request=True)
 class SetEndpointIDRequestPacket(Packet):
+    name = "SetEndpointID"
     fields_desc = [
         BitField("reserved1", 0, 6),
         BitEnumField("op", 0, 2, SetEndpointIDOperation),
@@ -107,6 +108,7 @@ class SetEndpointIDRequestPacket(Packet):
 
 @AutobindControlMsg(ContrlCmdCodes.SetEndpointID, is_request=False)
 class SetEndpointIDResponsePacket(Packet):
+    name = "SetEndpointID"
     fields_desc = [
         BitField("reserved2", 0, 2),
         BitEnumField("eid_assignment_status", 0, 2, SetEndpointIDAssignmentStatus),

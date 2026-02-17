@@ -10,21 +10,21 @@ from .control import AutobindControlMsg, ControlHdr, ControlHdrPacket
 from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
-@AutobindControlMsg(ContrlCmdCodes.DiscoveryNotify, is_request=True)
-class DiscoveryNotifyRequestPacket(Packet):
-    name = "DiscoveryNotify"
+@AutobindControlMsg(ContrlCmdCodes.EndpointDiscovery, is_request=True)
+class EndpointDiscoveryRequestPacket(Packet):
+    name = "EndpointDiscovery"
     fields_desc = []
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         return f"{self.name} ()", [ControlHdrPacket, TransportHdrPacket]
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
-        return CompletionCodes.SUCCESS, DiscoveryNotifyResponse()
+        return CompletionCodes.SUCCESS, EndpointDiscoveryResponse()
 
 
-@AutobindControlMsg(ContrlCmdCodes.DiscoveryNotify, is_request=False)
-class DiscoveryNotifyResponsePacket(Packet):
-    name = "DiscoveryNotify"
+@AutobindControlMsg(ContrlCmdCodes.EndpointDiscovery, is_request=False)
+class EndpointDiscoveryResponsePacket(Packet):
+    name = "EndpointDiscovery"
     fields_desc = []
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
@@ -32,22 +32,22 @@ class DiscoveryNotifyResponsePacket(Packet):
 
 
 # Keep backward compatibility alias
-DiscoveryNotifyPacket = DiscoveryNotifyRequestPacket
+EndpointDiscoveryPacket = EndpointDiscoveryRequestPacket
 
 
-def DiscoveryNotify(*args, **kwargs):
-    hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.DiscoveryNotify)
+def EndpointDiscovery(*args, **kwargs):
+    hdr = ControlHdr(rq=True, cmd_code=ContrlCmdCodes.EndpointDiscovery)
     if len(args):
-        return DiscoveryNotifyRequestPacket(*args, _underlayer=hdr)
-    return DiscoveryNotifyRequestPacket(
+        return EndpointDiscoveryRequestPacket(*args, _underlayer=hdr)
+    return EndpointDiscoveryRequestPacket(
         _underlayer=hdr,
     )
 
 
-def DiscoveryNotifyResponse(*args, **kwargs):
-    hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.DiscoveryNotify)
+def EndpointDiscoveryResponse(*args, **kwargs):
+    hdr = ControlHdr(rq=False, cmd_code=ContrlCmdCodes.EndpointDiscovery)
     if len(args) or len(kwargs):
-        return DiscoveryNotifyResponsePacket(*args, _underlayer=hdr, **kwargs)
-    return DiscoveryNotifyResponsePacket(
+        return EndpointDiscoveryResponsePacket(*args, _underlayer=hdr, **kwargs)
+    return EndpointDiscoveryResponsePacket(
         _underlayer=hdr,
     )
