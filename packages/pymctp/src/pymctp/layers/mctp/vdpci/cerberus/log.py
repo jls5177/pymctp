@@ -176,7 +176,8 @@ def _status_name(value: int) -> str:
 
 
 def _decode_component_statuses_v2(
-    data: bytes, component_maps: list[dict[int, str]],
+    data: bytes,
+    component_maps: list[dict[int, str]],
 ) -> list[tuple[str, list[str]]]:
     """Decode version-2 component status data into (name, [status_str]) tuples."""
     entries: list[tuple[str, list[str]]] = []
@@ -201,7 +202,8 @@ def _decode_component_statuses_v2(
 
 
 def _decode_component_statuses_v2_raw(
-    data: bytes, component_maps: list[dict[int, str]],
+    data: bytes,
+    component_maps: list[dict[int, str]],
 ) -> list[tuple[str, list[int]]]:
     """Decode version-2 component status data into (name, [raw_status_byte]) tuples."""
     entries: list[tuple[str, list[int]]] = []
@@ -273,10 +275,7 @@ class AttestationDataResponsePacket(AllowRawSummary, Packet):
         for comp_name, statuses in entries:
             status_str = ",".join(statuses)
             parts.append(f"{comp_name}={status_str}")
-        summary = (
-            f"{self.name} (evt=0x{self.event_data:08X}, v{version}, "
-            f"{len(entries)} comp): {', '.join(parts)}"
-        )
+        summary = f"{self.name} (evt=0x{self.event_data:08X}, v{version}, {len(entries)} comp): {', '.join(parts)}"
         return summary, [VdPciHdrPacket]
 
     def is_request(self, check_payload: bool = True) -> bool:

@@ -14,3 +14,9 @@ path = ["packages/**/README.md", "MIGRATION.md"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2024 Justin Simon <justin@simonctl.com>"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["packages/pymctp/src/pymctp/completions/pymctp.bash", "packages/pymctp/src/pymctp/completions/pymctp.zsh"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2024 Justin Simon <justin@simonctl.com>"
+SPDX-License-Identifier = "MIT"
