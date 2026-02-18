@@ -31,8 +31,8 @@ class TagReuseRule(AnalysisRule):
     description = "Detect MCTP tag reuse while previous transaction pending"  # type: ignore[assignment]
 
     def __init__(self):
-        # (tag, src) → (packet_index, timestamp, summary)
-        self._pending: dict[tuple[int, int], tuple[int, datetime | None, str]] = {}
+        # (tag, src, dst) → (packet_index, timestamp, summary)
+        self._pending: dict[tuple[int, int, int], tuple[int, datetime | None, str]] = {}
 
     def feed(self, index: int, timestamp: datetime | None, packet) -> Sequence[Finding]:
         if not packet.haslayer(TransportHdrPacket):
@@ -47,7 +47,7 @@ class TagReuseRule(AnalysisRule):
 
         if is_request and hdr.som and hdr.eom:
             # Only SOM+EOM requests start a new transaction
-            key = (tag, src)
+            key = (tag, src, dst)
             if key in self._pending:
                 prev_idx, prev_ts, prev_summary = self._pending[key]
                 findings.append(
@@ -55,7 +55,7 @@ class TagReuseRule(AnalysisRule):
                         rule_id=self.rule_id,
                         severity=Severity.ERROR,
                         message=(
-                            f"Tag {tag} (EID 0x{src:02X}) never received a response "
+                            f"Tag {tag} (EID 0x{src:02X}->0x{dst:02X}) never received a response "
                             f"before tag was reused at pkt#{index}"
                         ),
                         packet_index=prev_idx,
@@ -63,6 +63,7 @@ class TagReuseRule(AnalysisRule):
                         context={
                             "tag": tag,
                             "src_eid": src,
+                            "dst_eid": dst,
                             "reuse_index": index,
                         },
                         packet_summary=prev_summary,
@@ -71,12 +72,13 @@ class TagReuseRule(AnalysisRule):
             self._pending[key] = (index, timestamp, packet.summary())
 
         elif not is_request and hdr.som:
-            # A response with SOM (whether SOM+EOM or start of a fragmented
-            # response) means the responder has begun replying — clear the
-            # pending request.  We key on (tag, dst) because the response's
-            # dst is the original requester.
-            key = (tag, dst)
-            self._pending.pop(key, None)
+            # A response with SOM clears the pending request. The response's
+            # dst is the original requester's src, and the response's src is
+            # the original request's dst. Either side may have been NULL EID
+            # (e.g. SetEndpointID), so also try matching with NULL.
+            for req_dst in {src, 0x00}:
+                for req_src in {dst, 0x00}:
+                    self._pending.pop((tag, req_src, req_dst), None)
 
         return findings
 
