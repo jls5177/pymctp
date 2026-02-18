@@ -316,13 +316,17 @@ def _format_component_status(
     return "\n".join(lines)
 
 
+class _CollectState:
+    IDLE = 0
+    AWAITING_RESPONSE = 1
+    AWAITING_CONTINUATION = 2
+
+
 class ComponentStatusRule(AnalysisRule):
     """Collects GET_ATTESTATION_DATA responses and decodes component attestation statuses.
 
-    Tracks PMR/entry to only reassemble reads for a single measurement.
-    The first response carries a 5-byte header (event_data + status_version)
-    followed by component status entries; subsequent responses at increasing
-    offsets are raw continuation data.
+    Uses a state machine to only collect response data immediately after a
+    matching request, preventing data from unrelated measurements leaking in.
     """
 
     @property
@@ -344,7 +348,7 @@ class ComponentStatusRule(AnalysisRule):
         self._resp_tag: int | None = None
         self._resp_src: int | None = None
         self._resp_dst: int | None = None
-        self._collecting = False
+        self._state = _CollectState.IDLE
         self._frag_buf = bytearray()
 
     def feed(self, index: int, timestamp: datetime | None, packet: AnyPacketType) -> Sequence[Finding]:
@@ -362,12 +366,13 @@ class ComponentStatusRule(AnalysisRule):
                 self._entry = req.entry_id
                 self._version = None
                 self._status_data.clear()
-                self._collecting = True
+                self._state = _CollectState.AWAITING_RESPONSE
                 self._frag_buf.clear()
                 self._track_response_flow(packet)
-            elif self._collecting:
-                # Only continue if same PMR/entry
+            elif self._state == _CollectState.AWAITING_CONTINUATION:
                 if req.pmr_id == self._pmr and req.entry_id == self._entry:
+                    # Continuation request for same measurement
+                    self._state = _CollectState.AWAITING_RESPONSE
                     self._track_response_flow(packet)
                     self._frag_buf.clear()
                 else:
@@ -375,7 +380,7 @@ class ComponentStatusRule(AnalysisRule):
                     findings.extend(self._emit())
             return findings
 
-        if not self._collecting:
+        if self._state != _CollectState.AWAITING_RESPONSE:
             return findings
 
         if not packet.haslayer(TransportHdrPacket):
@@ -396,8 +401,8 @@ class ComponentStatusRule(AnalysisRule):
                 resp = packet.getlayer(AttestationDataResponsePacket)
                 if self._version is None:
                     self._version = resp.status_version
-                if resp.payload:
-                    self._frag_buf.extend(bytes(resp.payload))
+                if resp.status_data:
+                    self._frag_buf.extend(bytes(resp.status_data))
             elif hdr.payload:
                 self._frag_buf.extend(bytes(hdr.payload))
         elif hdr.payload:
@@ -406,8 +411,10 @@ class ComponentStatusRule(AnalysisRule):
         if not hdr.eom:
             return findings
 
+        # Response complete — store data and wait for next request or finalize
         self._status_data.extend(self._frag_buf)
         self._frag_buf.clear()
+        self._state = _CollectState.AWAITING_CONTINUATION
         return findings
 
     def _track_response_flow(self, packet: AnyPacketType) -> None:
@@ -421,7 +428,7 @@ class ComponentStatusRule(AnalysisRule):
         return self._emit()
 
     def _emit(self) -> list[Finding]:
-        if not self._collecting or not self._status_data or self._version is None:
+        if self._state == _CollectState.IDLE or not self._status_data or self._version is None:
             self._reset_state()
             return []
 
@@ -458,7 +465,7 @@ class ComponentStatusRule(AnalysisRule):
         self._pmr = None
         self._entry = None
         self._status_data.clear()
-        self._collecting = False
+        self._state = _CollectState.IDLE
         self._frag_buf.clear()
         self._resp_tag = None
         self._resp_src = None
