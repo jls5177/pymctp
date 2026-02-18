@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: MIT
 
+import struct
+
 from scapy.fields import ByteEnumField, XByteField, XLEIntField, XLEShortField
 from scapy.packet import Packet, bind_layers
 
@@ -9,7 +11,7 @@ from ....helpers import AllowRawSummary
 from ...types import AnyPacketType
 from ..vdpci import VdPciHdrPacket
 from ..types import VdPCIVendorIds
-from .types import CerberusCmdCodes, CerberusLogType
+from .types import CerberusCmdCodes, CerberusLogType, ComponentAttestStatus
 
 
 # --- GET_LOG_INFO ---
@@ -154,7 +156,7 @@ class GetAttestationDataRequestPacket(AllowRawSummary, Packet):
     fields_desc = [
         XByteField("pmr_id", 0),
         XByteField("entry_id", 0),
-        XLEShortField("offset", 0),
+        XLEIntField("offset", 0),
     ]
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
@@ -165,15 +167,86 @@ class GetAttestationDataRequestPacket(AllowRawSummary, Packet):
         return True
 
 
+def _status_name(value: int) -> str:
+    """Return a short name for a component attestation status byte."""
+    try:
+        return ComponentAttestStatus(value).name
+    except ValueError:
+        return f"0x{value:02X}"
+
+
+def _decode_component_statuses_v2(
+    data: bytes, component_maps: list[dict[int, str]],
+) -> list[tuple[str, list[str]]]:
+    """Decode version-2 component status data into (name, [status_str]) tuples."""
+    entries: list[tuple[str, list[str]]] = []
+    pos = 0
+    while pos + 5 <= len(data):
+        comp_id = struct.unpack_from("<I", data, pos)[0]
+        comp_count = data[pos + 4]
+        if pos + 5 + comp_count > len(data):
+            break
+        statuses = [_status_name(data[pos + 5 + i]) for i in range(comp_count)]
+        # Resolve component name from maps
+        comp_name: str | None = None
+        for cmap in component_maps:
+            comp_name = cmap.get(comp_id)
+            if comp_name is not None:
+                break
+        if comp_name is None:
+            comp_name = f"Component-{comp_id}"
+        entries.append((comp_name, statuses))
+        pos += 5 + comp_count
+    return entries
+
+
+def _decode_component_statuses_v1(data: bytes) -> list[tuple[str, list[str]]]:
+    """Decode version-1 flat status array (one byte per component)."""
+    return [(f"Component-{i}", [_status_name(b)]) for i, b in enumerate(data)]
+
+
 class AttestationDataResponsePacket(AllowRawSummary, Packet):
-    """Response contains variable-length attestation data as raw payload."""
+    """Response for GET_ATTESTATION_DATA containing component attestation status.
+
+    Binary format (first response, offset=0):
+      - event_data:      4 bytes (LE uint32)
+      - status_version:  1 byte  (1 or 2)
+      - status_data:     variable-length component status entries
+
+    Version 2 status_data: repeated {component_id(4 LE), count(1), status[count]}
+    Version 1 status_data: flat array of status bytes (one per component)
+    """
 
     name = "Cerberus-AttestData"
-    fields_desc = []
+    fields_desc = [
+        XLEIntField("event_data", 0),
+        XByteField("status_version", 0),
+    ]
+
+    # Component ID → name maps. Additional maps (e.g. for OEM components)
+    # can be appended at runtime.
+    component_maps: list[dict[int, str]] = []
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        data_len = len(bytes(self.payload)) if self.payload else 0
-        summary = f"{self.name} (len={data_len})"
+        raw = bytes(self.payload) if self.payload else b""
+        version = self.status_version
+        if version == 2 and raw:
+            entries = _decode_component_statuses_v2(raw, self.component_maps)
+        elif version == 1 and raw:
+            entries = _decode_component_statuses_v1(raw)
+        else:
+            data_len = len(raw)
+            summary = f"{self.name} (evt=0x{self.event_data:08X}, v{version}, {data_len}B)"
+            return summary, [VdPciHdrPacket]
+
+        parts = []
+        for comp_name, statuses in entries:
+            status_str = ",".join(statuses)
+            parts.append(f"{comp_name}={status_str}")
+        summary = (
+            f"{self.name} (evt=0x{self.event_data:08X}, v{version}, "
+            f"{len(entries)} comp): {', '.join(parts)}"
+        )
         return summary, [VdPciHdrPacket]
 
     def is_request(self, check_payload: bool = True) -> bool:
@@ -185,7 +258,7 @@ class AttestationDataCmdPacket(Packet):
     def dispatch_hook(cls, _pkt=None, *args, **kargs):
         if _pkt is None:
             return cls
-        if len(_pkt) == 4:
+        if len(_pkt) == 6:
             return GetAttestationDataRequestPacket
         return AttestationDataResponsePacket
 

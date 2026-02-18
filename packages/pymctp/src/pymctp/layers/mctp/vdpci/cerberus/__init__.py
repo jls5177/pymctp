@@ -8,6 +8,7 @@ from .types import (
     CerberusLogType,
     CerberusResetConfig,
     CerberusUpdateType,
+    ComponentAttestStatus,
 )
 
 from .rot_errors import (
