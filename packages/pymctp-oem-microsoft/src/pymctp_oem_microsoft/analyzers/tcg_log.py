@@ -48,7 +48,22 @@ class TcgLogEntry:
 
     @property
     def pcr_index(self) -> int:
+        """Raw PCR_MEASUREMENT value: (pcr << 8) | measurement.
+
+        Identifier for a specific measurement in the PCR store where
+        ``pcr`` is the PCR number and ``measurement`` is the index within it.
+        """
         return self.measurement_type & 0xFFFF
+
+    @property
+    def pcr_bank(self) -> int:
+        """The PCR number containing the measurement."""
+        return (self.pcr_index >> 8) & 0xFF
+
+    @property
+    def pcr_measurement(self) -> int:
+        """The specific measurement index in the PCR."""
+        return self.pcr_index & 0xFF
 
     @property
     def measurement_index(self) -> int:
@@ -61,7 +76,7 @@ class TcgLogEntry:
     def format_summary(self) -> str:
         """Single-line summary of this entry."""
         return (
-            f"  entry={self.entry_id}: PCR[{self.pcr_index}].meas[{self.measurement_index}] "
+            f"  entry={self.entry_id}: PCR[{self.pcr_bank}:{self.pcr_measurement}].meas[{self.measurement_index}] "
             f"event=0x{self.event_type:08X} alg={self.alg_name} "
             f"digest={self.digest[:8].hex()}... "
             f"measurement={self.measurement[:8].hex()}..."
