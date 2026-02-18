@@ -169,7 +169,7 @@ class GetComponentInstanceInfoRequestPacket(AllowRawSummary, Packet):
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         comp_name = _component_name(self.component_id)
-        summary = f"GetCompInstInfo ({comp_name})"
+        summary = f"GetCompInstInfo ({self.component_id}({comp_name}))"
         return summary, [VdPciHdrPacket]
 
     def is_request(self, check_payload: bool = True) -> bool:

@@ -1362,7 +1362,7 @@ wheels = [
 
 [[package]]
 name = "pymctp"
-version = "0.2.9"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1377,9 +1377,9 @@ dependencies = [
     { name = "tzlocal", version = "5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "tzlocal", version = "5.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7c/a1/9a82dd7ad7a5476102cd192d5c7ee1fddeba3f9207b919dc137d639935e0/pymctp-0.2.9.tar.gz", hash = "sha256:f89de534c0de7fb45ece8603d7e1a196298e2d3e96a54b214b740bc2a984bc9b", size = 61867, upload-time = "2026-02-14T22:46:56.439Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/d3/57f92d13e2ed874c5bb61e9668529e4623e58ee02e1d3ecbaff31af24ccf/pymctp-0.3.2.tar.gz", hash = "sha256:5e96cdecabe526ba27b7ba1aeb3bf5e1f66fb2d5f3216045c330aef401aa3361", size = 115423, upload-time = "2026-02-17T18:33:30.488Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/b1/bc55b9b8ecc4b079c1fa450d5996fdda11620e8e0f55b906333c1288adfa/pymctp-0.2.9-py3-none-any.whl", hash = "sha256:7fd52edfd58df67b5163e8fb0e38af82798749f68285e2e8f6994008ceafdc79", size = 107448, upload-time = "2026-02-14T22:46:54.366Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/ef/be9bfec20c8d8419fd987da93a8301a5a3084bef328fd99cf8f943b0c924/pymctp-0.3.2-py3-none-any.whl", hash = "sha256:6965183bcbd48a659b6b7fce01dc0fbd7777ed2c9e1a7ceb2e7a7b7286e1324f", size = 178490, upload-time = "2026-02-17T18:33:28.461Z" },
 ]
 
 [package.optional-dependencies]
@@ -1500,7 +1500,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
-    { name = "pymctp", specifier = ">=0.2.9" },
+    { name = "pymctp", specifier = ">=0.3.1" },
     { name = "pytz" },
     { name = "tzlocal" },
 ]
