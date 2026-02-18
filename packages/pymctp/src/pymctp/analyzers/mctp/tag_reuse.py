@@ -17,6 +17,7 @@ from typing import Sequence
 
 from pymctp.analyzers.base import AnalysisRule, Finding, Severity
 from pymctp.layers.mctp import TransportHdrPacket
+from pymctp.layers.mctp.types import ICanReply
 
 
 class TagReuseRule(AnalysisRule):
@@ -45,8 +46,9 @@ class TagReuseRule(AnalysisRule):
         dst = hdr.dst
         is_request = bool(hdr.to)
 
-        if is_request and hdr.som:
-            # Only SOM+EOM requests start a new transaction
+        # Skip packets whose payload explicitly can't generate a reply
+        if is_request and hdr.som and (not hdr.payload or isinstance(hdr.payload, ICanReply)):
+            # Only SOM requests start a new transaction
             key = (tag, src, dst)
             if key in self._pending:
                 prev_idx, prev_ts, prev_summary = self._pending[key]

@@ -17,6 +17,7 @@ from typing import Sequence
 
 from pymctp.analyzers.base import AnalysisRule, Finding, Severity
 from pymctp.layers.mctp import TransportHdrPacket
+from pymctp.layers.mctp.types import ICanReply
 
 _DEFAULT_TIMEOUT = timedelta(seconds=5)
 
@@ -61,7 +62,9 @@ class ResponseTimeoutRule(AnalysisRule):
         if not pkt.haslayer(TransportHdrPacket):
             return False
         hdr = pkt.getlayer(TransportHdrPacket)
-        return bool(hdr.to) and bool(hdr.som)
+        if not (bool(hdr.to) and bool(hdr.som)):
+            return False
+        return not hdr.payload or isinstance(hdr.payload, ICanReply)
 
     @staticmethod
     def _is_response(pkt) -> bool:

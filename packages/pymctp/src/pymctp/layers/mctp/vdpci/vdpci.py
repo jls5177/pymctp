@@ -31,6 +31,33 @@ class RqBit(IntEnum):
 DEFAULT_HDR_VERSION = 0
 
 
+class ShortVdPciPacket(Packet):
+    """Fallback for VDPCI payloads shorter than the standard 4-byte header.
+
+    Some non-standard vendors (e.g. 0xFFFF for in-kernel target reads) send
+    only a 2-byte vendor ID with no rq/cmd_code fields.
+    """
+
+    name = "VDM-PCI-Short"
+    fields_desc = [
+        ShortEnumField("vendor_id", 0, VdPCIVendorIds),
+    ]
+
+    def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
+        summary = f"Short ({self.vendor_id:04X})"
+        return summary, [TransportHdrPacket, SmbusTransportPacket, TrimmedSmbusTransportPacket]
+
+    def do_dissect_payload(self, s: bytes) -> None:
+        cls = self.guess_payload_class(s)
+        if cls is not None and cls is not conf.raw_layer:
+            self.add_payload(cls(s, _internal=1, _underlayer=self))
+        elif s:
+            self.add_payload(conf.raw_layer(s, _internal=1, _underlayer=self))
+
+    def is_request(self, check_payload: bool = True) -> bool:
+        return True
+
+
 @AutobindMessageType(MsgTypes.VDPCI)
 class VdPciHdrPacket(Packet):
     name = "VDM-PCI"
@@ -41,6 +68,12 @@ class VdPciHdrPacket(Packet):
         BitField("unused", 0, 5),
         XByteField("vdm_cmd_code", 0),
     ]
+
+    @classmethod
+    def dispatch_hook(cls, _pkt=None, *args, **kargs):
+        if _pkt is not None and len(_pkt) < 4:
+            return ShortVdPciPacket
+        return cls
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         rqType = "REQ" if self.is_request() else "RSP"

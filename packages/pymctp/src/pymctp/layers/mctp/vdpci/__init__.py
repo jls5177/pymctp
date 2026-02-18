@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-from .vdpci import AutobindVDMMsg, RqBit, VdPciHdr, VdPciHdrPacket
+from .vdpci import AutobindVDMMsg, RqBit, ShortVdPciPacket, VdPciHdr, VdPciHdrPacket
 
 from .types import VdPCIVendorIds
 
