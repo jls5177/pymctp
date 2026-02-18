@@ -4,7 +4,7 @@
 
 import struct
 
-from scapy.fields import ByteEnumField, XByteField, XLEIntField, XLEShortField
+from scapy.fields import ByteEnumField, StrField, XByteField, XLEIntField, XLEShortField
 from scapy.packet import Packet, bind_layers
 
 from ....helpers import AllowRawSummary
@@ -250,6 +250,7 @@ class AttestationDataResponsePacket(AllowRawSummary, Packet):
     fields_desc = [
         XLEIntField("event_data", 0),
         XByteField("status_version", 0),
+        StrField("status_data", b""),
     ]
 
     # Component ID → name maps. Additional maps (e.g. for OEM components)
@@ -257,7 +258,7 @@ class AttestationDataResponsePacket(AllowRawSummary, Packet):
     component_maps: list[dict[int, str]] = []
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
-        raw = bytes(self.payload) if self.payload else b""
+        raw = bytes(self.status_data) if self.status_data else b""
         version = self.status_version
         if version == 2 and raw:
             entries = _decode_component_statuses_v2(raw, self.component_maps)
