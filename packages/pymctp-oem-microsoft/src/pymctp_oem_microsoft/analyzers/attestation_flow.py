@@ -283,13 +283,14 @@ def _short_status(value: int) -> str:
 
 def _format_component_status(
     entries: list[tuple[str, list[str | int]]],
-) -> str:
+) -> tuple[str, bool]:
     """Format component statuses concisely.
 
     entries: list of (component_name, [raw_status_byte, ...])
+    Returns: (formatted_string, has_issues)
     """
     if not entries:
-        return "  (no components)"
+        return "  (no components)", False
 
     ok_count = 0
     issue_entries: list[tuple[str, list[str]]] = []
@@ -309,11 +310,10 @@ def _format_component_status(
                 lines.append(f"    {comp_name}: {short[0]}")
             else:
                 lines.append(f"    {comp_name}: [{', '.join(short)}]")
+        return "\n".join(lines), True
     else:
         names = ", ".join(name for name, _ in entries)
-        lines.append(f"{total}/{total} OK: {names}")
-
-    return "\n".join(lines)
+        return f"{total}/{total} OK: {names}", False
 
 
 class _CollectState:
@@ -444,10 +444,10 @@ class ComponentStatusRule(AnalysisRule):
             self._reset_state()
             return []
 
-        body = _format_component_status(entries)
+        body, has_issues = _format_component_status(entries)
         finding = Finding(
             rule_id=self.rule_id,
-            severity=Severity.INFO,
+            severity=Severity.ERROR if has_issues else Severity.INFO,
             message=f"Component status (v{version}):\n  {body}",
             packet_index=self._first_idx or 0,
             timestamp=self._first_ts,
