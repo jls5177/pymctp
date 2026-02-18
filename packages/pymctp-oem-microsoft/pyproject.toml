@@ -50,6 +50,10 @@ microsoft = "pymctp_oem_microsoft.layers"
 [project.entry-points."pymctp.cli_commands"]
 analyze-ipmi-audit-log = "pymctp_oem_microsoft.cli.analyze_ipmi_audit_log:analyze_ipmi_audit_log"
 
+# Register analyzer rules (auto-discovered by triage engine)
+[project.entry-points."pymctp.analyzer_rules"]
+msft-attestation = "pymctp_oem_microsoft.analyzers.attestation_flow:get_attestation_rules"
+
 [tool.hatch.version]
 source = "regex_commit"
 path = "src/pymctp_oem_microsoft/__about__.py"
