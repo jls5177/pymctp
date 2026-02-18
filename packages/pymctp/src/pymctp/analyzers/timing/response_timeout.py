@@ -61,14 +61,14 @@ class ResponseTimeoutRule(AnalysisRule):
         if not pkt.haslayer(TransportHdrPacket):
             return False
         hdr = pkt.getlayer(TransportHdrPacket)
-        return bool(hdr.to) and bool(hdr.som) and bool(hdr.eom)
+        return bool(hdr.to) and bool(hdr.som)
 
     @staticmethod
     def _is_response(pkt) -> bool:
         if not pkt.haslayer(TransportHdrPacket):
             return False
         hdr = pkt.getlayer(TransportHdrPacket)
-        return (not hdr.to) and bool(hdr.som) and bool(hdr.eom)
+        return (not hdr.to) and bool(hdr.som)
 
     # ------------------------------------------------------------------
 

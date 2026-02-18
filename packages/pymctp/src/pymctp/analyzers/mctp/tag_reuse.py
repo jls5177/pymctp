@@ -45,7 +45,7 @@ class TagReuseRule(AnalysisRule):
         dst = hdr.dst
         is_request = bool(hdr.to)
 
-        if is_request and hdr.som and hdr.eom:
+        if is_request and hdr.som:
             # Only SOM+EOM requests start a new transaction
             key = (tag, src, dst)
             if key in self._pending:
