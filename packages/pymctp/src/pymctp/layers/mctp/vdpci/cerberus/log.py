@@ -200,9 +200,38 @@ def _decode_component_statuses_v2(
     return entries
 
 
+def _decode_component_statuses_v2_raw(
+    data: bytes, component_maps: list[dict[int, str]],
+) -> list[tuple[str, list[int]]]:
+    """Decode version-2 component status data into (name, [raw_status_byte]) tuples."""
+    entries: list[tuple[str, list[int]]] = []
+    pos = 0
+    while pos + 5 <= len(data):
+        comp_id = struct.unpack_from("<I", data, pos)[0]
+        comp_count = data[pos + 4]
+        if pos + 5 + comp_count > len(data):
+            break
+        statuses = [data[pos + 5 + i] for i in range(comp_count)]
+        comp_name: str | None = None
+        for cmap in component_maps:
+            comp_name = cmap.get(comp_id)
+            if comp_name is not None:
+                break
+        if comp_name is None:
+            comp_name = f"Component-{comp_id}"
+        entries.append((comp_name, statuses))
+        pos += 5 + comp_count
+    return entries
+
+
 def _decode_component_statuses_v1(data: bytes) -> list[tuple[str, list[str]]]:
     """Decode version-1 flat status array (one byte per component)."""
     return [(f"Component-{i}", [_status_name(b)]) for i, b in enumerate(data)]
+
+
+def _decode_component_statuses_v1_raw(data: bytes) -> list[tuple[str, list[int]]]:
+    """Decode version-1 flat status array into (name, [raw_status_byte]) tuples."""
+    return [(f"Component-{i}", [b]) for i, b in enumerate(data)]
 
 
 class AttestationDataResponsePacket(AllowRawSummary, Packet):
