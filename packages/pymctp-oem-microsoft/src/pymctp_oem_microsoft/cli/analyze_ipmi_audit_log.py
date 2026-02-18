@@ -229,9 +229,12 @@ def analyze_ipmi_audit_log(
     # --- Determine input source and output files ---
     if input_file:
         fd = open(input_file, "r")
-        decoded_output = open(f"{input_file}.decoded.log", "w")
         click.echo(f"Analyzing: {input_file}")
-        click.echo(f"Writing decoded packets to: {input_file}.decoded.log")
+        if packet_log is None:
+            decoded_output = open(f"{input_file}.decoded.log", "w")
+            click.echo(f"Writing decoded packets to: {input_file}.decoded.log")
+        else:
+            decoded_output = None
     else:
         fd = sys.stdin
         decoded_output = sys.stdout
@@ -319,7 +322,7 @@ def analyze_ipmi_audit_log(
                 pkt_summary = f"{timestamp.isoformat()}: {ipmi_packet.summary()}"
 
                 # Print to terminal (suppressed in triage mode)
-                if not triage:
+                if not triage and decoded_output is not None:
                     decoded_output.write(pkt_summary + "\n")
                     if decoded_output == sys.stdout:
                         decoded_output.flush()
@@ -331,7 +334,7 @@ def analyze_ipmi_audit_log(
     finally:
         if fd != sys.stdin:
             fd.close()
-        if decoded_output != sys.stdout:
+        if decoded_output is not None and decoded_output != sys.stdout:
             decoded_output.close()
         if missing_output:
             missing_output.close()
