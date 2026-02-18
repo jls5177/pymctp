@@ -39,6 +39,7 @@ class ShortVdPciPacket(Packet):
     """
 
     name = "VDM-PCI-Short"
+    expects_response = False
     fields_desc = [
         ShortEnumField("vendor_id", 0, VdPCIVendorIds),
     ]
