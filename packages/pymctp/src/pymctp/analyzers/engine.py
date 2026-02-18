@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Iterable, Sequence
 
 import click
@@ -76,8 +76,15 @@ class AnalysisEngine:
         for rule in self.rules:
             self.findings.extend(rule.finalize())
 
-        # Sort by timestamp (earliest first), then severity (most severe first)
-        self.findings.sort(key=lambda f: (f.timestamp or datetime.min, -f.severity))
+        # Sort by timestamp (earliest first), then severity (most severe first).
+        # Use a fallback that matches the tz-awareness of actual timestamps.
+        _sentinel = datetime.min
+        for f in self.findings:
+            if f.timestamp is not None:
+                if f.timestamp.tzinfo is not None:
+                    _sentinel = datetime.min.replace(tzinfo=timezone.utc)
+                break
+        self.findings.sort(key=lambda f: (f.timestamp or _sentinel, -f.severity))
         return self.findings
 
     def analyze(
