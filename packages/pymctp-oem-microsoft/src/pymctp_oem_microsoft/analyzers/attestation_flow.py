@@ -24,8 +24,8 @@ from pymctp.layers.mctp.vdpci.cerberus.log import (
     GetAttestationDataRequestPacket,
     ReadLogRequestPacket,
     ReadLogResponsePacket,
-    _decode_component_statuses_v1,
-    _decode_component_statuses_v2,
+    _decode_component_statuses_v1_raw,
+    _decode_component_statuses_v2_raw,
 )
 from pymctp.layers.mctp.vdpci.cerberus.types import CerberusLogType
 
@@ -250,14 +250,79 @@ class SpdmGetMeasurementsRule(AnalysisRule):
         pass
 
 
+_STATUS_SHORT: dict[int, str] = {
+    0x00: "OK",
+    0x01: "Unidentified",
+    0x02: "NeverAttested",
+    0x03: "Ready",
+    0x04: "Failed",
+    0x05: "NotAttestable",
+    0x06: "OK(NoCerts)",
+    0x07: "OK(Timeout)",
+    0x08: "OK(NoCerts+Timeout)",
+    0x09: "Interrupted",
+    0x10: "Failed(Version)",
+    0x11: "Failed(Caps)",
+    0x12: "Failed(Algorithm)",
+    0x13: "Failed(Digests)",
+    0x14: "Failed(Certs)",
+    0x15: "Failed(Challenge)",
+    0x16: "Failed(Measurement)",
+    0x17: "Failed(Response)",
+    0x20: "Failed(Mismatch)",
+    0x21: "Failed(UntrustedCerts)",
+    0x22: "Failed(CFM)",
+}
+
+_OK_STATUSES = {0x00, 0x06, 0x07, 0x08}
+
+
+def _short_status(value: int) -> str:
+    return _STATUS_SHORT.get(value, f"0x{value:02X}")
+
+
+def _format_component_status(
+    entries: list[tuple[str, list[str | int]]],
+) -> str:
+    """Format component statuses concisely.
+
+    entries: list of (component_name, [raw_status_byte, ...])
+    """
+    if not entries:
+        return "  (no components)"
+
+    ok_count = 0
+    issue_entries: list[tuple[str, list[str]]] = []
+    for comp_name, raw_statuses in entries:
+        short = [_short_status(s) for s in raw_statuses]
+        if all(s in _OK_STATUSES for s in raw_statuses):
+            ok_count += 1
+        else:
+            issue_entries.append((comp_name, short))
+
+    total = len(entries)
+    lines: list[str] = []
+    if issue_entries:
+        lines.append(f"{ok_count}/{total} OK, {len(issue_entries)} with issues:")
+        for comp_name, short in issue_entries:
+            if len(short) == 1:
+                lines.append(f"    {comp_name}: {short[0]}")
+            else:
+                lines.append(f"    {comp_name}: [{', '.join(short)}]")
+    else:
+        names = ", ".join(name for name, _ in entries)
+        lines.append(f"{total}/{total} OK: {names}")
+
+    return "\n".join(lines)
+
+
 class ComponentStatusRule(AnalysisRule):
     """Collects GET_ATTESTATION_DATA responses and decodes component attestation statuses.
 
-    The utility reads component status via multiple GET_ATTESTATION_DATA requests
-    at increasing offsets.  The first response carries a 5-byte header (event_data +
-    status_version) followed by component status entries; subsequent responses are
-    raw continuation data.  This rule reassembles across requests and emits an INFO
-    finding once the full status payload has been collected.
+    Tracks PMR/entry to only reassemble reads for a single measurement.
+    The first response carries a 5-byte header (event_data + status_version)
+    followed by component status entries; subsequent responses at increasing
+    offsets are raw continuation data.
     """
 
     @property
@@ -274,7 +339,8 @@ class ComponentStatusRule(AnalysisRule):
         self._first_summary: str | None = None
         self._version: int | None = None
         self._status_data = bytearray()
-        # Track transport flow for response matching
+        self._pmr: int | None = None
+        self._entry: int | None = None
         self._resp_tag: int | None = None
         self._resp_src: int | None = None
         self._resp_dst: int | None = None
@@ -284,44 +350,39 @@ class ComponentStatusRule(AnalysisRule):
     def feed(self, index: int, timestamp: datetime | None, packet: AnyPacketType) -> Sequence[Finding]:
         findings: list[Finding] = []
 
-        # Detect a new GET_ATTESTATION_DATA request at offset 0 → start collection
         if packet.haslayer(GetAttestationDataRequestPacket):
             req = packet.getlayer(GetAttestationDataRequestPacket)
             if req.offset == 0:
-                # Emit any previously collected data before starting a new sequence
+                # New measurement — emit previous and start fresh
                 findings.extend(self._emit())
                 self._first_idx = index
                 self._first_ts = timestamp
                 self._first_summary = packet.summary()
+                self._pmr = req.pmr_id
+                self._entry = req.entry_id
                 self._version = None
                 self._status_data.clear()
                 self._collecting = True
                 self._frag_buf.clear()
-                if packet.haslayer(TransportHdrPacket):
-                    hdr = packet.getlayer(TransportHdrPacket)
-                    self._resp_tag = hdr.tag
-                    self._resp_src = hdr.dst
-                    self._resp_dst = hdr.src
+                self._track_response_flow(packet)
             elif self._collecting:
-                # Continuation request — track new tag for response matching
-                if packet.haslayer(TransportHdrPacket):
-                    hdr = packet.getlayer(TransportHdrPacket)
-                    self._resp_tag = hdr.tag
-                    self._resp_src = hdr.dst
-                    self._resp_dst = hdr.src
-                self._frag_buf.clear()
+                # Only continue if same PMR/entry
+                if req.pmr_id == self._pmr and req.entry_id == self._entry:
+                    self._track_response_flow(packet)
+                    self._frag_buf.clear()
+                else:
+                    # Different measurement — emit and stop
+                    findings.extend(self._emit())
             return findings
 
         if not self._collecting:
             return findings
 
-        # Collect response fragments
         if not packet.haslayer(TransportHdrPacket):
             return findings
 
         hdr = packet.getlayer(TransportHdrPacket)
 
-        # Match response flow
         if self._resp_tag is not None and hdr.tag != self._resp_tag:
             return findings
         if self._resp_src is not None and hdr.src not in (self._resp_src, 0x00):
@@ -337,27 +398,31 @@ class ComponentStatusRule(AnalysisRule):
                     self._version = resp.status_version
                 if resp.payload:
                     self._frag_buf.extend(bytes(resp.payload))
-            else:
-                # Continuation reads don't have the 5-byte header — raw payload
-                if hdr.payload:
-                    self._frag_buf.extend(bytes(hdr.payload))
+            elif hdr.payload:
+                self._frag_buf.extend(bytes(hdr.payload))
         elif hdr.payload:
             self._frag_buf.extend(bytes(hdr.payload))
 
         if not hdr.eom:
             return findings
 
-        # Fragment complete — append to status data
         self._status_data.extend(self._frag_buf)
         self._frag_buf.clear()
         return findings
 
+    def _track_response_flow(self, packet: AnyPacketType) -> None:
+        if packet.haslayer(TransportHdrPacket):
+            hdr = packet.getlayer(TransportHdrPacket)
+            self._resp_tag = hdr.tag
+            self._resp_src = hdr.dst
+            self._resp_dst = hdr.src
+
     def finalize(self) -> Sequence[Finding]:
-        """Emit collected component status when analysis ends."""
         return self._emit()
 
     def _emit(self) -> list[Finding]:
         if not self._collecting or not self._status_data or self._version is None:
+            self._reset_state()
             return []
 
         version = self._version
@@ -365,22 +430,18 @@ class ComponentStatusRule(AnalysisRule):
         maps = AttestationDataResponsePacket.component_maps
 
         if version == 2:
-            entries = _decode_component_statuses_v2(data, maps)
+            entries = _decode_component_statuses_v2_raw(data, maps)
         elif version == 1:
-            entries = _decode_component_statuses_v1(data)
+            entries = _decode_component_statuses_v1_raw(data)
         else:
-            entries = []
+            self._reset_state()
+            return []
 
-        lines = []
-        for comp_name, statuses in entries:
-            status_str = ", ".join(statuses)
-            lines.append(f"  {comp_name}: {status_str}")
-        body = "\n".join(lines) if lines else "  (no components)"
-
+        body = _format_component_status(entries)
         finding = Finding(
             rule_id=self.rule_id,
             severity=Severity.INFO,
-            message=f"Component status (v{version}, {len(entries)} components):\n{body}",
+            message=f"Component status (v{version}):\n  {body}",
             packet_index=self._first_idx or 0,
             timestamp=self._first_ts,
             packet_summary=self._first_summary or "",
@@ -394,6 +455,8 @@ class ComponentStatusRule(AnalysisRule):
         self._first_ts = None
         self._first_summary = None
         self._version = None
+        self._pmr = None
+        self._entry = None
         self._status_data.clear()
         self._collecting = False
         self._frag_buf.clear()
