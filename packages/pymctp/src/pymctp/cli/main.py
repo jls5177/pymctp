@@ -136,6 +136,13 @@ cli.add_command(
 )
 cli.add_command(
     _LazyCommand(
+        "completions",
+        "pymctp.cli.completions:completions",
+        short_help="Output shell completion script for pymctp.",
+    )
+)
+cli.add_command(
+    _LazyCommand(
         "extensions",
         "pymctp.cli.extensions:extensions",
         short_help="List all detected pymctp extension packages and their versions.",
