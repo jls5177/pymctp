@@ -26,6 +26,7 @@ def extensions():
         "pymctp.extensions",
         "pymctp.layers",
         "pymctp.exercisers",
+        "pymctp.analyzer_rules",
     ]
 
     for group in entry_point_groups:
