@@ -19,7 +19,14 @@ from pymctp.layers.interfaces import AnyPacketType
 from pymctp.layers.mctp import TransportHdrPacket
 from pymctp.layers.mctp.spdm.get_measurements import GetMeasurementsPacket, MeasurementRequestAttributes
 from pymctp.layers.mctp.spdm.spdm import SpdmHdrPacket
-from pymctp.layers.mctp.vdpci.cerberus.log import ReadLogRequestPacket, ReadLogResponsePacket
+from pymctp.layers.mctp.vdpci.cerberus.log import (
+    AttestationDataResponsePacket,
+    GetAttestationDataRequestPacket,
+    ReadLogRequestPacket,
+    ReadLogResponsePacket,
+    _decode_component_statuses_v1,
+    _decode_component_statuses_v2,
+)
 from pymctp.layers.mctp.vdpci.cerberus.types import CerberusLogType
 
 from pymctp_oem_microsoft.analyzers.tcg_log import decode_attestation_log, format_tcg_log_summary
@@ -243,6 +250,161 @@ class SpdmGetMeasurementsRule(AnalysisRule):
         pass
 
 
+class ComponentStatusRule(AnalysisRule):
+    """Collects GET_ATTESTATION_DATA responses and decodes component attestation statuses.
+
+    The utility reads component status via multiple GET_ATTESTATION_DATA requests
+    at increasing offsets.  The first response carries a 5-byte header (event_data +
+    status_version) followed by component status entries; subsequent responses are
+    raw continuation data.  This rule reassembles across requests and emits an INFO
+    finding once the full status payload has been collected.
+    """
+
+    @property
+    def rule_id(self) -> str:
+        return "MSFT-ATTEST-005"
+
+    @property
+    def description(self) -> str:
+        return "Decodes component attestation status from GET_ATTESTATION_DATA responses"
+
+    def __init__(self) -> None:
+        self._first_idx: int | None = None
+        self._first_ts: datetime | None = None
+        self._first_summary: str | None = None
+        self._version: int | None = None
+        self._status_data = bytearray()
+        # Track transport flow for response matching
+        self._resp_tag: int | None = None
+        self._resp_src: int | None = None
+        self._resp_dst: int | None = None
+        self._collecting = False
+        self._frag_buf = bytearray()
+
+    def feed(self, index: int, timestamp: datetime | None, packet: AnyPacketType) -> Sequence[Finding]:
+        findings: list[Finding] = []
+
+        # Detect a new GET_ATTESTATION_DATA request at offset 0 → start collection
+        if packet.haslayer(GetAttestationDataRequestPacket):
+            req = packet.getlayer(GetAttestationDataRequestPacket)
+            if req.offset == 0:
+                # Emit any previously collected data before starting a new sequence
+                findings.extend(self._emit())
+                self._first_idx = index
+                self._first_ts = timestamp
+                self._first_summary = packet.summary()
+                self._version = None
+                self._status_data.clear()
+                self._collecting = True
+                self._frag_buf.clear()
+                if packet.haslayer(TransportHdrPacket):
+                    hdr = packet.getlayer(TransportHdrPacket)
+                    self._resp_tag = hdr.tag
+                    self._resp_src = hdr.dst
+                    self._resp_dst = hdr.src
+            elif self._collecting:
+                # Continuation request — track new tag for response matching
+                if packet.haslayer(TransportHdrPacket):
+                    hdr = packet.getlayer(TransportHdrPacket)
+                    self._resp_tag = hdr.tag
+                    self._resp_src = hdr.dst
+                    self._resp_dst = hdr.src
+                self._frag_buf.clear()
+            return findings
+
+        if not self._collecting:
+            return findings
+
+        # Collect response fragments
+        if not packet.haslayer(TransportHdrPacket):
+            return findings
+
+        hdr = packet.getlayer(TransportHdrPacket)
+
+        # Match response flow
+        if self._resp_tag is not None and hdr.tag != self._resp_tag:
+            return findings
+        if self._resp_src is not None and hdr.src not in (self._resp_src, 0x00):
+            return findings
+        if self._resp_dst is not None and hdr.dst not in (self._resp_dst, 0x00):
+            return findings
+
+        if hdr.som:
+            self._frag_buf.clear()
+            if packet.haslayer(AttestationDataResponsePacket):
+                resp = packet.getlayer(AttestationDataResponsePacket)
+                if self._version is None:
+                    self._version = resp.status_version
+                if resp.payload:
+                    self._frag_buf.extend(bytes(resp.payload))
+            else:
+                # Continuation reads don't have the 5-byte header — raw payload
+                if hdr.payload:
+                    self._frag_buf.extend(bytes(hdr.payload))
+        elif hdr.payload:
+            self._frag_buf.extend(bytes(hdr.payload))
+
+        if not hdr.eom:
+            return findings
+
+        # Fragment complete — append to status data
+        self._status_data.extend(self._frag_buf)
+        self._frag_buf.clear()
+        return findings
+
+    def finalize(self) -> Sequence[Finding]:
+        """Emit collected component status when analysis ends."""
+        return self._emit()
+
+    def _emit(self) -> list[Finding]:
+        if not self._collecting or not self._status_data or self._version is None:
+            return []
+
+        version = self._version
+        data = bytes(self._status_data)
+        maps = AttestationDataResponsePacket.component_maps
+
+        if version == 2:
+            entries = _decode_component_statuses_v2(data, maps)
+        elif version == 1:
+            entries = _decode_component_statuses_v1(data)
+        else:
+            entries = []
+
+        lines = []
+        for comp_name, statuses in entries:
+            status_str = ", ".join(statuses)
+            lines.append(f"  {comp_name}: {status_str}")
+        body = "\n".join(lines) if lines else "  (no components)"
+
+        finding = Finding(
+            rule_id=self.rule_id,
+            severity=Severity.INFO,
+            message=f"Component status (v{version}, {len(entries)} components):\n{body}",
+            packet_index=self._first_idx or 0,
+            timestamp=self._first_ts,
+            packet_summary=self._first_summary or "",
+        )
+
+        self._reset_state()
+        return [finding]
+
+    def _reset_state(self) -> None:
+        self._first_idx = None
+        self._first_ts = None
+        self._first_summary = None
+        self._version = None
+        self._status_data.clear()
+        self._collecting = False
+        self._frag_buf.clear()
+        self._resp_tag = None
+        self._resp_src = None
+        self._resp_dst = None
+
+    def reset(self) -> None:
+        self._reset_state()
+
+
 def get_attestation_rules() -> list[AnalysisRule]:
     """Factory function for entry point registration."""
     return [
@@ -250,4 +412,5 @@ def get_attestation_rules() -> list[AnalysisRule]:
         AttestationCheckRule(),
         ForceAttestRule(),
         SpdmGetMeasurementsRule(),
+        ComponentStatusRule(),
     ]
