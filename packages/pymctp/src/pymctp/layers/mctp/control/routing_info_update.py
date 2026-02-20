@@ -62,6 +62,28 @@ class RoutingInfoUpdateRequestPacket(AllowRawSummary, Packet):
         PacketListField("entries", [], RoutingInfoUpdateEntry1BAddressPacket, count_from=lambda pkt: pkt.entry_count),
     ]
 
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
+        # Apply each entry to the routing table
+        for entry in self.entries:
+            rt_entry = RoutingTableEntry(
+                starting_eid=entry.starting_eid,
+                port_number=0,
+                phy_address=[entry.phy_address],
+                entry_type=EntryType(entry.entry_type),
+                eid_range=entry.entry_count,
+            )
+            # Replace existing entry for same starting EID or append
+            replaced = False
+            for i, existing in enumerate(ctx.routing_table):
+                if existing.starting_eid == rt_entry.starting_eid:
+                    ctx.routing_table[i] = rt_entry
+                    replaced = True
+                    break
+            if not replaced:
+                ctx.routing_table.append(rt_entry)
+        # Per spec, response is just the control header with completion code (no payload)
+        return CompletionCodes.SUCCESS, None
+
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} [{self.entry_count}] ("
         entries = [entry.mysummary()[0] for entry in self.entries]

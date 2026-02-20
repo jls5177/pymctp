@@ -15,6 +15,8 @@ from mashumaro.config import BaseConfig
 from scapy.supersocket import SuperSocket
 
 from pymctp.automaton import EndpointSession, SimpleEndpointAM
+from pymctp.automaton.role_endpoint import RoleBasedEndpointAM
+from pymctp.automaton.roles import EndpointRole, create_endpoint
 from pymctp.exerciser import AardvarkI2CSocket, QemuI2CNetDevSocket, QemuI3CCharDevSocket, TTYSerialSocket
 from pymctp.layers.mctp import EndpointContext, Smbus7bitAddress
 
@@ -190,6 +192,7 @@ class EndpointConfig(DataClassDictMixin):
     config: AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig
     thread_kwargs: dict[str, Any] = field(default_factory=dict)
     downstream_endpoints: dict[int, EndpointContext] = field(default_factory=dict)
+    role: str | None = None
 
     class Config(BaseConfig):
         serialization_strategy = {
@@ -205,7 +208,7 @@ class EndpointManager:
     session: EndpointSession
     socket: SuperSocket
     thread: Thread
-    am: SimpleEndpointAM
+    am: SimpleEndpointAM | RoleBasedEndpointAM
 
     @classmethod
     def from_config(cls, config: dict[Any, Any], start_thread=True, verbose: bool = False, prn=None):
@@ -214,7 +217,7 @@ class EndpointManager:
         socket = cfg.config.socket
         session = EndpointSession(context=cfg.context, socket=socket)
 
-        am = SimpleEndpointAM(
+        common_kwargs = dict(
             socket=socket,
             context=cfg.context,
             session=session,
@@ -222,6 +225,12 @@ class EndpointManager:
             prn=prn or session.on_packet_received,
             downstream_endpoints=cfg.downstream_endpoints,
         )
+
+        if cfg.role:
+            role = EndpointRole(cfg.role)
+            am = create_endpoint(role, **common_kwargs)
+        else:
+            am = SimpleEndpointAM(**common_kwargs)
         if cfg.context.is_bus_owner:
             # TODO: add discovery flow answering machine here
             pass

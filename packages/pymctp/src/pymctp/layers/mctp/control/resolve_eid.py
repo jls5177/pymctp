@@ -5,10 +5,10 @@
 from scapy.fields import FieldLenField, FieldListField, XByteField
 from scapy.packet import Packet
 
-from .. import TransportHdrPacket
+from .. import EndpointContext, TransportHdrPacket
 from ..types import AnyPacketType
 from .control import AutobindControlMsg, ControlHdr, ControlHdrPacket
-from .types import ContrlCmdCodes
+from .types import CompletionCode, CompletionCodes, ContrlCmdCodes
 
 
 @AutobindControlMsg(ContrlCmdCodes.ResolveEndpointID, is_request=True)
@@ -17,6 +17,20 @@ class ResolveEndpointIDRequestPacket(Packet):
     fields_desc = [
         XByteField("target_eid", 0),
     ]
+
+    def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
+        if not ctx.is_bus_owner:
+            return CompletionCodes.ERROR_UNSUPPORTED_CMD, None
+
+        # Search routing table for the target EID
+        for entry in ctx.routing_table:
+            if entry.starting_eid <= self.target_eid < entry.starting_eid + entry.eid_range:
+                return CompletionCodes.SUCCESS, ResolveEndpointIDResponse(
+                    bridge_eid=ctx.eid,
+                    phys_address=list(entry.phy_address),
+                )
+
+        return CompletionCodes.ERROR_INVALID_DATA, None
 
     def mysummary(self) -> str | tuple[str, list[AnyPacketType]]:
         summary = f"{self.name} (target_eid: 0x{self.target_eid:02X})"

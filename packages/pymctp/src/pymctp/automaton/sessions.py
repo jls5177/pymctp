@@ -17,7 +17,6 @@ from scapy.sessions import DefaultSession
 from scapy.supersocket import SuperSocket
 from scapy.utils import hexdump, linehexdump
 
-from ..exerciser import TTYSerialSocket
 from ..layers import SmbusTransportPacket, UartTransport
 from ..layers.mctp import (
     AnyPhysicalAddress,
@@ -33,6 +32,15 @@ from ..layers.mctp.types import AnyPacketType, MsgTypes
 if TYPE_CHECKING:
     from scapy.ansmachine import AnsweringMachine
     from scapy.plist import PacketList
+
+
+def _is_tty_serial_socket(sock: SuperSocket) -> bool:
+    """Check if socket is a TTYSerialSocket without requiring the package at import time."""
+    try:
+        from ..exerciser import TTYSerialSocket
+    except ImportError:
+        return False
+    return isinstance(sock, TTYSerialSocket)
 
 
 class HandlerResponse(NamedTuple):
@@ -280,7 +288,7 @@ class EndpointSession(DefaultSession):
         src_phy_addr = self.context.physical_address
         if isinstance(dst_phy_addr, Smbus7bitAddress) and isinstance(src_phy_addr, Smbus7bitAddress):
             pkt = SmbusTransport(dst_addr=dst_phy_addr, src_addr=src_phy_addr, load=pkt)
-        elif isinstance(self.socket, TTYSerialSocket):
+        elif _is_tty_serial_socket(self.socket):
             pkt = UartTransport(load=pkt)
         else:
             msg = f"Only Smbus7bitAddress are supported: {type(dst_phy_addr)}"

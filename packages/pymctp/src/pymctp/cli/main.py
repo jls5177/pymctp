@@ -148,6 +148,13 @@ cli.add_command(
         short_help="List all detected pymctp extension packages and their versions.",
     )
 )
+cli.add_command(
+    _LazyCommand(
+        "compliance",
+        "pymctp.cli.compliance:compliance",
+        short_help="Run MCTP compliance tests against a live endpoint.",
+    )
+)
 
 
 def main():
