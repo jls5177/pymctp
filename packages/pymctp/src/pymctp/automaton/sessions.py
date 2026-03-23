@@ -43,6 +43,15 @@ def _is_tty_serial_socket(sock: SuperSocket) -> bool:
     return isinstance(sock, TTYSerialSocket)
 
 
+def _is_i3c_netdev_socket(sock: SuperSocket) -> bool:
+    """Check if socket is a QemuI3CNetDevSocket without requiring the package at import time."""
+    try:
+        from ..exerciser import QemuI3CNetDevSocket
+    except ImportError:
+        return False
+    return isinstance(sock, QemuI3CNetDevSocket)
+
+
 class HandlerResponse(NamedTuple):
     stop_processing: bool
     reply: AnyPacketType
@@ -290,6 +299,11 @@ class EndpointSession(DefaultSession):
             pkt = SmbusTransport(dst_addr=dst_phy_addr, src_addr=src_phy_addr, load=pkt)
         elif _is_tty_serial_socket(self.socket):
             pkt = UartTransport(load=pkt)
+        elif _is_i3c_netdev_socket(self.socket):
+            # I3C is point-to-point: send the raw MCTP transport packet with no
+            # physical addressing wrapper. The address is dynamically assigned
+            # via ENTDAA and cannot be known ahead of time.
+            pass
         else:
             msg = f"Only Smbus7bitAddress are supported: {type(dst_phy_addr)}"
             raise TypeError(msg)

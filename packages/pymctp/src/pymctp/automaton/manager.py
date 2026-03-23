@@ -18,11 +18,13 @@ from pymctp.automaton import EndpointSession, SimpleEndpointAM
 from pymctp.automaton.role_endpoint import RoleBasedEndpointAM
 from pymctp.automaton.roles import create_endpoint
 from pymctp.exerciser import AardvarkI2CSocket, QemuI2CNetDevSocket, QemuI3CCharDevSocket, TTYSerialSocket
+from pymctp.exerciser import get_exerciser as _get_exerciser
 from pymctp.layers.mctp import EndpointContext, Smbus7bitAddress
 
 
 class ConfigTypes(str, Enum):
     Socket = "socket"
+    I3CSocket = "i3c-socket"
     Aardvark = "aardvark"
     CharDev = "chardev"
     TTY = "tty"
@@ -124,6 +126,46 @@ class UdpSocketConfig(DataClassDictMixin):
         self.socket.close()
 
 
+@dataclasses.dataclass()
+class UdpI3CSocketConfig(DataClassDictMixin):
+    """UDP socket config for QEMU i3c-target-netdev.
+
+    I3C addresses are dynamically assigned, so physical_address is not needed.
+    The transport is point-to-point and all address checks are skipped.
+    """
+
+    type = ConfigTypes.I3CSocket
+    in_port: int
+    out_port: int
+    name: str
+    iface: str | None = None
+    iface_out: str | None = None
+    dump_hex: bool = True
+    dump_packet: bool = False
+
+    socket: Any | None = field(
+        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
+    )
+
+    def __post_init__(self):
+        QemuI3CNetDevSocket = _get_exerciser("qemu-i3c-netdev")
+        if QemuI3CNetDevSocket is None:
+            msg = "QemuI3CNetDevSocket is not available. Install pymctp-exerciser-qemu."
+            raise ImportError(msg)
+        self.socket = QemuI3CNetDevSocket(
+            iface=self.iface,
+            iface_out=self.iface_out,
+            in_port=self.in_port,
+            out_port=self.out_port,
+            id_str=self.name,
+            dump_hex=self.dump_hex,
+            dump_packet=self.dump_packet,
+        )
+
+    def close_socket(self):
+        self.socket.close()
+
+
 def deserialize_aardvark_address(value: str | int | Smbus7bitAddress) -> Smbus7bitAddress:
     if isinstance(value, Smbus7bitAddress):
         return value
@@ -172,10 +214,14 @@ class AardvarkConfig(DataClassDictMixin):
         self.socket.close()
 
 
-def deserialize_supersocket(value: dict) -> AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig:
+def deserialize_supersocket(
+    value: dict,
+) -> AardvarkConfig | UdpSocketConfig | UdpI3CSocketConfig | CharDevSocketConfig | TTYSocketConfig:
     config_type = value.get("type")
     if config_type == ConfigTypes.Socket:
         return UdpSocketConfig.from_dict(value)
+    if config_type == ConfigTypes.I3CSocket:
+        return UdpI3CSocketConfig.from_dict(value)
     if config_type == ConfigTypes.Aardvark:
         return AardvarkConfig.from_dict(value)
     if config_type == ConfigTypes.CharDev:
@@ -189,14 +235,14 @@ def deserialize_supersocket(value: dict) -> AardvarkConfig | UdpSocketConfig | C
 @dataclasses.dataclass()
 class EndpointConfig(DataClassDictMixin):
     context: EndpointContext
-    config: AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig
+    config: AardvarkConfig | UdpSocketConfig | UdpI3CSocketConfig | CharDevSocketConfig | TTYSocketConfig
     thread_kwargs: dict[str, Any] = field(default_factory=dict)
     downstream_endpoints: dict[int, EndpointContext] = field(default_factory=dict)
     role: str | None = None
 
     class Config(BaseConfig):
         serialization_strategy = {
-            AardvarkConfig | UdpSocketConfig | CharDevSocketConfig | TTYSocketConfig: {
+            AardvarkConfig | UdpSocketConfig | UdpI3CSocketConfig | CharDevSocketConfig | TTYSocketConfig: {
                 "deserialize": deserialize_supersocket
             }
         }

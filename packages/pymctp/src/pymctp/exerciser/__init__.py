@@ -35,6 +35,7 @@ def __getattr__(name):
         "AardvarkI2CSocket": "aardvark",
         "QemuI2CNetDevSocket": "qemu-i2c",
         "QemuI3CCharDevSocket": "qemu-i3c",
+        "QemuI3CNetDevSocket": "qemu-i3c-netdev",
         "TTYSerialSocket": "serial",
     }
 

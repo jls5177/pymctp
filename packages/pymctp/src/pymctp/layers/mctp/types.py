@@ -187,7 +187,7 @@ def deserialize_msg_types(values: list[MsgTypes] | list[str]) -> list[MsgTypes]:
 
 @dataclasses.dataclass
 class EndpointContext(DataClassDictMixin):
-    physical_address: Smbus7bitAddress
+    physical_address: Smbus7bitAddress | None = None
     static_eid: int | None = None
     assigned_eid: int = 0
     discovered: bool = False
