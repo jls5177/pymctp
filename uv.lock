@@ -1874,7 +1874,7 @@ requires-dist = [
 
 [[package]]
 name = "pymctp-exerciser-qemu"
-version = "0.2.5"
+version = "0.2.6"
 source = { editable = "packages/pymctp-exerciser-qemu" }
 dependencies = [
     { name = "crc8" },
