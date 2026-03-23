@@ -16,7 +16,7 @@ from scapy.supersocket import SuperSocket
 
 from pymctp.automaton import EndpointSession, SimpleEndpointAM
 from pymctp.automaton.role_endpoint import RoleBasedEndpointAM
-from pymctp.automaton.roles import EndpointRole, create_endpoint
+from pymctp.automaton.roles import create_endpoint
 from pymctp.exerciser import AardvarkI2CSocket, QemuI2CNetDevSocket, QemuI3CCharDevSocket, TTYSerialSocket
 from pymctp.layers.mctp import EndpointContext, Smbus7bitAddress
 
@@ -227,8 +227,7 @@ class EndpointManager:
         )
 
         if cfg.role:
-            role = EndpointRole(cfg.role)
-            am = create_endpoint(role, **common_kwargs)
+            am = create_endpoint(cfg.role, **common_kwargs)
         else:
             am = SimpleEndpointAM(**common_kwargs)
         if cfg.context.is_bus_owner:

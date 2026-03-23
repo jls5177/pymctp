@@ -44,15 +44,65 @@ class TestResult:
         return f"[{status}] {self.name} ({self.spec_ref}): {self.message}"
 
 
-class ComplianceTestCase(ABC):
-    """A single compliance test that can be executed against a live endpoint."""
+# ---------------------------------------------------------------------------
+# Auto-registration registry
+# ---------------------------------------------------------------------------
 
+# suite name → list of ComplianceTestCase *classes*
+_test_registry: dict[str, list[type[ComplianceTestCase]]] = {}
+
+
+class ComplianceTestCase(ABC):
+    """A single compliance test that can be executed against a live endpoint.
+
+    Subclasses are **automatically registered** into the compliance test
+    registry when they define a ``suite`` class attribute::
+
+        class TestGetEndpointID(ComplianceTestCase):
+            suite = "mctp-base"
+            spec_ref = "DSP0236 §12.3"
+            description = "GetEndpointID returns a valid response"
+
+    Tests without a ``suite`` attribute (including the ABC itself) are
+    not registered.  This mirrors how pytest auto-discovers test classes.
+    """
+
+    suite: str = ""
     spec_ref: str = ""
     description: str = ""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        suite_name = getattr(cls, "suite", "")
+        # Only register concrete tests that declare a suite
+        if suite_name and not getattr(cls, "__abstractmethods__", None):
+            _test_registry.setdefault(suite_name, []).append(cls)
 
     @abstractmethod
     def run(self, session: EndpointSession, target_eid: int, *, timeout_s: float = 5.0) -> TestResult:
         """Execute the test against a live endpoint and return the result."""
+
+
+def get_registered_suites() -> list[str]:
+    """Return the names of all registered compliance test suites."""
+    _ensure_plugins_loaded()
+    return sorted(_test_registry.keys())
+
+
+def get_tests_for_suite(suite_name: str) -> list[ComplianceTestCase]:
+    """Instantiate and return all tests registered under *suite_name*."""
+    _ensure_plugins_loaded()
+    classes = _test_registry.get(suite_name, [])
+    return [cls() for cls in classes]
+
+
+def get_all_tests() -> list[ComplianceTestCase]:
+    """Instantiate and return all registered compliance tests."""
+    _ensure_plugins_loaded()
+    tests: list[ComplianceTestCase] = []
+    for suite_name in sorted(_test_registry):
+        tests.extend(cls() for cls in _test_registry[suite_name])
+    return tests
 
 
 class ComplianceTestSuite:
@@ -105,3 +155,39 @@ class ComplianceTestSuite:
         summary_parts = [f"{counts[r]} {r.value}" for r in ComplianceResult if counts[r] > 0]
         lines.append(f"Total: {total} tests — {', '.join(summary_parts)}")
         return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Plugin discovery for third-party compliance tests
+# ---------------------------------------------------------------------------
+
+import sys  # noqa: E402
+
+if sys.version_info >= (3, 10):
+    from importlib.metadata import entry_points as _entry_points
+else:
+    from importlib_metadata import entry_points as _entry_points  # type: ignore[no-redef]
+
+ENTRY_POINT_GROUP = "pymctp.compliance_tests"
+
+_plugins_loaded = False
+
+
+def _ensure_plugins_loaded() -> None:
+    """Load compliance test plugins from entry points (once)."""
+    global _plugins_loaded  # noqa: PLW0603
+    if _plugins_loaded:
+        return
+    _plugins_loaded = True
+
+    try:
+        eps = _entry_points(group=ENTRY_POINT_GROUP)
+    except TypeError:
+        eps = _entry_points().get(ENTRY_POINT_GROUP, [])  # type: ignore[assignment]
+
+    for ep in eps:
+        try:
+            # Loading the module triggers __init_subclass__ registration
+            ep.load()
+        except Exception:
+            log.warning("Failed to load compliance test plugin '%s'", ep.name, exc_info=True)

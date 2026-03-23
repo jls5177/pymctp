@@ -89,3 +89,51 @@ class TestComplianceTestSuite:
         suite = ComplianceTestSuite(session=None, target_eid=0x15)
         suite.add_tests([FakeTestCase(ComplianceResult.PASS), FakeTestCase(ComplianceResult.SKIP)])
         assert len(suite._tests) == 2
+
+
+class TestAutoRegistration:
+    """Tests for __init_subclass__ auto-registration of compliance tests."""
+
+    def test_builtin_suites_registered(self):
+        """Built-in mctp-base and mctp-bridge tests are auto-registered."""
+        from pymctp.compliance.base import get_registered_suites, get_tests_for_suite
+
+        # Force import of built-in modules
+        from pymctp.compliance import mctp_base as _  # noqa: F401
+        from pymctp.compliance import mctp_bridge as _b  # noqa: F401
+
+        suites = get_registered_suites()
+        assert "mctp-base" in suites
+        assert "mctp-bridge" in suites
+
+    def test_mctp_base_test_count(self):
+        from pymctp.compliance.base import get_tests_for_suite
+        from pymctp.compliance import mctp_base as _  # noqa: F401
+
+        tests = get_tests_for_suite("mctp-base")
+        assert len(tests) == 6
+
+    def test_mctp_bridge_test_count(self):
+        from pymctp.compliance.base import get_tests_for_suite
+        from pymctp.compliance import mctp_bridge as _  # noqa: F401
+
+        tests = get_tests_for_suite("mctp-bridge")
+        assert len(tests) == 4
+
+    def test_no_suite_not_registered(self):
+        """Test cases without a suite attribute are not registered."""
+        from pymctp.compliance.base import _test_registry
+
+        # FakeTestCase has no suite (empty string) — should NOT be in registry
+        for suite_tests in _test_registry.values():
+            for cls in suite_tests:
+                assert cls is not FakeTestCase
+                assert cls is not ErrorTestCase
+
+    def test_get_all_tests(self):
+        from pymctp.compliance.base import get_all_tests
+        from pymctp.compliance import mctp_base as _  # noqa: F401
+        from pymctp.compliance import mctp_bridge as _b  # noqa: F401
+
+        tests = get_all_tests()
+        assert len(tests) >= 10  # 6 base + 4 bridge

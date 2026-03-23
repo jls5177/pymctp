@@ -14,6 +14,25 @@ def compliance():
     """Run MCTP compliance tests against a live endpoint."""
 
 
+@compliance.command("list")
+def list_suites():
+    """List all available compliance test suites."""
+    from ..compliance.base import get_registered_suites, get_tests_for_suite
+
+    # Force discovery of built-in modules
+    from ..compliance import mctp_base as _  # noqa: F401
+    from ..compliance import mctp_bridge as _b  # noqa: F401
+
+    suites = get_registered_suites()
+    if not suites:
+        click.echo("No compliance test suites found.")
+        return
+
+    for name in suites:
+        tests = get_tests_for_suite(name)
+        click.echo(f"  {name} ({len(tests)} tests)")
+
+
 @compliance.command("run")
 @click.option("--target-eid", required=True, type=click.IntRange(0, 254), help="Destination endpoint EID.")
 @click.option(
@@ -21,8 +40,7 @@ def compliance():
     "suites",
     required=True,
     multiple=True,
-    type=click.Choice(["mctp-base", "mctp-bridge", "all"]),
-    help="Compliance test suite(s) to run.",
+    help="Compliance test suite(s) to run. Use 'all' for all suites. Use 'list' command to see available suites.",
 )
 @click.option("--timeout", default=5.0, type=float, help="Per-test timeout in seconds.")
 @click.option(
@@ -39,9 +57,12 @@ def compliance():
 def run_compliance(target_eid, suites, timeout, socket_type, socket_addr, in_port, out_port, src_eid, src_addr):
     """Execute compliance test suites against a target endpoint."""
     from ..automaton.sessions import EndpointSession
-    from ..compliance import mctp_base, mctp_bridge
-    from ..compliance.base import ComplianceTestSuite
+    from ..compliance.base import ComplianceTestSuite, get_all_tests, get_registered_suites, get_tests_for_suite
     from ..layers.mctp.types import EndpointContext, MsgTypes, Smbus7bitAddress
+
+    # Force discovery of built-in modules
+    from ..compliance import mctp_base as _  # noqa: F401
+    from ..compliance import mctp_bridge as _b  # noqa: F401
 
     # Create socket
     sock = _create_socket(socket_type, socket_addr, in_port, out_port)
@@ -59,12 +80,13 @@ def run_compliance(target_eid, suites, timeout, socket_type, socket_addr, in_por
 
     selected = set(suites)
     if "all" in selected:
-        selected = {"mctp-base", "mctp-bridge"}
-
-    if "mctp-base" in selected:
-        suite.add_tests(mctp_base.all_tests())
-    if "mctp-bridge" in selected:
-        suite.add_tests(mctp_bridge.all_tests())
+        suite.add_tests(get_all_tests())
+    else:
+        available = get_registered_suites()
+        for name in selected:
+            if name not in available:
+                raise click.BadParameter(f"Unknown suite: {name!r}. Available: {available}")
+            suite.add_tests(get_tests_for_suite(name))
 
     # Run and report
     click.echo(f"Running {len(suite._tests)} compliance tests against EID 0x{target_eid:02X}...")

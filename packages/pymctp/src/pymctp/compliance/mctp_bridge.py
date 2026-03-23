@@ -2,7 +2,11 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""MCTP Bridge Specification compliance tests (DSP0236 bridging sections)."""
+"""MCTP Bridge Specification compliance tests (DSP0236 bridging sections).
+
+All ``ComplianceTestCase`` subclasses defined here are **automatically**
+registered under the ``"mctp-bridge"`` suite via ``__init_subclass__``.
+"""
 
 from __future__ import annotations
 
@@ -22,18 +26,11 @@ from ..layers.mctp.control.allocate_eids import (
 )
 from .base import ComplianceResult, ComplianceTestCase, TestResult
 
-
-def all_tests() -> list[ComplianceTestCase]:
-    """Return all MCTP bridge compliance tests."""
-    return [
-        TestGetRoutingTableEntries(),
-        TestGetRoutingTablePagination(),
-        TestQueryHop(),
-        TestAllocateEndpointIDsInfo(),
-    ]
+_SUITE = "mctp-bridge"
 
 
 class TestGetRoutingTableEntries(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.11"
     description = "GetRoutingTableEntries returns valid entries"
 
@@ -75,6 +72,7 @@ class TestGetRoutingTableEntries(ComplianceTestCase):
 
 
 class TestGetRoutingTablePagination(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.11"
     description = "GetRoutingTableEntries pagination terminates with 0xFF"
 
@@ -119,6 +117,7 @@ class TestGetRoutingTablePagination(ComplianceTestCase):
 
 
 class TestQueryHop(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.16"
     description = "QueryHop returns valid response for known target"
 
@@ -155,6 +154,7 @@ class TestQueryHop(ComplianceTestCase):
 
 
 class TestAllocateEndpointIDsInfo(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.9"
     description = "AllocateEndpointIDs GET_ALLOCATION_INFO returns pool info"
 

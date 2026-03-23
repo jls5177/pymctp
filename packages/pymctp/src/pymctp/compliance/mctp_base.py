@@ -2,7 +2,11 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""MCTP Base Specification (DSP0236) compliance tests."""
+"""MCTP Base Specification (DSP0236) compliance tests.
+
+All ``ComplianceTestCase`` subclasses defined here are **automatically**
+registered under the ``"mctp-base"`` suite via ``__init_subclass__``.
+"""
 
 from __future__ import annotations
 
@@ -24,20 +28,11 @@ from ..layers.mctp.control import (
 from ..layers.mctp.types import MsgTypes
 from .base import ComplianceResult, ComplianceTestCase, TestResult
 
-
-def all_tests() -> list[ComplianceTestCase]:
-    """Return all MCTP base compliance tests."""
-    return [
-        TestGetEndpointID(),
-        TestGetMessageTypeSupport(),
-        TestGetMCTPVersionSupport(),
-        TestGetEndpointUUID(),
-        TestUnsupportedCommand(),
-        TestGetEndpointIDFormat(),
-    ]
+_SUITE = "mctp-base"
 
 
 class TestGetEndpointID(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.3"
     description = "GetEndpointID returns a valid response"
 
@@ -55,6 +50,7 @@ class TestGetEndpointID(ComplianceTestCase):
 
 
 class TestGetMessageTypeSupport(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.6"
     description = "GetMessageTypeSupport includes CTRL (0x00)"
 
@@ -84,6 +80,7 @@ class TestGetMessageTypeSupport(ComplianceTestCase):
 
 
 class TestGetMCTPVersionSupport(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.5"
     description = "GetMCTPVersionSupport returns at least one version"
 
@@ -109,6 +106,7 @@ class TestGetMCTPVersionSupport(ComplianceTestCase):
 
 
 class TestGetEndpointUUID(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.4"
     description = "GetEndpointUUID returns a valid UUID"
 
@@ -129,6 +127,7 @@ class TestGetEndpointUUID(ComplianceTestCase):
 
 
 class TestUnsupportedCommand(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §11.5"
     description = "Unsupported command returns ERROR_UNSUPPORTED_CMD"
 
@@ -163,6 +162,7 @@ class TestUnsupportedCommand(ComplianceTestCase):
 
 
 class TestGetEndpointIDFormat(ComplianceTestCase):
+    suite = _SUITE
     spec_ref = "DSP0236 §12.3"
     description = "GetEndpointID response fields are valid"
 

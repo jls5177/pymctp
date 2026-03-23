@@ -9,7 +9,7 @@ import pytest
 from pymctp.automaton.behaviors.base import Behavior
 from pymctp.automaton.behaviors.bridge import BridgeBehavior
 from pymctp.automaton.role_endpoint import RoleBasedEndpointAM
-from pymctp.automaton.roles import EndpointRole, create_endpoint
+from pymctp.automaton.roles import create_endpoint, register_role, list_roles, get_behaviors_for_roles
 from pymctp.automaton.sessions import HandlerResponse
 from pymctp.layers.mctp.types import EndpointContext, Smbus7bitAddress, MsgTypes
 
@@ -52,12 +52,12 @@ class TestRoleBasedEndpointAM:
 
 class TestEndpointRoles:
     def test_simple_role(self, ctx):
-        am = create_endpoint(EndpointRole.SIMPLE, context=ctx)
+        am = create_endpoint("simple", context=ctx)
         assert isinstance(am, RoleBasedEndpointAM)
         assert am.role == []
 
     def test_bridge_role(self, ctx):
-        am = create_endpoint(EndpointRole.BRIDGE, context=ctx)
+        am = create_endpoint("bridge", context=ctx)
         assert isinstance(am, RoleBasedEndpointAM)
         assert am.role == ["bridge"]
         assert ctx.is_bus_owner is True
@@ -65,3 +65,36 @@ class TestEndpointRoles:
     def test_unknown_role_raises(self, ctx):
         with pytest.raises(ValueError, match="Unknown role"):
             create_endpoint("nonexistent", context=ctx)
+
+    def test_additive_roles(self, ctx):
+        """Multiple roles merge their behaviors additively."""
+        am = create_endpoint("simple", "bridge", context=ctx)
+        assert isinstance(am, RoleBasedEndpointAM)
+        assert am.role == ["bridge"]
+
+    def test_list_roles(self):
+        roles = list_roles()
+        assert "simple" in roles
+        assert "bridge" in roles
+
+    def test_extra_behaviors(self, ctx):
+        """Extra one-off behaviors are appended."""
+
+        class DummyBehavior(Behavior):
+            @property
+            def name(self):
+                return "dummy"
+
+            def can_handle(self, pkt, ctx):
+                return False
+
+            def handle(self, pkt, ctx):
+                return None
+
+        am = create_endpoint("simple", context=ctx, extra_behaviors=[DummyBehavior()])
+        assert am.role == ["dummy"]
+
+    def test_deduplication(self, ctx):
+        """Behaviors with the same name are deduplicated across roles."""
+        am = create_endpoint("bridge", "bridge", context=ctx)
+        assert len(am.behaviors) == 1
