@@ -83,7 +83,7 @@ class ControlHdrPacket(AllowRawSummary, Packet):
             return 0
         if self.instance_id != other.instance_id:
             return 0
-        return self.payload.answers(other.payload)
+        return 1
 
     def is_request(self, check_payload: bool = True) -> bool:
         return self.rq == 1

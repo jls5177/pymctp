@@ -97,8 +97,8 @@ class VdPciHdrPacket(Packet):
             p.set_mysummary_classes([VdPciHdrPacket, TransportHdrPacket])
 
     def answers(self, other: Packet) -> int:
-        if self.rq != 0 or other.rq != 1:
-            return 0
+        # if self.rq != 0 or other.rq != 1:
+        #     return 0
         if self.vendor_id != other.vendor_id:
             return 0
         if self.vdm_cmd_code != other.vdm_cmd_code:

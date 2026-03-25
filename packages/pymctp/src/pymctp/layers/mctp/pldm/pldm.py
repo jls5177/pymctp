@@ -79,7 +79,8 @@ class PldmHdrPacket(AllowRawSummary, Packet):
             return 0
         if self.hdr_ver != DEFAULT_HDR_VERSION:
             print(f"WARN: Mismatched header versions: {self.hdr_ver} != {DEFAULT_HDR_VERSION}")
-        return self.payload.answers(other.payload)
+        # return self.payload.answers(other.payload)
+        return 1
 
     def is_request(self, check_payload: bool = True) -> bool:
         return self.rq == 1

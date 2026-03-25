@@ -14,7 +14,7 @@ from scapy.packet import Packet
 from scapy.supersocket import SuperSocket
 from scapy.utils import linehexdump
 
-from pymctp.layers.mctp import I3CTransportPacket, TransportHdrPacket
+from pymctp.layers.mctp import I3CTransport, I3CTransportPacket, TransportHdrPacket
 
 
 class QemuI3CNetDevSocket(SuperSocket):
@@ -56,12 +56,14 @@ class QemuI3CNetDevSocket(SuperSocket):
         dump_hex=True,
         dump_packet=False,
         poll_period_ms: int = 10,
+        dynamic_addr: int = 9,
         **kwargs,
     ):
         self.id_str = id_str
         self.dump_hex = dump_hex
         self.dump_packet = dump_packet
         self._poll_period_ms = poll_period_ms
+        self.dynamic_addr = dynamic_addr
         fd = socket.socket(family, type, proto)
         assert fd != -1
         self.ins = self.outs = fd
@@ -84,13 +86,13 @@ class QemuI3CNetDevSocket(SuperSocket):
     def send(self, x: Packet) -> int:
         """Send a packet to the QEMU i3c-target-netdev peer.
 
-        The MCTP packet is wrapped in an ``I3CTransportPacket`` which appends
-        a trailing CRC-8 PEC byte.  The Linux ``mctp-i3c`` driver requires this
-        PEC and will silently drop frames that are missing it.
+        The MCTP packet is wrapped in an :func:`I3CTransport` frame which
+        appends a trailing CRC-8 PEC byte computed over
+        ``(dynamic_addr << 1) | 1`` followed by the MCTP data bytes,
+        matching the I3C private-read PEC convention expected by the Linux
+        ``mctp-i3c`` driver.
         """
-        # Wrap with I3C transport to append PEC; raw() triggers post_build.
-        wrapped = I3CTransportPacket(load=x)
-        sx = raw(wrapped)
+        sx = raw(I3CTransport(load=x, addr=self.dynamic_addr))
         with contextlib.suppress(AttributeError):
             x.sent_time = time.time()
 

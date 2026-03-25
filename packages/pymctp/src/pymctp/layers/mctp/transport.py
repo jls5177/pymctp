@@ -534,6 +534,79 @@ def UartTransport(
     return UartTransportPacket(byte_count=byte_count, load=load, fcs=fcs)
 
 
+class I3CTransportPacket(AllowRawSummary, Packet):
+    """MCTP-over-I3C transport framing: MCTP transport bytes with a trailing PEC.
+
+    Wire format::
+
+        [MCTP transport header + payload...][PEC]
+
+    The PEC is CRC-8 of all preceding bytes.  When ``addr`` is supplied via
+    :func:`I3CTransport`, the I3C address byte ``(addr << 1) | 1`` is
+    prepended to the CRC input to match the I3C private-read PEC convention
+    used by the Linux ``mctp-i3c`` driver.
+    """
+
+    name = "MCTP/I3C"
+
+    fields_desc = [
+        PacketLenField(
+            "load",
+            None,
+            TransportHdrPacket,
+            length_from=lambda pkt: max(0, len(pkt.original) - 1) if pkt.original else 0,
+        ),
+        XByteField("pec", None),
+    ]
+
+    def post_build(self, p: bytes, pay: bytes) -> bytes:
+        p += pay
+        if self.pec is None:
+            crc = crc8.crc8()
+            crc.update(p[:-1])
+            val = crc.digest()
+            self.pec = int.from_bytes(val, byteorder="little")
+            p = p[:-1] + val
+        return p
+
+    def mysummary(self):  # type: () -> str
+        summary = "MCTP/I3C"
+        if self.pec is not None:
+            summary += f" (pec=0x{self.pec:02X})"
+        return summary, [I3CTransportPacket]
+
+    @staticmethod
+    def strip_pec(data: bytes) -> bytes:
+        """Return *data* with the trailing PEC byte removed."""
+        return data[:-1] if len(data) > 1 else data
+
+
+def I3CTransport(
+    *args,
+    load: AnyPacketType = None,
+    pec: int | None = None,
+    addr: int = 0,
+) -> I3CTransportPacket:
+    """Build an MCTP-over-I3C transport frame with PEC.
+
+    :param load: MCTP transport header packet to wrap.
+    :param pec:  Pre-computed PEC; auto-computed if *None*.
+    :param addr: 7-bit I3C dynamic address of the target device.  When
+                 non-zero, the PEC covers ``(addr << 1) | 1`` followed by the
+                 MCTP data, matching the I3C private-read convention used by
+                 the Linux ``mctp-i3c`` driver.
+    """
+    if args:
+        return I3CTransportPacket(*args)
+    if pec is None:
+        crc = crc8.crc8()
+        if addr:
+            crc.update(bytes([(addr << 1) | 1]))
+        crc.update(raw(load) if load else b"")
+        pec = int.from_bytes(crc.digest(), byteorder="little")
+    return I3CTransportPacket(load=load, pec=pec)
+
+
 class AutobindMessageType:
     def __init__(self, msg_type: MsgTypes):
         self.msg_type = msg_type
@@ -555,58 +628,3 @@ bind_layers(SmbusTransportPacket, TransportHdrPacket, command_code=0x0F)
 
 # Add the MCTP-over-UART transport
 bind_layers(UartTransportPacket, TransportHdrPacket, frame_start=0x7E, frame_end=0x7E)
-
-
-class I3CTransportPacket(AllowRawSummary, Packet):
-    """MCTP over I3C private-transfer wrapper.
-
-    Wire format: [MCTP transport + payload bytes...] [PEC]
-
-    The PEC is a CRC-8 of all preceding bytes (the MCTP payload, without the
-    PEC byte itself).  This matches the Linux ``mctp-i3c`` driver expectation.
-
-    Usage:
-
-    * **TX**: wrap a ``TransportHdrPacket`` with ``I3CTransportPacket`` (or use
-      the ``I3CTransport()`` helper) — the PEC is computed automatically in
-      ``post_build`` if not supplied.
-    * **RX**: strip the last byte before parsing as ``TransportHdrPacket``
-      (see ``I3CTransportPacket.strip_pec()``).
-    """
-
-    name = "I3C"
-    fields_desc = [
-        PacketField("load", None, TransportHdrPacket),
-        XByteField("pec", None),
-    ]
-
-    def post_build(self, p: bytes, pay: bytes) -> bytes:
-        p += pay
-        if self.pec is None:
-            crc = crc8.crc8()
-            crc.update(p[:-1])  # all bytes except the pec placeholder
-            self.pec = int.from_bytes(crc.digest(), byteorder="little")
-            p = p[:-1] + bytes([self.pec])
-        return p
-
-    def mysummary(self):  # type: () -> str
-        summary = "I3C"
-        if self.pec is not None:
-            summary += f" (pec=0x{self.pec:02X})"
-        return summary, [I3CTransportPacket]
-
-    @staticmethod
-    def strip_pec(data: bytes) -> bytes:
-        """Return *data* with the trailing PEC byte removed."""
-        return data[:-1] if len(data) > 1 else data
-
-
-def I3CTransport(
-    *args,
-    load: AnyPacketType = None,
-    pec: int | None = None,
-) -> I3CTransportPacket:
-    """Build an I3C MCTP transport frame, computing the PEC if not supplied."""
-    if args:
-        return I3CTransportPacket(*args)
-    return I3CTransportPacket(load=load, pec=pec)

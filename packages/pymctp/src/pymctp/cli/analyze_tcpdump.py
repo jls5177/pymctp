@@ -12,6 +12,7 @@ from datetime import datetime
 
 import click
 import pytz
+from scapy.config import conf
 from scapy.packet import Raw
 from scapy.utils import PcapReader
 
@@ -185,6 +186,7 @@ def analyze_tcpdump(
     pymctp analyze-tcpdump capture.pcap --triage --packet-log packets.txt
     """
     set_printable_raw_layer()
+    conf.debug_dissector = False
 
     # Determine date string for text dumps
     if date is None:
