@@ -25,6 +25,7 @@ from pymctp.layers.mctp import EndpointContext, Smbus7bitAddress
 class ConfigTypes(str, Enum):
     Socket = "socket"
     I3CSocket = "i3c-socket"
+    I3CSocket2 = "i3c-socket2"
     Aardvark = "aardvark"
     CharDev = "chardev"
     TTY = "tty"
@@ -166,6 +167,77 @@ class UdpI3CSocketConfig(DataClassDictMixin):
         self.socket.close()
 
 
+@dataclasses.dataclass()
+class UdpI3CSocket2Config(DataClassDictMixin):
+    """UDP socket config for QEMU i3c-target-netdev2.
+
+    Supports the netdev2 protocol with type-tagged frames, SET_REG for device
+    registers (PID/BCR/DCR/MWL/MRL), CCC notifications, and PEC-wrapped MCTP
+    data.  When ``auto_configure`` is True (the default), SET_REG frames are
+    sent to QEMU during socket initialisation for any non-zero register values.
+    """
+
+    type = ConfigTypes.I3CSocket2
+    in_port: int
+    out_port: int
+    name: str
+    iface: str | None = None
+    iface_out: str | None = None
+    dump_hex: bool = True
+    dump_packet: bool = False
+    pid: int = 0
+    bcr: int = 0
+    dcr: int = 0
+    mwl: int = 0
+    mrl: int = 0
+    static_addr: int = 0
+    auto_configure: bool = True
+
+    socket: Any | None = field(
+        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
+    )
+
+    def __post_init__(self):
+        QemuI3CNetDev2Socket = _get_exerciser("qemu-i3c-netdev2")
+        if QemuI3CNetDev2Socket is None:
+            msg = "QemuI3CNetDev2Socket is not available. Install pymctp-exerciser-qemu."
+            raise ImportError(msg)
+        self.socket = QemuI3CNetDev2Socket(
+            iface=self.iface,
+            iface_out=self.iface_out,
+            in_port=self.in_port,
+            out_port=self.out_port,
+            id_str=self.name,
+            dump_hex=self.dump_hex,
+            dump_packet=self.dump_packet,
+            pid=self.pid,
+            bcr=self.bcr,
+            dcr=self.dcr,
+            mwl=self.mwl,
+            mrl=self.mrl,
+            static_addr=self.static_addr,
+        )
+        if self.auto_configure:
+            kwargs = {}
+            if self.pid:
+                kwargs["pid"] = self.pid
+            if self.bcr:
+                kwargs["bcr"] = self.bcr
+            if self.dcr:
+                kwargs["dcr"] = self.dcr
+            if self.mwl:
+                kwargs["mwl"] = self.mwl
+            if self.mrl:
+                kwargs["mrl"] = self.mrl
+            if self.static_addr:
+                kwargs["static_addr"] = self.static_addr
+            if kwargs:
+                self.socket.configure(**kwargs)
+
+    def close_socket(self):
+        self.socket.close()
+
+
 def deserialize_aardvark_address(value: str | int | Smbus7bitAddress) -> Smbus7bitAddress:
     if isinstance(value, Smbus7bitAddress):
         return value
@@ -216,12 +288,16 @@ class AardvarkConfig(DataClassDictMixin):
 
 def deserialize_supersocket(
     value: dict,
-) -> AardvarkConfig | UdpSocketConfig | UdpI3CSocketConfig | CharDevSocketConfig | TTYSocketConfig:
+) -> (
+    AardvarkConfig | UdpSocketConfig | UdpI3CSocketConfig | UdpI3CSocket2Config | CharDevSocketConfig | TTYSocketConfig
+):
     config_type = value.get("type")
     if config_type == ConfigTypes.Socket:
         return UdpSocketConfig.from_dict(value)
     if config_type == ConfigTypes.I3CSocket:
         return UdpI3CSocketConfig.from_dict(value)
+    if config_type == ConfigTypes.I3CSocket2:
+        return UdpI3CSocket2Config.from_dict(value)
     if config_type == ConfigTypes.Aardvark:
         return AardvarkConfig.from_dict(value)
     if config_type == ConfigTypes.CharDev:
@@ -235,16 +311,26 @@ def deserialize_supersocket(
 @dataclasses.dataclass()
 class EndpointConfig(DataClassDictMixin):
     context: EndpointContext
-    config: AardvarkConfig | UdpSocketConfig | UdpI3CSocketConfig | CharDevSocketConfig | TTYSocketConfig
+    config: (
+        AardvarkConfig
+        | UdpSocketConfig
+        | UdpI3CSocketConfig
+        | UdpI3CSocket2Config
+        | CharDevSocketConfig
+        | TTYSocketConfig
+    )
     thread_kwargs: dict[str, Any] = field(default_factory=dict)
     downstream_endpoints: dict[int, EndpointContext] = field(default_factory=dict)
     role: str | None = None
 
     class Config(BaseConfig):
         serialization_strategy = {
-            AardvarkConfig | UdpSocketConfig | UdpI3CSocketConfig | CharDevSocketConfig | TTYSocketConfig: {
-                "deserialize": deserialize_supersocket
-            }
+            AardvarkConfig
+            | UdpSocketConfig
+            | UdpI3CSocketConfig
+            | UdpI3CSocket2Config
+            | CharDevSocketConfig
+            | TTYSocketConfig: {"deserialize": deserialize_supersocket}
         }
 
 

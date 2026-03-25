@@ -19,7 +19,7 @@ from scapy.packet import Packet
 from scapy.supersocket import SuperSocket
 from scapy.utils import linehexdump
 
-from pymctp.layers.mctp import TransportHdrPacket
+from pymctp.layers.mctp import I3CTransport, I3CTransportPacket, TransportHdrPacket
 
 logger = logging.getLogger(__name__)
 
@@ -241,8 +241,15 @@ class QemuI3CNetDev2Socket(SuperSocket):
     # ------------------------------------------------------------------
 
     def send(self, x: Packet) -> int:
-        """Send a Scapy packet; wraps raw bytes in a DATA frame."""
-        sx = raw(x)
+        """Send a Scapy packet; wraps with I3C PEC then into a DATA frame.
+
+        The MCTP packet is wrapped in an :func:`I3CTransport` frame which
+        appends a trailing CRC-8 PEC byte computed over
+        ``(dynamic_addr << 1) | 1`` followed by the MCTP data bytes,
+        matching the I3C private-read PEC convention expected by the Linux
+        ``mctp-i3c`` driver.
+        """
+        sx = raw(I3CTransport(load=x, addr=self.dynamic_addr))
         with contextlib.suppress(AttributeError):
             x.sent_time = time.time()
 
@@ -275,11 +282,13 @@ class QemuI3CNetDev2Socket(SuperSocket):
         payload = raw_bytes[1:]
 
         if msg_type == NetDev2MsgType.DATA:
-            # Minimum MCTP transport header is 4 bytes
-            if len(payload) < 4:
+            # Minimum: 4-byte MCTP transport header + 1-byte PEC
+            if len(payload) < 5:
                 logger.warning("%s: DATA frame too short (%d bytes)", self.id_str, len(payload))
                 return None
-            pkt = TransportHdrPacket(payload)
+            # Strip the trailing PEC byte before parsing MCTP
+            mctp_bytes = I3CTransportPacket.strip_pec(payload)
+            pkt = TransportHdrPacket(mctp_bytes)
             pkt.time = time.time()
             if pkt and self.dump_packet:
                 print(f"{self.id_str}<RX< {pkt.summary()}")
