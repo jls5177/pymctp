@@ -233,6 +233,7 @@ class UdpI3CSocket2Config(DataClassDictMixin):
                 kwargs["static_addr"] = self.static_addr
             if kwargs:
                 self.socket.configure(**kwargs)
+                self.socket.send_hot_join()
 
     def close_socket(self):
         self.socket.close()
