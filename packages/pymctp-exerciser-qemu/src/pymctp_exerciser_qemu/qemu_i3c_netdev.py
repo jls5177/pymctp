@@ -14,7 +14,7 @@ from scapy.packet import Packet
 from scapy.supersocket import SuperSocket
 from scapy.utils import linehexdump
 
-from pymctp.layers.mctp import TransportHdrPacket
+from pymctp.layers.mctp import I3CTransportPacket, TransportHdrPacket
 
 
 class QemuI3CNetDevSocket(SuperSocket):
@@ -84,10 +84,13 @@ class QemuI3CNetDevSocket(SuperSocket):
     def send(self, x: Packet) -> int:
         """Send a packet to the QEMU i3c-target-netdev peer.
 
-        The raw bytes are delivered directly into the device's TX FIFO and will
-        be returned to the I3C master on the next private read.
+        The MCTP packet is wrapped in an ``I3CTransportPacket`` which appends
+        a trailing CRC-8 PEC byte.  The Linux ``mctp-i3c`` driver requires this
+        PEC and will silently drop frames that are missing it.
         """
-        sx = raw(x)
+        # Wrap with I3C transport to append PEC; raw() triggers post_build.
+        wrapped = I3CTransportPacket(load=x)
+        sx = raw(wrapped)
         with contextlib.suppress(AttributeError):
             x.sent_time = time.time()
 
@@ -102,7 +105,7 @@ class QemuI3CNetDevSocket(SuperSocket):
                 raise
             else:
                 if self.dump_hex:
-                    print(f"{self.id_str}>TX> {linehexdump(x, onlyhex=1, dump=True)}")
+                    print(f"{self.id_str}>TX> {linehexdump(sx, onlyhex=1, dump=True)}")
                 if self.dump_packet:
                     print(f"{self.id_str}>TX> {x.summary()}")
                 return result
@@ -113,8 +116,9 @@ class QemuI3CNetDevSocket(SuperSocket):
         """Receive a packet sent by the I3C master via QEMU.
 
         The datagram contains the raw bytes written by the I3C master during a
-        private write, delivered on I3C STOP.  The bytes are parsed as an MCTP
-        transport header packet.
+        private write, delivered on I3C STOP.  The last byte is a trailing PEC
+        (CRC-8) appended by the Linux ``mctp-i3c`` driver; it is stripped
+        before parsing the remaining bytes as an MCTP transport header.
         """
         try:
             raw_bytes = self.ins.recv(x)
@@ -127,11 +131,13 @@ class QemuI3CNetDevSocket(SuperSocket):
         if self.dump_hex:
             print(f"{self.id_str}<RX< {linehexdump(raw_bytes, onlyhex=1, dump=True)}")
 
-        # Minimum MCTP transport header is 4 bytes
-        if len(raw_bytes) < 4:
+        # Minimum: 4-byte MCTP transport header + 1-byte PEC
+        if len(raw_bytes) < 5:
             return None
 
-        pkt = TransportHdrPacket(raw_bytes)
+        # Strip the trailing PEC byte before parsing MCTP
+        mctp_bytes = I3CTransportPacket.strip_pec(raw_bytes)
+        pkt = TransportHdrPacket(mctp_bytes)
         pkt.time = time.time()
         if pkt and self.dump_packet:
             print(f"{self.id_str}<RX< {pkt.summary()}")

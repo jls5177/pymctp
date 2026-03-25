@@ -21,6 +21,8 @@ from .transport import (
     TrimmedSmbusTransport,
     UartTransport,
     UartTransportPacket,
+    I3CTransport,
+    I3CTransportPacket,
 )
 
 # Import the main Packets for each MsgType to perform autobinding
