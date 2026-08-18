@@ -116,3 +116,6 @@ ENV/
 
 # Claude settings
 .claude/
+
+# Local, environment-specific endpoint examples
+/examples/
