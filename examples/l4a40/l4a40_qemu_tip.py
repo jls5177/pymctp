@@ -28,11 +28,14 @@ from __future__ import annotations
 
 import argparse
 
-import pymctp_oem_microsoft.exerciser  # noqa: F401  (registers qemu-tip-mbox-stream)
-from pymctp.automaton.manager import ConfigTypes, EndpointManager
+import pymctp_oem_microsoft.exerciser  # noqa: F401  (registers qemu-tip-mbox-stream + config)
+from pymctp.automaton.manager import EndpointManager
 from pymctp.layers.mctp import *  # noqa: F403
 from pymctp.layers.mctp.control import DiscoveryNotify
 from pymctp.utils import set_printable_raw_layer
+
+# Config-type discriminator registered by pymctp_oem_microsoft.exerciser.config.
+TIP_MBOX_STREAM_TYPE = "tip-mbox-stream"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5580
@@ -66,7 +69,7 @@ def build_tip_config(
             "assigned_eid": TIP_EID,
         },
         "config": {
-            "type": ConfigTypes.TipMboxStream,
+            "type": TIP_MBOX_STREAM_TYPE,
             "host": host,
             "port": port,
             "name": "TIP",

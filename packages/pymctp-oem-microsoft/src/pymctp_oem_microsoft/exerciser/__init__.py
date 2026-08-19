@@ -22,4 +22,13 @@ except ImportError:
     # pymctp not installed or exerciser registry not available.
     pass
 
-__all__ = ["QemuTipMboxStreamSocket"]
+# Register the endpoint config type. Requires a pymctp new enough to provide the
+# pluggable SupersocketConfig base; importing the module auto-registers the
+# config under "tip-mbox-stream". Guarded so the socket above still registers
+# with older pymctp releases.
+try:
+    from .config import TipMboxStreamSocketConfig
+except ImportError:  # pragma: no cover - depends on installed pymctp version
+    TipMboxStreamSocketConfig = None
+
+__all__ = ["QemuTipMboxStreamSocket", "TipMboxStreamSocketConfig"]
