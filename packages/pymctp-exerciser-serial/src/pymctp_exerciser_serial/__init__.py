@@ -18,5 +18,10 @@ except ImportError:
     # pymctp not installed or exerciser module not available
     pass
 
+try:
+    from .configs import TTYSocketConfig  # noqa: F401
+except ImportError:
+    pass
+
 __version__ = "0.2.4"
 __all__ = ["TTYSerialSocket"]

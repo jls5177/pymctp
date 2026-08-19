@@ -3,34 +3,82 @@
 # SPDX-License-Identifier: MIT
 
 import dataclasses
-import pickle
 import threading
 from dataclasses import field
 from enum import Enum
 from threading import Thread
 from typing import Any, Protocol, runtime_checkable
 
-from mashumaro import DataClassDictMixin, field_options
+from mashumaro import DataClassDictMixin
 from mashumaro.config import BaseConfig
 from scapy.supersocket import SuperSocket
 
 from pymctp.automaton import EndpointSession, SimpleEndpointAM
 from pymctp.automaton.role_endpoint import RoleBasedEndpointAM
 from pymctp.automaton.roles import create_endpoint
-from pymctp.exerciser import AardvarkI2CSocket, QemuI2CNetDevSocket, QemuI3CCharDevSocket, TTYSerialSocket
-from pymctp.exerciser import get_exerciser as _get_exerciser
-from pymctp.layers.mctp import EndpointContext, Smbus7bitAddress
+from pymctp.layers.mctp import EndpointContext
 
 
-class ConfigTypes(str, Enum):
-    Socket = "socket"
-    I3CSocket = "i3c-socket"
-    I3CSocket2 = "i3c-socket2"
-    I3CStream = "i3c-stream"
-    I2CStream = "i2c-stream"
-    Aardvark = "aardvark"
-    CharDev = "chardev"
-    TTY = "tty"
+# --------------------------------------------------------------------------- #
+# Pluggable socket-config registry
+#
+# EndpointConfig (de)serializes its ``config`` field by looking up the ``type``
+# discriminator in this registry, so new socket transports can be added by
+# separate packages WITHOUT editing this module. A config is registered simply
+# by subclassing :class:`SupersocketConfig` and giving it a class-level ``type``
+# string discriminator; ``__init_subclass__`` then
+# registers it automatically. Packages may also call :func:`register_config_type`
+# directly.
+# --------------------------------------------------------------------------- #
+
+_SOCKET_CONFIG_REGISTRY: dict[str, type] = {}
+
+
+def _config_type_key(type_value: Any) -> str:
+    """Normalise a config ``type`` discriminator to its string registry key.
+
+    Accepts a plain string or any ``Enum`` whose value is the discriminator, so
+    both resolve to the same registry entry.
+    """
+    if isinstance(type_value, Enum):
+        return str(type_value.value)
+    return str(type_value)
+
+
+def register_config_type(type_value: Any, config_cls: type) -> None:
+    """Register a socket-config dataclass under its ``type`` discriminator.
+
+    Called automatically for every :class:`SupersocketConfig` subclass that
+    defines a ``type``; may also be called directly by extension packages.
+    """
+    _SOCKET_CONFIG_REGISTRY[_config_type_key(type_value)] = config_cls
+
+
+def get_config_type(type_value: Any) -> type | None:
+    """Return the registered socket-config dataclass for ``type_value`` (or None)."""
+    return _SOCKET_CONFIG_REGISTRY.get(_config_type_key(type_value))
+
+
+def registered_config_types() -> dict[str, type]:
+    """Return a copy of the config-type registry (discriminator -> config class)."""
+    return dict(_SOCKET_CONFIG_REGISTRY)
+
+
+@dataclasses.dataclass()
+class SupersocketConfig(DataClassDictMixin):
+    """Base class for endpoint socket configs.
+
+    Subclasses declare a class-level ``type`` discriminator and build their
+    ``socket`` in ``__post_init__``. Defining a subclass auto-registers it so
+    :class:`EndpointConfig` can (de)serialize it — no changes to this module are
+    required for a new transport provided by another package.
+    """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        type_value = getattr(cls, "type", None)
+        if type_value is not None:
+            register_config_type(type_value, cls)
 
 
 @runtime_checkable
@@ -41,436 +89,48 @@ class ISessionConfig(Protocol):
         pass
 
 
-@dataclasses.dataclass()
-class CharDevSocketConfig(DataClassDictMixin):
-    type = ConfigTypes.CharDev
-    in_file: str
-    name: str
-    pid: int
-    bcr: int
-    dcr: int
-    mwl: int = 256
-    mrl: int = 256
-    dynamic_addr: int = 0
-
-    socket: QemuI3CCharDevSocket | None = field(
-        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
-    )
-
-    def __post_init__(self):
-        self.socket = QemuI3CCharDevSocket(
-            in_file=self.in_file,
-            id_str=self.name,
-            pid=self.pid,
-            bcr=self.bcr,
-            dcr=self.dcr,
-            mwl=self.mwl,
-            mrl=self.mrl,
-            dynamic_addr=self.dynamic_addr,
-        )
-
-    def close_socket(self):
-        self.socket.close()
 
 
-@dataclasses.dataclass()
-class TTYSocketConfig(DataClassDictMixin):
-    type = ConfigTypes.TTY
-    tty: str
-    name: str
-    baudrate: int = 115200
-    dump_hex: bool = True
-    dump_packet: bool = False
-
-    socket: TTYSerialSocket | None = field(
-        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
-    )
-
-    def __post_init__(self):
-        self.socket = TTYSerialSocket(
-            tty=self.tty,
-            id_str=self.name,
-            baudrate=self.baudrate,
-            dump_hex=self.dump_hex,
-            dump_packet=self.dump_packet,
-        )
-
-    def close_socket(self):
-        self.socket.close()
-
-
-@dataclasses.dataclass()
-class UdpSocketConfig(DataClassDictMixin):
-    type = ConfigTypes.Socket
-    in_port: int
-    out_port: int
-    name: str
-    iface: str | None = None
-    iface_out: str | None = None
-    dump_hex: bool = True
-    dump_packet: bool = False
-
-    socket: QemuI2CNetDevSocket | None = field(
-        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
-    )
-
-    def __post_init__(self):
-        self.socket = QemuI2CNetDevSocket(
-            iface=self.iface,
-            iface_out=self.iface_out,
-            in_port=self.in_port,
-            out_port=self.out_port,
-            id_str=self.name,
-            dump_hex=self.dump_hex,
-            dump_packet=self.dump_packet,
-        )
-
-    def close_socket(self):
-        self.socket.close()
-
-
-@dataclasses.dataclass()
-class UdpI3CSocketConfig(DataClassDictMixin):
-    """UDP socket config for QEMU i3c-target-netdev.
-
-    I3C addresses are dynamically assigned, so physical_address is not needed.
-    The transport is point-to-point and all address checks are skipped.
-    """
-
-    type = ConfigTypes.I3CSocket
-    in_port: int
-    out_port: int
-    name: str
-    iface: str | None = None
-    iface_out: str | None = None
-    dump_hex: bool = True
-    dump_packet: bool = False
-
-    socket: Any | None = field(
-        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
-    )
-
-    def __post_init__(self):
-        QemuI3CNetDevSocket = _get_exerciser("qemu-i3c-netdev")
-        if QemuI3CNetDevSocket is None:
-            msg = "QemuI3CNetDevSocket is not available. Install pymctp-exerciser-qemu."
-            raise ImportError(msg)
-        self.socket = QemuI3CNetDevSocket(
-            iface=self.iface,
-            iface_out=self.iface_out,
-            in_port=self.in_port,
-            out_port=self.out_port,
-            id_str=self.name,
-            dump_hex=self.dump_hex,
-            dump_packet=self.dump_packet,
-        )
-
-    def close_socket(self):
-        self.socket.close()
-
-
-@dataclasses.dataclass()
-class UdpI3CSocket2Config(DataClassDictMixin):
-    """UDP socket config for QEMU i3c-target-netdev2.
-
-    Supports the netdev2 protocol with type-tagged frames, SET_REG for device
-    registers (PID/BCR/DCR/MWL/MRL), CCC notifications, and PEC-wrapped MCTP
-    data.  When ``auto_configure`` is True (the default), SET_REG frames are
-    sent to QEMU during socket initialisation for any non-zero register values.
-    """
-
-    type = ConfigTypes.I3CSocket2
-    in_port: int
-    out_port: int
-    name: str
-    iface: str | None = None
-    iface_out: str | None = None
-    dump_hex: bool = True
-    dump_packet: bool = False
-    pid: int = 0
-    bcr: int = 0
-    dcr: int = 0
-    mwl: int = 0
-    mrl: int = 0
-    static_addr: int = 0
-    auto_configure: bool = True
-
-    socket: Any | None = field(
-        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
-    )
-
-    def __post_init__(self):
-        QemuI3CNetDev2Socket = _get_exerciser("qemu-i3c-netdev2")
-        if QemuI3CNetDev2Socket is None:
-            msg = "QemuI3CNetDev2Socket is not available. Install pymctp-exerciser-qemu."
-            raise ImportError(msg)
-        self.socket = QemuI3CNetDev2Socket(
-            iface=self.iface,
-            iface_out=self.iface_out,
-            in_port=self.in_port,
-            out_port=self.out_port,
-            id_str=self.name,
-            dump_hex=self.dump_hex,
-            dump_packet=self.dump_packet,
-            pid=self.pid,
-            bcr=self.bcr,
-            dcr=self.dcr,
-            mwl=self.mwl,
-            mrl=self.mrl,
-            static_addr=self.static_addr,
-        )
-        if self.auto_configure:
-            kwargs = {}
-            if self.pid:
-                kwargs["pid"] = self.pid
-            if self.bcr:
-                kwargs["bcr"] = self.bcr
-            if self.dcr:
-                kwargs["dcr"] = self.dcr
-            if self.mwl:
-                kwargs["mwl"] = self.mwl
-            if self.mrl:
-                kwargs["mrl"] = self.mrl
-            if self.static_addr:
-                kwargs["static_addr"] = self.static_addr
-            if kwargs:
-                self.socket.configure(**kwargs)
-                self.socket.send_hot_join()
-
-    def close_socket(self):
-        self.socket.close()
-
-
-@dataclasses.dataclass()
-class I3CStreamSocketConfig(DataClassDictMixin):
-    """TCP stream socket config for QEMU's I3C "remote target" device.
-
-    Reuses the same netdev2 message semantics (SET_REG, HOT_JOIN, CCC
-    notifications, PEC-wrapped MCTP data) as :class:`UdpI3CSocket2Config`,
-    but connects as a single TCP client (``host``/``port``) instead of two
-    UDP ports. A HELLO frame with the wire protocol version is sent on
-    connect. When ``auto_configure`` is True (the default), SET_REG frames
-    are sent to QEMU during socket initialisation for any non-zero register
-    values.
-    """
-
-    type = ConfigTypes.I3CStream
-    host: str
-    port: int
-    name: str
-    dump_hex: bool = True
-    dump_packet: bool = False
-    connect_timeout: float = 5.0
-    pid: int = 0
-    bcr: int = 0
-    dcr: int = 0
-    mwl: int = 0
-    mrl: int = 0
-    static_addr: int = 0
-    auto_configure: bool = True
-
-    socket: Any | None = field(
-        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
-    )
-
-    def __post_init__(self):
-        QemuI3CStreamSocket = _get_exerciser("qemu-i3c-stream")
-        if QemuI3CStreamSocket is None:
-            msg = "QemuI3CStreamSocket is not available. Install pymctp-exerciser-qemu."
-            raise ImportError(msg)
-        self.socket = QemuI3CStreamSocket(
-            host=self.host,
-            port=self.port,
-            id_str=self.name,
-            dump_hex=self.dump_hex,
-            dump_packet=self.dump_packet,
-            connect_timeout=self.connect_timeout,
-            pid=self.pid,
-            bcr=self.bcr,
-            dcr=self.dcr,
-            mwl=self.mwl,
-            mrl=self.mrl,
-            static_addr=self.static_addr,
-        )
-        if self.auto_configure:
-            kwargs = {}
-            if self.pid:
-                kwargs["pid"] = self.pid
-            if self.bcr:
-                kwargs["bcr"] = self.bcr
-            if self.dcr:
-                kwargs["dcr"] = self.dcr
-            if self.mwl:
-                kwargs["mwl"] = self.mwl
-            if self.mrl:
-                kwargs["mrl"] = self.mrl
-            if self.static_addr:
-                kwargs["static_addr"] = self.static_addr
-            if kwargs:
-                self.socket.configure(**kwargs)
-                self.socket.send_hot_join()
-
-    def close_socket(self):
-        self.socket.close()
-
-
-@dataclasses.dataclass()
-class I2CStreamSocketConfig(DataClassDictMixin):
-    """TCP stream socket config for QEMU's I2C "remote target" device.
-
-    Connects as a single TCP client (``host``/``port``) and uses the minimal
-    WRITE/READ_REQ/READ_RSP/ALERT/HELLO framing implemented by
-    :class:`~pymctp_exerciser_qemu.qemu_i2c_stream.QemuI2CStreamSocket`.
-
-    When ``master`` is True, the socket instead speaks the peer-as-master
-    wire format (mirroring the old UDP ``i2c-netdev`` transport): WRITE
-    frames are address-prefixed and sent immediately, with no
-    READ_REQ/READ_RSP turn-around. ``target_address`` (the BMC's own SMBus
-    address) is required in that mode.
-    """
-
-    type = ConfigTypes.I2CStream
-    host: str
-    port: int
-    name: str
-    dump_hex: bool = True
-    dump_packet: bool = False
-    connect_timeout: float = 5.0
-    master: bool = False
-    target_address: int | None = None
-
-    socket: Any | None = field(
-        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
-    )
-
-    def __post_init__(self):
-        QemuI2CStreamSocket = _get_exerciser("qemu-i2c-stream")
-        if QemuI2CStreamSocket is None:
-            msg = "QemuI2CStreamSocket is not available. Install pymctp-exerciser-qemu."
-            raise ImportError(msg)
-        self.socket = QemuI2CStreamSocket(
-            host=self.host,
-            port=self.port,
-            id_str=self.name,
-            dump_hex=self.dump_hex,
-            dump_packet=self.dump_packet,
-            connect_timeout=self.connect_timeout,
-            master=self.master,
-            target_address=self.target_address,
-        )
-
-    def close_socket(self):
-        self.socket.close()
-
-
-def deserialize_aardvark_address(value: str | int | Smbus7bitAddress) -> Smbus7bitAddress:
-    if isinstance(value, Smbus7bitAddress):
-        return value
-    return Smbus7bitAddress(address=int(value))
-
-
-@dataclasses.dataclass()
-class AardvarkConfig(DataClassDictMixin):
-    type = ConfigTypes.Aardvark
-    slave_addr: Smbus7bitAddress = field(metadata=field_options(alias="slave_address"))
-    serial_number: str
-    name: str
-    dump_hex: bool = True
-    dump_packet: bool = False
-    enable_pullups: bool = False
-    enable_target_power: bool = False
-    slave_only: bool = False
-    poll_period_ms: int = 10
-    bitrate: int = 400
-
-    socket: AardvarkI2CSocket | None = field(
-        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
-    )
-
-    class Config(BaseConfig):
-        serialization_strategy = {Smbus7bitAddress: {"deserialize": deserialize_aardvark_address}}
-
-    def __post_init__(self):
-        self.socket = AardvarkI2CSocket(
-            slave_address=self.slave_addr,
-            serial_number=self.serial_number,
-            id_str=self.name,
-            dump_hex=self.dump_hex,
-            dump_packet=self.dump_packet,
-            enable_i2c_pullups=self.enable_pullups,
-            enable_target_power=self.enable_target_power,
-            poll_period_ms=self.poll_period_ms,
-            slave_only=self.slave_only,
-            bitrate=self.bitrate,
-        )
-
-    def create_session(self) -> EndpointSession:
-        pass
-
-    def close_socket(self):
-        self.socket.close()
-
-
-def deserialize_supersocket(
-    value: dict,
-) -> (
-    AardvarkConfig
-    | UdpSocketConfig
-    | UdpI3CSocketConfig
-    | UdpI3CSocket2Config
-    | I3CStreamSocketConfig
-    | I2CStreamSocketConfig
-    | CharDevSocketConfig
-    | TTYSocketConfig
-):
+def deserialize_supersocket(value: dict) -> SupersocketConfig:
+    """Deserialize a socket-config dict by looking up its ``type`` discriminator
+    in the pluggable registry. Any package that registers a
+    :class:`SupersocketConfig` subclass (see :func:`register_config_type`) is
+    handled here without changes to this function."""
     config_type = value.get("type")
-    if config_type == ConfigTypes.Socket:
-        return UdpSocketConfig.from_dict(value)
-    if config_type == ConfigTypes.I3CSocket:
-        return UdpI3CSocketConfig.from_dict(value)
-    if config_type == ConfigTypes.I3CSocket2:
-        return UdpI3CSocket2Config.from_dict(value)
-    if config_type == ConfigTypes.I3CStream:
-        return I3CStreamSocketConfig.from_dict(value)
-    if config_type == ConfigTypes.I2CStream:
-        return I2CStreamSocketConfig.from_dict(value)
-    if config_type == ConfigTypes.Aardvark:
-        return AardvarkConfig.from_dict(value)
-    if config_type == ConfigTypes.CharDev:
-        return CharDevSocketConfig.from_dict(value)
-    if config_type == ConfigTypes.TTY:
-        return TTYSocketConfig.from_dict(value)
-    msg = f"Unknown config type {config_type}"
-    raise ValueError(msg)
+    config_cls = get_config_type(config_type)
+    if config_cls is None:
+        msg = (
+            f"Unknown config type {config_type!r}. Registered types: "
+            f"{sorted(registered_config_types())}"
+        )
+        raise ValueError(msg)
+    return config_cls.from_dict(value)
+
+
+def serialize_supersocket(config: SupersocketConfig) -> dict:
+    """Serialize a socket config, injecting its ``type`` discriminator so the
+    result round-trips through :func:`deserialize_supersocket`."""
+    data = config.to_dict()
+    type_value = getattr(config, "type", None)
+    if type_value is not None:
+        data["type"] = _config_type_key(type_value)
+    return data
 
 
 @dataclasses.dataclass()
 class EndpointConfig(DataClassDictMixin):
     context: EndpointContext
-    config: (
-        AardvarkConfig
-        | UdpSocketConfig
-        | UdpI3CSocketConfig
-        | UdpI3CSocket2Config
-        | I3CStreamSocketConfig
-        | I2CStreamSocketConfig
-        | CharDevSocketConfig
-        | TTYSocketConfig
-    )
+    config: SupersocketConfig
     thread_kwargs: dict[str, Any] = field(default_factory=dict)
     downstream_endpoints: dict[int, EndpointContext] = field(default_factory=dict)
     role: str | None = None
 
     class Config(BaseConfig):
         serialization_strategy = {
-            AardvarkConfig
-            | UdpSocketConfig
-            | UdpI3CSocketConfig
-            | UdpI3CSocket2Config
-            | I3CStreamSocketConfig
-            | I2CStreamSocketConfig
-            | CharDevSocketConfig
-            | TTYSocketConfig: {"deserialize": deserialize_supersocket}
+            SupersocketConfig: {
+                "serialize": serialize_supersocket,
+                "deserialize": deserialize_supersocket,
+            }
         }
 
 
@@ -484,6 +144,11 @@ class EndpointManager:
 
     @classmethod
     def from_config(cls, config: dict[Any, Any], start_thread=True, verbose: bool = False, prn=None):
+        # Ensure exerciser packages — and the socket-config types they register
+        # (see SupersocketConfig) — are imported before the config's ``type`` is
+        # resolved from the registry.
+        import pymctp.exerciser  # noqa: F401
+
         cfg = EndpointConfig.from_dict(config)
         print(f"DEBUG: {cfg or 'None'}")
         socket = cfg.config.socket

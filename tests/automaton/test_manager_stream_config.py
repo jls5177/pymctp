@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 """Tests for the manager.py wiring of the new I3C/I2C TCP stream configs
-(``ConfigTypes.I3CStream`` / ``ConfigTypes.I2CStream``).
+(the "i3c-stream" / "i2c-stream" transports).
 
 Uses a throwaway local TCP listener in place of QEMU so config construction
 (which eagerly connects the socket in ``__post_init__``) can be exercised
@@ -18,12 +18,8 @@ import threading
 
 import pytest
 
-from pymctp.automaton.manager import (
-    ConfigTypes,
-    I2CStreamSocketConfig,
-    I3CStreamSocketConfig,
-    deserialize_supersocket,
-)
+from pymctp.automaton.manager import deserialize_supersocket
+from pymctp_exerciser_qemu.configs import I2CStreamSocketConfig, I3CStreamSocketConfig
 
 
 class FakeTcpTarget:
@@ -87,7 +83,7 @@ class TestI3CStreamSocketConfig:
 
     def test_config_type_and_deserialize_round_trip(self, fake_target):
         raw_config = {
-            "type": ConfigTypes.I3CStream.value,
+            "type": "i3c-stream",
             "host": fake_target.host,
             "port": fake_target.port,
             "name": "i3c-under-test",
@@ -143,7 +139,7 @@ class TestI2CStreamSocketConfig:
 
     def test_config_type_and_deserialize_round_trip(self, fake_target):
         raw_config = {
-            "type": ConfigTypes.I2CStream.value,
+            "type": "i2c-stream",
             "host": fake_target.host,
             "port": fake_target.port,
             "name": "i2c-under-test",

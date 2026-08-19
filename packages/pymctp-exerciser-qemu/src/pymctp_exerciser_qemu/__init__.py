@@ -29,6 +29,13 @@ except ImportError:
     # pymctp not installed or exerciser module not available
     pass
 
+# Import the endpoint configs so they self-register with core pymctp. Guarded
+# for older pymctp releases without the pluggable SupersocketConfig base.
+try:
+    from . import configs  # noqa: F401
+except ImportError:
+    pass
+
 __version__ = "0.2.7"
 __all__ = [
     "QemuI2CNetDevSocket",
