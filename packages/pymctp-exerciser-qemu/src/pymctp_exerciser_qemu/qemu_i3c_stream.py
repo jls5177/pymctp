@@ -48,6 +48,11 @@ logger = logging.getLogger(__name__)
 # Wire protocol version sent/checked in HELLO frames: major=1, minor=0.
 PROTO_VERSION = 0x00010000
 
+# I3C ENEC/DISEC event-enable byte bits (see MIPI I3C ENEC/DISEC CCC).
+I3C_EVENT_ENINT = 0x01  # target IBI (in-band interrupt) enable
+I3C_EVENT_ENCR = 0x02   # controller-role request enable
+I3C_EVENT_ENHJ = 0x08   # hot-join enable
+
 
 class I3CStreamMsgType(IntEnum):
     """Frame type tags for the I3C TCP stream transport.
@@ -117,6 +122,9 @@ class QemuI3CStreamSocket(SuperSocket):
         self.mrl = mrl
         self.static_addr = static_addr
         self.dynamic_addr: int = 0
+        # Set by ENEC(ENINT) / cleared by DISEC(ENINT): whether the controller
+        # has enabled this device to raise IBIs (in-band interrupts).
+        self.ibi_enabled: bool = False
 
         self._decoder = FrameDecoder()
         self._pending_frames: collections.deque[tuple[int, bytes]] = collections.deque()
@@ -182,7 +190,15 @@ class QemuI3CStreamSocket(SuperSocket):
         return self._send_raw(I3CStreamMsgType.HOT_REMOVE)
 
     def send_ibi(self, mdb: int) -> int:
-        """Send an IBI_REQ frame: body ``[mdb]``."""
+        """Send an IBI_REQ frame: body ``[mdb]``.
+
+        The controller must have enabled IBIs for this device via ENEC(ENINT)
+        first; if it has not, the IBI is likely to be NACKed. We still send it
+        (some flows enable events out of band) but warn to aid debugging.
+        """
+        if not self.ibi_enabled:
+            logger.warning("%s: sending IBI while IBIs are not enabled "
+                           "(no ENEC(ENINT) seen yet)", self.id_str)
         return self._send_raw(I3CStreamMsgType.IBI_REQ, bytes([mdb & 0xFF]))
 
     # ------------------------------------------------------------------
@@ -381,9 +397,20 @@ class QemuI3CStreamSocket(SuperSocket):
         elif ccc == NetDev2CccCode.RSTDAA:
             self.dynamic_addr = 0
             logger.info("%s: RSTDAA — dynamic_addr reset", self.id_str)
-        elif ccc == NetDev2CccCode.ENEC:
-            logger.info("%s: ENEC — events_byte=0x%02X", self.id_str, data[0] if data else 0)
-        elif ccc == NetDev2CccCode.DISEC:
-            logger.info("%s: DISEC — events_byte=0x%02X", self.id_str, data[0] if data else 0)
+        elif ccc in (NetDev2CccCode.ENEC, NetDev2CccCode.ENEC_DIRECT):
+            # Enable Events: for each bit set, enable that event. Bit 0 (ENINT)
+            # is the IBI enable — the controller is telling us we may raise IBIs.
+            events = data[0] if data else 0
+            if events & I3C_EVENT_ENINT:
+                self.ibi_enabled = True
+            logger.info("%s: ENEC — events_byte=0x%02X (ibi_enabled=%s)",
+                        self.id_str, events, self.ibi_enabled)
+        elif ccc in (NetDev2CccCode.DISEC, NetDev2CccCode.DISEC_DIRECT):
+            # Disable Events: for each bit set, disable that event.
+            events = data[0] if data else 0
+            if events & I3C_EVENT_ENINT:
+                self.ibi_enabled = False
+            logger.info("%s: DISEC — events_byte=0x%02X (ibi_enabled=%s)",
+                        self.id_str, events, self.ibi_enabled)
         else:
             logger.warning("%s: unhandled CCC_NOTIFY ccc=0x%02X data=%s", self.id_str, ccc, data.hex())

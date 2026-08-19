@@ -62,6 +62,8 @@ class NetDev2CccCode(IntEnum):
     DISEC = 0x01
     RSTDAA = 0x06
     ENTDAA = 0x07
+    ENEC_DIRECT = 0x80
+    DISEC_DIRECT = 0x81
     SETNEWDA = 0x88
     SETMWL = 0x89
     SETMRL = 0x8A
@@ -157,6 +159,9 @@ class QemuI3CNetDev2Socket(SuperSocket):
         self.mrl = mrl
         self.static_addr = static_addr
         self.dynamic_addr: int = 0
+        # Set by ENEC(ENINT) / cleared by DISEC(ENINT): whether the controller
+        # has enabled this device to raise IBIs (in-band interrupts).
+        self.ibi_enabled: bool = False
 
         fd = socket.socket(family, type, proto)
         assert fd != -1
@@ -384,9 +389,17 @@ class QemuI3CNetDev2Socket(SuperSocket):
         elif ccc == NetDev2CccCode.RSTDAA:
             self.dynamic_addr = 0
             logger.info("%s: RSTDAA — dynamic_addr reset", self.id_str)
-        elif ccc == NetDev2CccCode.ENEC:
-            logger.info("%s: ENEC — events_byte=0x%02X", self.id_str, data[0] if data else 0)
-        elif ccc == NetDev2CccCode.DISEC:
-            logger.info("%s: DISEC — events_byte=0x%02X", self.id_str, data[0] if data else 0)
+        elif ccc in (NetDev2CccCode.ENEC, NetDev2CccCode.ENEC_DIRECT):
+            events = data[0] if data else 0
+            if events & 0x01:  # ENINT (IBI enable)
+                self.ibi_enabled = True
+            logger.info("%s: ENEC — events_byte=0x%02X (ibi_enabled=%s)",
+                        self.id_str, events, self.ibi_enabled)
+        elif ccc in (NetDev2CccCode.DISEC, NetDev2CccCode.DISEC_DIRECT):
+            events = data[0] if data else 0
+            if events & 0x01:  # ENINT (IBI enable)
+                self.ibi_enabled = False
+            logger.info("%s: DISEC — events_byte=0x%02X (ibi_enabled=%s)",
+                        self.id_str, events, self.ibi_enabled)
         else:
             logger.warning("%s: unhandled CCC_NOTIFY ccc=0x%02X data=%s", self.id_str, ccc, data.hex())

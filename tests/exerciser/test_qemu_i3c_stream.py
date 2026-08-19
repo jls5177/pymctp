@@ -219,7 +219,34 @@ class TestQemuI3CStreamDataAndSetReg:
             sock.close()
 
 
-class TestQemuI3CStreamMultipleFramesInOneSegment:
+class TestQemuI3CStreamEnableEvents:
+    def test_enec_disec_direct_and_broadcast_track_ibi_enable(self, fake_qemu):
+        """ENEC/DISEC CCC_NOTIFY frames (both the direct 0x80/0x81 and broadcast
+        0x00/0x01 forms) must be handled — not warned as unknown — and update
+        the IBI-enable state from the ENINT (bit 0) event bit."""
+        sock = QemuI3CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i3c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            assert sock.ibi_enabled is False
+
+            # Direct ENEC with ENINT set (exactly the frame from the BMC:
+            # CCC_NOTIFY body [0x80, 0x01]) -> IBIs enabled.
+            fake_qemu.send_frame(I3CStreamMsgType.CCC_NOTIFY, bytes([0x80, 0x01]))
+            assert sock.recv() is None
+            assert sock.ibi_enabled is True
+
+            # Direct DISEC with ENINT set -> IBIs disabled again.
+            fake_qemu.send_frame(I3CStreamMsgType.CCC_NOTIFY, bytes([0x81, 0x01]))
+            assert sock.recv() is None
+            assert sock.ibi_enabled is False
+
+            # Broadcast ENEC (0x00) with ENINT set -> enabled.
+            fake_qemu.send_frame(I3CStreamMsgType.CCC_NOTIFY, bytes([0x00, 0x01]))
+            assert sock.recv() is None
+            assert sock.ibi_enabled is True
+        finally:
+            sock.close()
     def test_multiple_queued_frames_drained_across_recv_calls(self, fake_qemu):
         sock = QemuI3CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i3c", dump_hex=False)
         try:
