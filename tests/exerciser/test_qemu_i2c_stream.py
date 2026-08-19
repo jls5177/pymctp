@@ -338,10 +338,11 @@ class TestQemuI2CStreamMasterModeSend:
 
 
 class TestQemuI2CStreamMasterModeRecv:
-    def test_recv_strips_leading_address_byte_and_parses_smbus_packet(self, fake_qemu):
-        """Master-mode recv() should strip the ``our_addr`` prefix (the BMC
-        mastering the bus and writing to us) and parse the remainder as a
-        SmbusTransportPacket."""
+    def test_recv_parses_addressed_smbus_packet_with_dst_addr(self, fake_qemu):
+        """Master-mode recv(): the BMC mastered the bus and wrote to us, so the
+        WRITE frame body already leads with our SMBus address (the destination).
+        recv() parses the whole frame as a SmbusTransportPacket with dst_addr
+        populated — not stripped — so downstream `dst_addr >> 1` never sees None."""
         sock = QemuI2CStreamSocket(
             host=fake_qemu.host,
             port=fake_qemu.port,
@@ -356,20 +357,26 @@ class TestQemuI2CStreamMasterModeRecv:
 
             mctp_pkt = (
                 TransportHdrPacket(
-                    dst=0x10, src=0x08, som=1, eom=1, pkt_seq=0, to=0, tag=1, ic=0, msg_type=MsgTypes.CTRL.value
+                    dst=0x22, src=0x0F, som=1, eom=1, pkt_seq=0, to=0, tag=1, ic=0, msg_type=MsgTypes.CTRL.value
                 )
                 / b"\x01\x02\x03"
             )
-            wire_pkt = SmbusTransport(dst_addr=0x10, src_addr=0x08, load=mctp_pkt)
-            wire_bytes = bytes(wire_pkt)
-
+            # On the wire the SMBus destination IS our own address (the BMC wrote
+            # to us at 0x58). QEMU's WRITE body is exactly this frame, leading
+            # with our address byte.
             our_addr = 0x58
-            addr_prefixed_body = bytes([(our_addr << 1) | 0]) + wire_bytes
-            fake_qemu.send_frame(I2CStreamMsgType.WRITE, addr_prefixed_body)
+            wire_pkt = SmbusTransport(dst_addr=(our_addr << 1), src_addr=0x25, load=mctp_pkt)
+            wire_bytes = bytes(wire_pkt)
+            assert wire_bytes[0] == (our_addr << 1)
+
+            fake_qemu.send_frame(I2CStreamMsgType.WRITE, wire_bytes)
 
             pkt = sock.recv()
             assert pkt is not None
             assert bytes(pkt) == wire_bytes
+            # dst_addr must be populated (was the crash: None >> 1).
+            assert pkt.dst_addr == (our_addr << 1)
+            assert pkt.dst_addr >> 1 == our_addr
         finally:
             sock.close()
 

@@ -320,22 +320,24 @@ class QemuI2CStreamSocket(SuperSocket):
         self.send_read_rsp(chunk)
 
     def _parse_master_write(self, payload: bytes) -> Packet | None:
-        """Parse a master-mode WRITE frame body: ``[addr_byte][data...]``.
+        """Parse a master-mode WRITE frame body: ``[addr_byte][smbus payload...]``.
 
-        ``addr_byte`` is this endpoint's own I2C address (as written to by
-        the BMC mastering the bus) and is stripped before ``data`` is parsed
-        as a :class:`~pymctp.layers.mctp.SmbusTransportPacket`, matching the
-        old ``qemu_i2c_netdev`` transport's handling of its (address-
-        prefixed) UDP datagrams.
+        ``addr_byte`` is this endpoint's own SMBus address — the BMC mastered
+        the bus and wrote to us at it. The whole frame (address byte included)
+        is parsed as a :class:`~pymctp.layers.mctp.SmbusTransportPacket`, exactly
+        like the ``qemu_i2c_netdev`` transport, so the packet's ``dst_addr``
+        field is populated. Stripping the address first would leave ``dst_addr``
+        unset (the SMBus command code 0x0F would lead the buffer), and downstream
+        consumers that compute ``dst_addr >> 1`` would raise on ``None``.
         """
         if len(payload) < _MIN_MASTER_WRITE_PAYLOAD_LEN:
             logger.warning("%s: master-mode WRITE frame too short (%d bytes)", self.id_str, len(payload))
             return None
 
-        addr_byte, data = payload[0], payload[1:]
-        logger.debug("%s: master-mode WRITE addressed to 0x%02X (7-bit 0x%02X)", self.id_str, addr_byte, addr_byte >> 1)
+        logger.debug("%s: master-mode WRITE addressed to 0x%02X (7-bit 0x%02X)",
+                     self.id_str, payload[0], payload[0] >> 1)
 
-        pkt = SmbusTransport(data)
+        pkt = SmbusTransport(payload)
         pkt.time = time.time()
         if pkt and self.dump_packet:
             print(f"{self.id_str}<RX< {pkt.summary()}")
