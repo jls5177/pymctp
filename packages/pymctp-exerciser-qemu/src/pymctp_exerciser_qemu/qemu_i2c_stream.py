@@ -334,8 +334,9 @@ class QemuI2CStreamSocket(SuperSocket):
             logger.warning("%s: master-mode WRITE frame too short (%d bytes)", self.id_str, len(payload))
             return None
 
-        logger.debug("%s: master-mode WRITE addressed to 0x%02X (7-bit 0x%02X)",
-                     self.id_str, payload[0], payload[0] >> 1)
+        logger.debug(
+            "%s: master-mode WRITE addressed to 0x%02X (7-bit 0x%02X)", self.id_str, payload[0], payload[0] >> 1
+        )
 
         pkt = SmbusTransport(payload)
         pkt.time = time.time()

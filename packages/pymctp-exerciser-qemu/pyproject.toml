@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pymctp-exerciser-qemu"
-version = "0.2.8"
+version = "0.3.0"
 description = "QEMU I2C/I3C exerciser for pymctp"
 readme = "README.md"
 requires-python = ">=3.8"

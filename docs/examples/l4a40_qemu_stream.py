@@ -290,8 +290,9 @@ if __name__ == "__main__":
         # i2c-target-remote masters the bus to this address and the packet's PEC
         # is computed over it, so it must match the real BMC target address.
         bmc_addr = hsp1_config["config"]["target_address"]
-        resp = hsp1.session.sndrcv_control_msg(DiscoveryNotify(), dst_eid=0x0A, timeout_s=5,
-                                               dst_phy_addr=Smbus7bitAddress(bmc_addr))
+        resp = hsp1.session.sndrcv_control_msg(
+            DiscoveryNotify(), dst_eid=0x0F, timeout_s=5, dst_phy_addr=Smbus7bitAddress(bmc_addr)
+        )
         if resp:
             print("DiscoveryNotify response: ")
             resp.show2()

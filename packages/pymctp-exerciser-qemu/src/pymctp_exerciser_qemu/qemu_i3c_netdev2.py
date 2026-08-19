@@ -393,13 +393,11 @@ class QemuI3CNetDev2Socket(SuperSocket):
             events = data[0] if data else 0
             if events & 0x01:  # ENINT (IBI enable)
                 self.ibi_enabled = True
-            logger.info("%s: ENEC — events_byte=0x%02X (ibi_enabled=%s)",
-                        self.id_str, events, self.ibi_enabled)
+            logger.info("%s: ENEC — events_byte=0x%02X (ibi_enabled=%s)", self.id_str, events, self.ibi_enabled)
         elif ccc in (NetDev2CccCode.DISEC, NetDev2CccCode.DISEC_DIRECT):
             events = data[0] if data else 0
             if events & 0x01:  # ENINT (IBI enable)
                 self.ibi_enabled = False
-            logger.info("%s: DISEC — events_byte=0x%02X (ibi_enabled=%s)",
-                        self.id_str, events, self.ibi_enabled)
+            logger.info("%s: DISEC — events_byte=0x%02X (ibi_enabled=%s)", self.id_str, events, self.ibi_enabled)
         else:
             logger.warning("%s: unhandled CCC_NOTIFY ccc=0x%02X data=%s", self.id_str, ccc, data.hex())

@@ -50,8 +50,8 @@ PROTO_VERSION = 0x00010000
 
 # I3C ENEC/DISEC event-enable byte bits (see MIPI I3C ENEC/DISEC CCC).
 I3C_EVENT_ENINT = 0x01  # target IBI (in-band interrupt) enable
-I3C_EVENT_ENCR = 0x02   # controller-role request enable
-I3C_EVENT_ENHJ = 0x08   # hot-join enable
+I3C_EVENT_ENCR = 0x02  # controller-role request enable
+I3C_EVENT_ENHJ = 0x08  # hot-join enable
 
 
 class I3CStreamMsgType(IntEnum):
@@ -197,8 +197,7 @@ class QemuI3CStreamSocket(SuperSocket):
         (some flows enable events out of band) but warn to aid debugging.
         """
         if not self.ibi_enabled:
-            logger.warning("%s: sending IBI while IBIs are not enabled "
-                           "(no ENEC(ENINT) seen yet)", self.id_str)
+            logger.warning("%s: sending IBI while IBIs are not enabled (no ENEC(ENINT) seen yet)", self.id_str)
         return self._send_raw(I3CStreamMsgType.IBI_REQ, bytes([mdb & 0xFF]))
 
     # ------------------------------------------------------------------
@@ -403,14 +402,12 @@ class QemuI3CStreamSocket(SuperSocket):
             events = data[0] if data else 0
             if events & I3C_EVENT_ENINT:
                 self.ibi_enabled = True
-            logger.info("%s: ENEC — events_byte=0x%02X (ibi_enabled=%s)",
-                        self.id_str, events, self.ibi_enabled)
+            logger.info("%s: ENEC — events_byte=0x%02X (ibi_enabled=%s)", self.id_str, events, self.ibi_enabled)
         elif ccc in (NetDev2CccCode.DISEC, NetDev2CccCode.DISEC_DIRECT):
             # Disable Events: for each bit set, disable that event.
             events = data[0] if data else 0
             if events & I3C_EVENT_ENINT:
                 self.ibi_enabled = False
-            logger.info("%s: DISEC — events_byte=0x%02X (ibi_enabled=%s)",
-                        self.id_str, events, self.ibi_enabled)
+            logger.info("%s: DISEC — events_byte=0x%02X (ibi_enabled=%s)", self.id_str, events, self.ibi_enabled)
         else:
             logger.warning("%s: unhandled CCC_NOTIFY ccc=0x%02X data=%s", self.id_str, ccc, data.hex())

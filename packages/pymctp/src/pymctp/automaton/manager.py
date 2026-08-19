@@ -89,8 +89,6 @@ class ISessionConfig(Protocol):
         pass
 
 
-
-
 def deserialize_supersocket(value: dict) -> SupersocketConfig:
     """Deserialize a socket-config dict by looking up its ``type`` discriminator
     in the pluggable registry. Any package that registers a
@@ -99,10 +97,7 @@ def deserialize_supersocket(value: dict) -> SupersocketConfig:
     config_type = value.get("type")
     config_cls = get_config_type(config_type)
     if config_cls is None:
-        msg = (
-            f"Unknown config type {config_type!r}. Registered types: "
-            f"{sorted(registered_config_types())}"
-        )
+        msg = f"Unknown config type {config_type!r}. Registered types: {sorted(registered_config_types())}"
         raise ValueError(msg)
     return config_cls.from_dict(value)
 
