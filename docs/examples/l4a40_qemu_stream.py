@@ -1,0 +1,169 @@
+# SPDX-FileCopyrightText: 2026 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
+"""Example endpoint setup using the QEMU I3C/I2C TCP "stream" transports.
+
+Unlike the UDP-based examples (``l4a40_qemu.py`` / ``l4a40_qemu_netdev2.py``)
+which use a pair of UDP ports (``in_port``/``out_port``) per endpoint, the
+stream transports use a *single* bidirectional TCP connection per endpoint:
+QEMU listens as the TCP server (``server=on``) and PyMCTP connects as the
+client. See ``packages/pymctp-exerciser-qemu/README.md`` for the full wire
+protocol and QEMU invocation reference.
+
+This example is kept under ``docs/examples/`` (rather than the repo-root
+``examples/``, which is gitignored as local/environment-specific scratch
+space — see the "keep local examples out of the repository" commit) so it
+stays tracked and reviewable, while remaining directly runnable.
+
+Illustrative QEMU invocation for this example's ports::
+
+    qemu-system-arm ... \\
+        -device i3c-target-remote,bus=i3c0,port=5556,server=on \\
+        -device i2c-target-remote,bus=i2c0,address=0x58,port=5570,server=on \\
+        -device i3c-target-remote,bus=i3c1,port=5558,server=on \\
+        -device i3c-target-remote,bus=i3c2,port=5559,server=on \\
+        -device i3c-target-remote,bus=i3c3,port=5560,server=on
+"""
+
+import pathlib
+import sys
+
+from pymctp.automaton.manager import ConfigTypes, EndpointManager
+from pymctp.layers.mctp import *
+from pymctp.layers.mctp.control import DiscoveryNotify
+from pymctp.utils import set_printable_raw_layer
+
+thread_kwargs = {
+    "count": 0,  # let the answering machine process an unlimited number of requests
+    "timeout": 30 * 60,
+    "bg": False,
+}
+
+# HSP1: SMBus/I2C target-remote endpoint (QEMU I2C bus 0, target address 0x58).
+# Uses a single TCP port; QEMU listens, PyMCTP connects as the client.
+hsp1_config = {
+    "context": {
+        "physical_address": {
+            "address": 0xB0 >> 1,
+        },
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+            MsgTypes.PLDM,
+        ],
+        "assigned_eid": 34,
+    },
+    "config": {
+        "type": ConfigTypes.I2CStream,
+        "host": "localhost",
+        "port": 5570,
+        "name": "HSP1",
+        "dump_packet": True,
+        "dump_hex": False,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
+# HCP0-HCP3: I3C target-remote endpoints on I3C buses 0-3. I3C addresses are
+# dynamically assigned via ENTDAA, so physical_address is not set. Each
+# endpoint uses a single TCP port (one per bus); QEMU listens, PyMCTP
+# connects as the client.
+hcp0_config = {
+    "context": {
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+            MsgTypes.PLDM,
+        ],
+        "assigned_eid": 38,
+    },
+    "config": {
+        "type": ConfigTypes.I3CStream,
+        "host": "localhost",
+        "port": 5556,
+        "name": "HCP0",
+        "dump_packet": True,
+        "dump_hex": True,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
+hcp1_config = {
+    "context": {
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+            MsgTypes.PLDM,
+        ],
+        "assigned_eid": 39,
+    },
+    "config": {
+        "type": ConfigTypes.I3CStream,
+        "host": "localhost",
+        "port": 5558,
+        "name": "HCP1",
+        "dump_packet": True,
+        "dump_hex": False,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
+hcp2_config = {
+    "context": {
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+            MsgTypes.PLDM,
+        ],
+        "assigned_eid": 40,
+    },
+    "config": {
+        "type": ConfigTypes.I3CStream,
+        "host": "localhost",
+        "port": 5559,
+        "name": "HCP2",
+        "dump_packet": True,
+        "dump_hex": False,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
+hcp3_config = {
+    "context": {
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+            MsgTypes.PLDM,
+        ],
+        "assigned_eid": 41,
+    },
+    "config": {
+        "type": ConfigTypes.I3CStream,
+        "host": "localhost",
+        "port": 5560,
+        "name": "HCP3",
+        "dump_packet": True,
+        "dump_hex": False,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
+
+if __name__ == "__main__":
+    send_discovery_notify = (sys.argv[1] in (1, "1", True, "true", "True")) if len(sys.argv) > 1 else False
+    start_threads = True
+
+    set_printable_raw_layer()
+
+    hsp1 = EndpointManager.from_config(hsp1_config, start_thread=start_threads)
+    hcp0 = EndpointManager.from_config(hcp0_config, start_thread=start_threads)
+    hcp1 = EndpointManager.from_config(hcp1_config, start_thread=start_threads)
+    hcp2 = EndpointManager.from_config(hcp2_config, start_thread=start_threads)
+    hcp3 = EndpointManager.from_config(hcp3_config, start_thread=start_threads)
+    if len(sys.argv) > 2:
+        pcap_file = pathlib.Path(sys.argv[2])
+        import_pcap_dump(pcap_file, False, hsp1.config.context)
+
+    if send_discovery_notify:
+        resp = hcp0.session.sndrcv_control_msg(DiscoveryNotify(), dst_eid=0x0A, timeout_s=5)
+        if resp:
+            print("DiscoveryNotify response: ")
+            resp.show2()
+
+    print("Setup complete....")
