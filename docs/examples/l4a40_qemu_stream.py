@@ -16,11 +16,26 @@ This example is kept under ``docs/examples/`` (rather than the repo-root
 space — see the "keep local examples out of the repository" commit) so it
 stays tracked and reviewable, while remaining directly runnable.
 
+The L4A40 board's I2C endpoints (HSP1-4 @ 0x58, HN @ 0x10) use the
+``i2c-target-remote`` device's *master* mode (peer-as-master / multi-master,
+like the old UDP ``i2c-netdev`` transport) rather than the slave/target
+model: each endpoint masters its own (virtual) I2C bus to deliver packets to
+the BMC, instead of waiting to be read from. ``target_address`` below is the
+BMC-side SMBus address each endpoint masters writes to on its own bus,
+following the same per-endpoint addressing used by the older UDP examples
+(``examples/l4a40_qemu_netdev2.py`` / ``examples/l4a40_aardvark.py``): HN
+(the renamed LION/MAN1 management-network endpoint) targets BMC address
+0x10, while the HSP endpoints target BMC address 0x12.
+
 Illustrative QEMU invocation for this example's ports::
 
     qemu-system-arm ... \\
         -device i3c-target-remote,bus=i3c0,port=5556,server=on \\
-        -device i2c-target-remote,bus=i2c0,address=0x58,port=5570,server=on \\
+        -device i2c-target-remote,bus=i2c0,address=0x58,port=5570,server=on,master=on \\
+        -device i2c-target-remote,bus=i2c1,address=0x58,port=5571,server=on,master=on \\
+        -device i2c-target-remote,bus=i2c2,address=0x58,port=5572,server=on,master=on \\
+        -device i2c-target-remote,bus=i2c3,address=0x58,port=5573,server=on,master=on \\
+        -device i2c-target-remote,bus=i2c4,address=0x10,port=5574,server=on,master=on \\
         -device i3c-target-remote,bus=i3c1,port=5558,server=on \\
         -device i3c-target-remote,bus=i3c2,port=5559,server=on \\
         -device i3c-target-remote,bus=i3c3,port=5560,server=on
@@ -40,8 +55,11 @@ thread_kwargs = {
     "bg": False,
 }
 
-# HSP1: SMBus/I2C target-remote endpoint (QEMU I2C bus 0, target address 0x58).
-# Uses a single TCP port; QEMU listens, PyMCTP connects as the client.
+# HSP1-4: SMBus/I2C target-remote endpoints in *master* mode (QEMU I2C buses
+# 0-3, each endpoint's own target address 0x58). Each masters its own bus to
+# deliver packets to the BMC at target_address 0x12 (matching the BMC target
+# address used for HSP endpoints in the older UDP examples). A single TCP
+# port per endpoint; QEMU listens, PyMCTP connects as the client.
 hsp1_config = {
     "context": {
         "physical_address": {
@@ -60,9 +78,111 @@ hsp1_config = {
         "name": "HSP1",
         "dump_packet": True,
         "dump_hex": False,
+        "master": True,
+        "target_address": 0x12,
     },
     "thread_kwargs": thread_kwargs,
 }
+
+hsp2_config = {
+    "context": {
+        "physical_address": {
+            "address": 0xB0 >> 1,
+        },
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+            MsgTypes.PLDM,
+        ],
+        "assigned_eid": 35,
+    },
+    "config": {
+        "type": ConfigTypes.I2CStream,
+        "host": "localhost",
+        "port": 5571,
+        "name": "HSP2",
+        "dump_packet": True,
+        "dump_hex": False,
+        "master": True,
+        "target_address": 0x12,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
+hsp3_config = {
+    "context": {
+        "physical_address": {
+            "address": 0xB0 >> 1,
+        },
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+            MsgTypes.PLDM,
+        ],
+        "assigned_eid": 36,
+    },
+    "config": {
+        "type": ConfigTypes.I2CStream,
+        "host": "localhost",
+        "port": 5572,
+        "name": "HSP3",
+        "dump_packet": True,
+        "dump_hex": False,
+        "master": True,
+        "target_address": 0x12,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
+hsp4_config = {
+    "context": {
+        "physical_address": {
+            "address": 0xB0 >> 1,
+        },
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+            MsgTypes.PLDM,
+        ],
+        "assigned_eid": 37,
+    },
+    "config": {
+        "type": ConfigTypes.I2CStream,
+        "host": "localhost",
+        "port": 5573,
+        "name": "HSP4",
+        "dump_packet": True,
+        "dump_hex": False,
+        "master": True,
+        "target_address": 0x12,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
+# HN: SMBus/I2C target-remote endpoint in *master* mode (own target address
+# 0x10), the renamed LION/MAN1 management-network endpoint. Masters its own
+# bus to deliver packets to the BMC at target_address 0x10 (matching the BMC
+# target address used for LION in the older UDP examples).
+hn_config = {
+    "context": {
+        "physical_address": {
+            "address": 0x10,
+        },
+        "supported_msg_types": [
+            MsgTypes.CTRL,
+        ],
+        "assigned_eid": 66,
+    },
+    "config": {
+        "type": ConfigTypes.I2CStream,
+        "host": "localhost",
+        "port": 5574,
+        "name": "HN",
+        "dump_packet": True,
+        "dump_hex": False,
+        "master": True,
+        "target_address": 0x10,
+    },
+    "thread_kwargs": thread_kwargs,
+}
+
 
 # HCP0-HCP3: I3C target-remote endpoints on I3C buses 0-3. I3C addresses are
 # dynamically assigned via ENTDAA, so physical_address is not set. Each
@@ -152,6 +272,10 @@ if __name__ == "__main__":
     set_printable_raw_layer()
 
     hsp1 = EndpointManager.from_config(hsp1_config, start_thread=start_threads)
+    hsp2 = EndpointManager.from_config(hsp2_config, start_thread=start_threads)
+    hsp3 = EndpointManager.from_config(hsp3_config, start_thread=start_threads)
+    hsp4 = EndpointManager.from_config(hsp4_config, start_thread=start_threads)
+    hn = EndpointManager.from_config(hn_config, start_thread=start_threads)
     hcp0 = EndpointManager.from_config(hcp0_config, start_thread=start_threads)
     hcp1 = EndpointManager.from_config(hcp1_config, start_thread=start_threads)
     hcp2 = EndpointManager.from_config(hcp2_config, start_thread=start_threads)

@@ -321,6 +321,12 @@ class I2CStreamSocketConfig(DataClassDictMixin):
     Connects as a single TCP client (``host``/``port``) and uses the minimal
     WRITE/READ_REQ/READ_RSP/ALERT/HELLO framing implemented by
     :class:`~pymctp_exerciser_qemu.qemu_i2c_stream.QemuI2CStreamSocket`.
+
+    When ``master`` is True, the socket instead speaks the peer-as-master
+    wire format (mirroring the old UDP ``i2c-netdev`` transport): WRITE
+    frames are address-prefixed and sent immediately, with no
+    READ_REQ/READ_RSP turn-around. ``target_address`` (the BMC's own SMBus
+    address) is required in that mode.
     """
 
     type = ConfigTypes.I2CStream
@@ -330,6 +336,8 @@ class I2CStreamSocketConfig(DataClassDictMixin):
     dump_hex: bool = True
     dump_packet: bool = False
     connect_timeout: float = 5.0
+    master: bool = False
+    target_address: int | None = None
 
     socket: Any | None = field(
         default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
@@ -347,6 +355,8 @@ class I2CStreamSocketConfig(DataClassDictMixin):
             dump_hex=self.dump_hex,
             dump_packet=self.dump_packet,
             connect_timeout=self.connect_timeout,
+            master=self.master,
+            target_address=self.target_address,
         )
 
     def close_socket(self):

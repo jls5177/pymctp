@@ -244,3 +244,117 @@ class TestQemuI2CStreamMultipleFramesInOneSegment:
             assert sock.recv() is None  # drains the queued ALERT frame
         finally:
             sock.close()
+
+
+class TestQemuI2CStreamMasterModeConstruction:
+    def test_master_without_target_address_raises(self, fake_qemu):
+        with pytest.raises(ValueError, match="target_address"):
+            QemuI2CStreamSocket(
+                host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False, master=True
+            )
+
+    def test_slave_mode_default_does_not_require_target_address(self, fake_qemu):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            assert sock.master is False
+            assert sock.target_address is None
+        finally:
+            sock.close()
+
+
+class TestQemuI2CStreamMasterModeSend:
+    def test_send_prefixes_target_address_and_transmits_immediately(self, fake_qemu):
+        """Master-mode send() should WRITE ``[addr_byte][data...]`` right away,
+        with no READ_REQ turn-around required."""
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host,
+            port=fake_qemu.port,
+            id_str="test-i2c",
+            dump_hex=False,
+            master=True,
+            target_address=0x12,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+
+            mctp_pkt = (
+                TransportHdrPacket(
+                    dst=0x08, src=0x10, som=1, eom=1, pkt_seq=0, to=0, tag=2, ic=0, msg_type=MsgTypes.CTRL.value
+                )
+                / b"\xde\xad\xbe\xef"
+            )
+            wire_pkt = SmbusTransport(dst_addr=0x08, src_addr=0x10, load=mctp_pkt)
+            wire_bytes = bytes(wire_pkt)
+
+            n = sock.send(wire_pkt)
+            assert n == len(wire_bytes)
+
+            # No READ_REQ needed: the WRITE frame is on the wire immediately.
+            msg_type, body = fake_qemu.recv_frame()
+            assert msg_type == I2CStreamMsgType.WRITE
+            assert body[0] == (0x12 << 1)  # target_address<<1 | 0 (write)
+            assert body[1:] == wire_bytes
+        finally:
+            sock.close()
+
+
+class TestQemuI2CStreamMasterModeRecv:
+    def test_recv_strips_leading_address_byte_and_parses_smbus_packet(self, fake_qemu):
+        """Master-mode recv() should strip the ``our_addr`` prefix (the BMC
+        mastering the bus and writing to us) and parse the remainder as a
+        SmbusTransportPacket."""
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host,
+            port=fake_qemu.port,
+            id_str="test-i2c",
+            dump_hex=False,
+            master=True,
+            target_address=0x12,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+
+            mctp_pkt = (
+                TransportHdrPacket(
+                    dst=0x10, src=0x08, som=1, eom=1, pkt_seq=0, to=0, tag=1, ic=0, msg_type=MsgTypes.CTRL.value
+                )
+                / b"\x01\x02\x03"
+            )
+            wire_pkt = SmbusTransport(dst_addr=0x10, src_addr=0x08, load=mctp_pkt)
+            wire_bytes = bytes(wire_pkt)
+
+            our_addr = 0x58
+            addr_prefixed_body = bytes([(our_addr << 1) | 0]) + wire_bytes
+            fake_qemu.send_frame(I2CStreamMsgType.WRITE, addr_prefixed_body)
+
+            pkt = sock.recv()
+            assert pkt is not None
+            assert bytes(pkt) == wire_bytes
+        finally:
+            sock.close()
+
+    def test_recv_short_master_write_frame_warns_and_returns_none(self, fake_qemu, caplog):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host,
+            port=fake_qemu.port,
+            id_str="test-i2c",
+            dump_hex=False,
+            master=True,
+            target_address=0x12,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+
+            # Only the address byte plus a couple of stray bytes: too short
+            # to plausibly hold an SMBUS/MCTP transport header.
+            fake_qemu.send_frame(I2CStreamMsgType.WRITE, bytes([0xB0, 0x01]))
+
+            with caplog.at_level("WARNING"):
+                pkt = sock.recv()
+            assert pkt is None
+            assert any("too short" in rec.message for rec in caplog.records)
+        finally:
+            sock.close()

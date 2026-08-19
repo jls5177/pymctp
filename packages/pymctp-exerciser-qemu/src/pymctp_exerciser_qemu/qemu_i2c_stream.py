@@ -29,6 +29,29 @@ Message types (minimal, new protocol — not shared with the UDP
 Outbound data queued via :meth:`send` (already-wrapped SMBus/MCTP bytes) is
 buffered until the master issues a READ_REQ, matching real I2C/SMBus turn-
 around semantics where the slave cannot push data onto the bus unsolicited.
+
+Master mode
+------------
+
+When constructed with ``master=True``, the socket instead models QEMU's
+``i2c-target-remote`` *master* mode (peer-as-master / multi-master, mirroring
+the old UDP ``i2c-netdev`` transport's semantics — see
+:mod:`qemu_i2c_netdev`). QEMU masters the (virtual) I2C bus on our behalf, so
+there is no READ_REQ/READ_RSP turn-around: every WRITE frame is address-
+prefixed instead::
+
+    WRITE (0x00) body := [addr_byte][data...]
+    addr_byte        := (i2c_7bit_address << 1) | 0   # write, no R/W bit set
+
+* :meth:`send` (peer -> QEMU): prefixes the already-wrapped SMBus/MCTP bytes
+  with ``target_address`` (the BMC's own SMBus address, supplied at
+  construction time) and transmits a WRITE frame immediately — QEMU masters
+  the bus and writes ``data`` to ``target_address``.
+* :meth:`recv` (QEMU -> peer): the BMC has mastered the bus and written to
+  this endpoint's own address. The leading ``addr_byte`` (this endpoint's own
+  address) is stripped and the remainder is parsed as a
+  :class:`~pymctp.layers.mctp.SmbusTransportPacket`, exactly as the old
+  ``qemu_i2c_netdev`` transport parses its (unframed) UDP datagrams.
 """
 
 from __future__ import annotations
@@ -60,6 +83,10 @@ PROTO_VERSION = 0x00010000
 # Minimum length of a WRITE payload for it to plausibly hold an SMBUS/MCTP
 # transport header (dst_addr, command_code, byte_count, src_addr, ... PEC).
 _MIN_SMBUS_PAYLOAD_LEN = 4
+
+# Minimum length of a master-mode WRITE payload: the leading address byte
+# plus the same minimal SMBUS/MCTP transport header as slave mode.
+_MIN_MASTER_WRITE_PAYLOAD_LEN = 1 + _MIN_SMBUS_PAYLOAD_LEN
 
 
 class I2CStreamMsgType(IntEnum):
@@ -96,18 +123,37 @@ class QemuI2CStreamSocket(SuperSocket):
         dump_packet: bool = False,
         poll_period_ms: int = 10,
         connect_timeout: float = 5.0,
+        master: bool = False,
+        target_address: int | None = None,
         **kwargs,
     ):
+        """Create the socket.
+
+        Args:
+            master: When True, speak the peer-as-master wire format (see the
+                module docstring) instead of the default slave/target model.
+            target_address: The 7-bit SMBus address of the BMC-side target
+                that master-mode WRITE frames should be addressed to (used to
+                build the leading ``addr_byte`` in :meth:`send`). Required
+                when ``master=True``; ignored otherwise.
+        """
         self.id_str = id_str
         self.dump_hex = dump_hex
         self.dump_packet = dump_packet
         self._poll_period_ms = poll_period_ms
         self.host = host
         self.port = port
+        self.master = master
+        self.target_address = target_address
+
+        if self.master and self.target_address is None:
+            msg = f"{id_str}: master=True requires a target_address (BMC SMBus address)"
+            raise ValueError(msg)
 
         self._decoder = FrameDecoder()
         self._pending_frames: collections.deque[tuple[int, bytes]] = collections.deque()
         # Bytes queued by send() awaiting the next READ_REQ from the master.
+        # Unused in master mode, where send() transmits immediately.
         self._read_buffer = bytearray()
 
         fd = socket.create_connection((host, port), timeout=connect_timeout)
@@ -138,11 +184,15 @@ class QemuI2CStreamSocket(SuperSocket):
     # ------------------------------------------------------------------
 
     def send(self, x: Packet) -> int:
-        """Queue an already SMBus/MCTP-wrapped packet for the next READ_REQ.
+        """Send an already SMBus/MCTP-wrapped packet to the QEMU peer.
 
-        QEMU is the I2C master's target/slave in this topology, so a
-        response cannot be pushed onto the bus; it is only delivered once
-        the master issues a READ_REQ (see :meth:`recv`).
+        In slave mode (default), QEMU is the I2C master's target/slave in
+        this topology, so a response cannot be pushed onto the bus; it is
+        only delivered once the master issues a READ_REQ (see :meth:`recv`).
+
+        In master mode, QEMU masters the bus on our behalf, so the frame is
+        transmitted immediately, address-prefixed with ``target_address``
+        (see the module docstring's "Master mode" section).
         """
         sx = raw(x)
         with contextlib.suppress(AttributeError):
@@ -152,6 +202,10 @@ class QemuI2CStreamSocket(SuperSocket):
             print(f"{self.id_str}>TX> {linehexdump(sx, onlyhex=1, dump=True)}")
         if self.dump_packet:
             print(f"{self.id_str}>TX> {x.summary()}")
+
+        if self.master:
+            self._send_master_write(sx)
+            return len(sx)
 
         self._read_buffer.extend(sx)
         return len(sx)
@@ -220,6 +274,8 @@ class QemuI2CStreamSocket(SuperSocket):
     def _dispatch(self, msg_type: int, payload: bytes) -> Packet | None:
         """Dispatch a single decoded ``(msg_type, payload)`` frame."""
         if msg_type == I2CStreamMsgType.WRITE:
+            if self.master:
+                return self._parse_master_write(payload)
             if len(payload) < _MIN_SMBUS_PAYLOAD_LEN:
                 logger.warning("%s: WRITE frame too short (%d bytes)", self.id_str, len(payload))
                 return None
@@ -262,6 +318,38 @@ class QemuI2CStreamSocket(SuperSocket):
         chunk = bytes(self._read_buffer[:length])
         del self._read_buffer[:length]
         self.send_read_rsp(chunk)
+
+    def _parse_master_write(self, payload: bytes) -> Packet | None:
+        """Parse a master-mode WRITE frame body: ``[addr_byte][data...]``.
+
+        ``addr_byte`` is this endpoint's own I2C address (as written to by
+        the BMC mastering the bus) and is stripped before ``data`` is parsed
+        as a :class:`~pymctp.layers.mctp.SmbusTransportPacket`, matching the
+        old ``qemu_i2c_netdev`` transport's handling of its (address-
+        prefixed) UDP datagrams.
+        """
+        if len(payload) < _MIN_MASTER_WRITE_PAYLOAD_LEN:
+            logger.warning("%s: master-mode WRITE frame too short (%d bytes)", self.id_str, len(payload))
+            return None
+
+        addr_byte, data = payload[0], payload[1:]
+        logger.debug("%s: master-mode WRITE addressed to 0x%02X (7-bit 0x%02X)", self.id_str, addr_byte, addr_byte >> 1)
+
+        pkt = SmbusTransport(data)
+        pkt.time = time.time()
+        if pkt and self.dump_packet:
+            print(f"{self.id_str}<RX< {pkt.summary()}")
+        return pkt
+
+    def _send_master_write(self, data: bytes) -> int:
+        """Address-prefix ``data`` with ``target_address`` and send a WRITE frame.
+
+        QEMU masters the (virtual) I2C bus on our behalf, so the frame is
+        transmitted immediately — there is no READ_REQ/READ_RSP turn-around
+        in master mode.
+        """
+        addr_byte = (self.target_address << 1) & 0xFF
+        return self._send_raw(I2CStreamMsgType.WRITE, bytes([addr_byte]) + data)
 
     def _send_raw(self, msg_type: int, body: bytes = b"") -> int:
         """Encode and transmit a frame to the QEMU peer over the TCP stream."""

@@ -92,7 +92,7 @@ hcp0_config = {
 }
 
 # I2CStreamSocketConfig fields: host, port, name, dump_hex=True,
-# dump_packet=False, connect_timeout=5.0.
+# dump_packet=False, connect_timeout=5.0, master=False, target_address=None.
 hsp1_config = {
     "context": {
         "physical_address": {"address": 0xB0 >> 1},
@@ -111,6 +111,49 @@ hcp0 = EndpointManager.from_config(hcp0_config)
 hsp1 = EndpointManager.from_config(hsp1_config)
 ```
 
+By default (`master=False`), the socket speaks the slave/target model
+described above: WRITE frames are dispatched as parsed
+`SmbusTransportPacket`s, and outbound data is buffered until a READ_REQ
+arrives (see [`qemu_i2c_stream.py`](src/pymctp_exerciser_qemu/qemu_i2c_stream.py)).
+
+Setting `master=True` instead speaks QEMU's `i2c-target-remote` *master*
+mode (peer-as-master / multi-master, mirroring the old UDP `i2c-netdev`
+transport): QEMU masters the (virtual) I2C bus on our behalf, so there is no
+READ_REQ/READ_RSP turn-around — every WRITE frame is address-prefixed
+instead:
+
+```
+WRITE (0x00) body := [addr_byte][data...]
+addr_byte        := (i2c_7bit_address << 1) | 0   # write, no R/W bit set
+```
+
+* `send()` (peer -> QEMU) prefixes the outgoing SMBus/MCTP bytes with
+  `target_address` (the BMC-side SMBus address to master-write to, required
+  when `master=True`) and transmits the WRITE frame immediately.
+* `recv()` (QEMU -> peer) strips the leading `addr_byte` (this endpoint's own
+  address, as written to by the BMC mastering the bus) and parses the
+  remainder as a `SmbusTransportPacket`.
+
+```python
+hn_config = {
+    "context": {
+        "physical_address": {"address": 0x10},
+        "supported_msg_types": [],  # e.g. MsgTypes.CTRL
+        "assigned_eid": 66,
+    },
+    "config": {
+        "type": ConfigTypes.I2CStream,
+        "host": "localhost",
+        "port": 5574,
+        "name": "HN",
+        "master": True,
+        "target_address": 0x10,
+    },
+}
+
+hn = EndpointManager.from_config(hn_config)
+```
+
 See [`docs/examples/l4a40_qemu_stream.py`](../../docs/examples/l4a40_qemu_stream.py)
 for a complete, runnable example.
 
@@ -122,6 +165,15 @@ per endpoint/bus:
 ```
 -device i3c-target-remote,bus=<bus>,port=<N>,server=on
 -device i2c-target-remote,bus=<bus>,address=0x<NN>,port=<N>,server=on
+```
+
+Add `master=on` to have QEMU master the (virtual) I2C bus on our behalf
+instead of acting as the slave/target (peer-as-master / multi-master, like
+the old `i2c-netdev` transport) — pair this with `master=True` /
+`target_address=<BMC addr>` in the matching `I2CStreamSocketConfig`:
+
+```
+-device i2c-target-remote,bus=<bus>,address=0x<NN>,port=<N>,server=on,master=on
 ```
 
 When QEMU itself runs inside Docker, publish each stream port with its own
