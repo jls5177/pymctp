@@ -8,35 +8,32 @@ or all CSV files in a directory.
 """
 
 import csv
-import sys
+import argparse
 import os
+import re
+import sys
+from collections import Counter
 from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Any, Generator
 from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional
 
 from scapy.config import conf
-from scapy.packet import Raw, Packet
 
+from pymctp.cli.triage import print_triage_report, setup_triage_engine, tally_mctp_packet
 from pymctp.layers import SmbusTransport
 from pymctp.utils import str_to_bytes, PrintableRawPacket
-
-import csv
-import re
-from dataclasses import dataclass
-from typing import Optional, List, Any
-import sys
-from pathlib import Path
 
 
 @dataclass
 class I2CTransaction:
     """Represents an I2C transaction parsed from the CSV"""
-    start_time: datetime
-    duration: float
+    start_time: Optional[datetime]
+    duration: Optional[float]
     address: str
     data: str
     count: int
+    row_num: int
 
 
 def parse_duration(duration_string):
@@ -162,15 +159,37 @@ def parse_csv_file(file_path: str):
     """
     try:
         with open(file_path, 'r', newline='', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
+            # Total Phase exports may place the CSV header on a commented line.
+            # Keep that header while still skipping other comments.
+            def filtered_rows():
+                for line in csvfile:
+                    stripped = line.lstrip()
+                    if stripped.startswith('#'):
+                        candidate_header = stripped[1:].lstrip()
+                        if (
+                            'Date h:m:s.ms.us' in candidate_header
+                            and 'Addr' in candidate_header
+                            and 'Data' in candidate_header
+                        ):
+                            yield candidate_header
+                        continue
+                    if not stripped:
+                        continue
+                    yield line
+
+            reader = csv.DictReader(filtered_rows())
 
             for row_num, row in enumerate(reader, start=2):  # Start at 2 since header is row 1
                 try:
                     # Extract the required columns
-                    timestamp = row.get('Date')
+                    timestamp = row.get('Date h:m:s.ms.us')
                     timestamp_dt = parse_total_phase_timestamp(timestamp)
                     duration = parse_duration(row.get('Dur', 0))
-                    length = int(row.get('Len', 0).replace(' B', ''))
+                    raw_len = row.get('Len', '')
+                    if isinstance(raw_len, str):
+                        length = int(raw_len.replace(' B', '').strip()) if raw_len.strip() else 0
+                    else:
+                        length = int(raw_len) if raw_len is not None else 0
                     address = row['Addr'].strip('*"')
                     data = row['Data'].strip('*"')
 
@@ -187,6 +206,7 @@ def parse_csv_file(file_path: str):
                         data=data,
                         count=length,
                         start_time=timestamp_dt,
+                        row_num=row_num,
                     )
 
                 except (KeyError, ValueError) as e:
@@ -201,7 +221,18 @@ def parse_csv_file(file_path: str):
         return
 
 
-def analyze_data(data_generator, filename: str = None, filter_mctp_traffic: bool = False):
+def analyze_data(
+    data_generator,
+    filename: Optional[str] = None,
+    filter_mctp_traffic: bool = False,
+    triage: bool = False,
+    min_severity: str = "warning",
+    rules: tuple[str, ...] = (),
+    response_timeout: float = 5.0,
+    gap_threshold: float = 10.0,
+    json_report: Optional[Path] = None,
+    packet_log: Optional[Path] = None,
+):
     """
     Analyzes I2C transaction data, gathers statistics, optionally filters
     MCTP traffic, and provides a summary of the processed data. The
@@ -243,6 +274,11 @@ def analyze_data(data_generator, filename: str = None, filter_mctp_traffic: bool
     print(f"\nProcessing I2C transactions{file_display}:")
     print("=" * 60)
 
+    # Optional triage setup.
+    engine, severity_level = setup_triage_engine(triage, min_severity, rules, response_timeout, gap_threshold)
+    type_counts: Counter[str] = Counter()
+    packet_log_file = packet_log.open("w", encoding="utf-8") if packet_log is not None else None
+
     # Open output file if filename is provided - use full path
     output_file = None
     if filename:
@@ -254,51 +290,67 @@ def analyze_data(data_generator, filename: str = None, filter_mctp_traffic: bool
             print(f"Warning: Could not open output file {output_filename}: {e}")
 
     # Process records one at a time
-    for record in data_generator:
-        record_count += 1
-        addr = record.address
-        data_str = record.data
-        timestamp = record.start_time
-        name = record.name if hasattr(record, 'name') else None
+    try:
+        for pkt_id, record in enumerate(data_generator, start=1):
+            record_count += 1
+            addr = record.address
+            data_str = record.data
+            timestamp = record.start_time
 
-        # Convert data string to bytes
-        data = str_to_bytes(data_str, " ")
+            # Convert data string to bytes
+            data = str_to_bytes(data_str, " ")
 
-        # Update address statistics
-        if addr not in addresses:
-            addresses[addr] = {'count': 0, 'bytes': 0}
-        addresses[addr]['count'] += 1
-        addresses[addr]['bytes'] += 1 + len(data)
+            # Update address statistics
+            if addr not in addresses:
+                addresses[addr] = {'count': 0, 'bytes': 0}
+            addresses[addr]['count'] += 1
+            addresses[addr]['bytes'] += 1 + len(data)
 
-        # Update time range
-        if earliest is None or timestamp < earliest:
-            earliest = timestamp
-        if latest is None or timestamp > latest:
-            latest = timestamp
+            # Update time range
+            if timestamp is not None and (earliest is None or timestamp < earliest):
+                earliest = timestamp
+            if timestamp is not None and (latest is None or timestamp > latest):
+                latest = timestamp
 
-        # parse the MCTP packet, if present
-        addr_int = int(addr, 16)
-        pkt_data = bytes([addr_int]) + data
-        if not addr or addr_int > 0x7f or (filter_mctp_traffic and data and data[0] != 0x0f and addr_int < 0x70):
-            continue
-        if not data or data[0] != 0x0f:
-            pkt = PrintableRawPacket(pkt_data)
-        else:
-            try:
-                pkt = SmbusTransport(pkt_data)
-            except:
+            # parse the MCTP packet, if present
+            addr_int = int(addr, 16)
+            pkt_data = bytes([addr_int]) + data
+            if not addr or addr_int > 0x7f or (filter_mctp_traffic and data and data[0] != 0x0f and addr_int < 0x70):
+                continue
+
+            is_mctp = bool(data) and data[0] == 0x0F
+            if not is_mctp:
                 pkt = PrintableRawPacket(pkt_data)
+            else:
+                try:
+                    pkt = SmbusTransport(pkt_data)
+                except Exception:
+                    pkt = PrintableRawPacket(pkt_data)
 
-        # Include name in the output if it exists
-        name_part = f"{name}:" if name else ""
-        output_line = f'{timestamp.isoformat()} {name_part} {pkt.summary()}'
+            timestamp_str = timestamp.isoformat() if timestamp is not None else "NO_TIMESTAMP"
+            output_line = f"{timestamp_str} [csv_row={record.row_num}] {pkt.summary()}"
 
-        # Print to console
-        print(output_line)
+            # Print to console (suppressed in triage mode)
+            if not triage:
+                print(output_line)
 
-        # Write to file if available
-        if output_file:
-            output_file.write(output_line + '\n')
+            # Write to decoded output file if available
+            if output_file:
+                output_file.write(output_line + '\n')
+
+            # Also write packet listing when requested
+            if packet_log_file is not None:
+                packet_log_file.write(output_line + "\n")
+
+            # Feed only MCTP packets to triage rules.
+            if engine is not None and is_mctp:
+                if timestamp is not None:
+                    pkt.timestamp = timestamp
+                tally_mctp_packet(pkt, type_counts)
+                engine.feed(pkt_id, timestamp, pkt)
+    finally:
+        if packet_log_file is not None:
+            packet_log_file.close()
 
     # Close output file
     if output_file:
@@ -322,6 +374,12 @@ def analyze_data(data_generator, filename: str = None, filter_mctp_traffic: bool
         print(f"  Start: {earliest.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
         print(f"  End:   {latest.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
         print(f"  Duration: {latest - earliest}")
+
+    if packet_log is not None:
+        print(f"Packet listing written to: {packet_log}")
+
+    if engine is not None:
+        print_triage_report(engine, severity_level, type_counts, json_report)
 
 
 def get_csv_files(path: str) -> List[str]:
@@ -355,14 +413,40 @@ def get_csv_files(path: str) -> List[str]:
 
 def main():
     """Main function to run the CSV parser."""
-    # Default path (can be changed as needed)
-    default_path = "."
+    parser = argparse.ArgumentParser(description="Parse Beagle I2C CSV capture files and decode MCTP traffic.")
+    parser.add_argument("input_path", nargs="?", default=".", help="Path to a CSV file or directory of CSV files")
+    parser.add_argument("--mctp-only", action="store_true", help="Only process lines that appear to carry MCTP traffic")
+    parser.add_argument("--triage", action="store_true", help="Run analyzer rules to detect protocol issues")
+    parser.add_argument("--min-severity", default="warning", help="Minimum severity to report (default: warning)")
+    parser.add_argument(
+        "--rules",
+        action="append",
+        default=[],
+        help="Rule IDs to enable (repeatable), e.g. --rules TIMING-001 --rules SPDM-SEQ-001",
+    )
+    parser.add_argument(
+        "--response-timeout",
+        type=float,
+        default=5.0,
+        help="Threshold in seconds for delayed response detection",
+    )
+    parser.add_argument(
+        "--gap-threshold",
+        type=float,
+        default=10.0,
+        help="Threshold in seconds for inter-packet gap detection",
+    )
+    parser.add_argument("--json-report", type=Path, default=None, help="Write triage findings to a JSON file")
+    parser.add_argument(
+        "--packet-log",
+        type=Path,
+        default=None,
+        help="Write a packet listing with CSV row references to a file",
+    )
+    args = parser.parse_args()
 
-    # Check if path is provided as command line argument
-    if len(sys.argv) > 1:
-        input_path = sys.argv[1]
-    else:
-        input_path = default_path
+    input_path = args.input_path
+    if len(sys.argv) == 1:
         print("No path provided, using current directory")
 
     print(f"I2C Transaction CSV Parser")
@@ -388,7 +472,18 @@ def main():
             data_generator = parse_csv_file(csv_file)
 
             # Perform analysis using the generator - pass full path instead of basename
-            analyze_data(data_generator, csv_file, filter_mctp_traffic=False)
+            analyze_data(
+                data_generator,
+                csv_file,
+                filter_mctp_traffic=args.mctp_only,
+                triage=args.triage,
+                min_severity=args.min_severity,
+                rules=tuple(args.rules),
+                response_timeout=args.response_timeout,
+                gap_threshold=args.gap_threshold,
+                json_report=args.json_report,
+                packet_log=args.packet_log,
+            )
         except Exception as e:
             print(f"Error processing {csv_file}: {e}")
             raise

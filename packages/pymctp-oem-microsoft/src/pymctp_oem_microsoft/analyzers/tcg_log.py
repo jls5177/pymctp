@@ -135,9 +135,7 @@ def decode_attestation_log(data: bytes) -> list[TcgLogEntry]:
         if hdr_offset + 14 > end:
             break
 
-        event_type, measurement_type, digest_count, digest_alg_id = struct.unpack_from(
-            "<IIIH", data, hdr_offset
-        )
+        event_type, measurement_type, digest_count, digest_alg_id = struct.unpack_from("<IIIH", data, hdr_offset)
 
         if digest_count != 1:
             break

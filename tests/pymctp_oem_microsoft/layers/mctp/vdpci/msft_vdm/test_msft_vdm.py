@@ -80,8 +80,8 @@ class TestCmdSetSupportWireData:
         rsp = parsed.getlayer(CmdSetSupportResponsePacket)
         summary = rsp.mysummary()[0]
         assert "next=END" in summary
-        assert "BASE(v=[0.0])" in summary
-        assert "ROT(v=[0.0])" in summary
+        assert "0(BASE)(v=[0.0])" in summary
+        assert "2(ROT)(v=[0.0])" in summary
 
     def test_response_has_no_trailing_raw(self):
         """Ensure all bytes are consumed — no Raw layer after the response."""

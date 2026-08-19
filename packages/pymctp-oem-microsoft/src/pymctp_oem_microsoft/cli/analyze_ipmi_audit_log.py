@@ -10,14 +10,17 @@ import sys
 from collections import Counter
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
+import binascii
 
+import crc8
 import click
 import pytz
 from scapy.config import conf
+from scapy.packet import Raw, Packet
 from tzlocal import get_localzone_name
 
 from pymctp.cli.triage import print_triage_report, setup_triage_engine, tally_mctp_packet, triage_options
-from pymctp.layers import TransportHdrPacket, ipmi
+from pymctp.layers import TransportHdrPacket, ipmi, mctp
 from pymctp.utils.helpers import set_printable_raw_layer
 
 from pymctp_oem_microsoft.analyzers import IpmiMissingResponseRule, IpmiSlowResponseRule
@@ -30,6 +33,36 @@ def is_dst_active(zonename: str) -> bool:
 
 DEFAULT_TZ = pytz.timezone(get_localzone_name())
 DEFAULT_DST = is_dst_active(get_localzone_name())
+
+
+class CustomPrintableRawPacket(Raw):
+    name = "PRaw"
+    __slots__ = ["_mysummary_cls"]
+    ALL_1s_BLOCK = bytes([0xFF] * 4096)
+
+    def set_mysummary_classes(self, classes):
+        self._mysummary_cls = classes
+
+    def mysummary(self):
+        if not len(self.load):
+            summary = "Empty"
+        elif self.load == CustomPrintableRawPacket.ALL_1s_BLOCK[: len(self.load)]:
+            summary = f"Padded [0xff] * {len(self.load)}"
+        else:
+            # add CRC to make it easy to compare raw payloads
+            crc = crc8.crc8()
+            crc.update(self.load)
+            summary = (
+                f"Raw ${crc.hexdigest().upper()} [{len(self.load)}] {binascii.hexlify(self.load, b' ', -1).decode()}"
+            )
+        if hasattr(self, "_mysummary_cls"):
+            return summary, [
+                *self._mysummary_cls,
+                mctp.SmbusTransportPacket,
+                mctp.TransportHdrPacket,
+                ipmi.TransportHdrPacket,
+            ]
+        return summary, [mctp.SmbusTransportPacket, mctp.TransportHdrPacket, ipmi.TransportHdrPacket]
 
 
 @dataclass(frozen=True, order=True)
@@ -213,7 +246,8 @@ def analyze_ipmi_audit_log(
     # Triage with JSON report
     pymctp analyze-ipmi-audit-log -i audit.log --triage --json-report report.json
     """
-    set_printable_raw_layer()
+    # set_printable_raw_layer()
+    conf.raw_layer = CustomPrintableRawPacket
 
     # --- Build IPMI-specific rules ---
     extra_rules = []

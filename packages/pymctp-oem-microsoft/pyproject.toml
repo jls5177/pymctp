@@ -31,7 +31,7 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = [
-    "pymctp>=0.3.1",
+    "pymctp>=0.4.0",
     "click>=8.0",
     "pytz",
     "tzlocal",

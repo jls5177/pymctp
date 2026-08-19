@@ -5,7 +5,7 @@ from pymctp.layers.mctp.vdpci.cerberus import (  # noqa: F401
     CerberusLogType,
     CerberusResetConfig,
     CerberusUpdateType,
-    ComponentAttestStatus,
+    # ComponentAttestStatus,
     ErrorResponsePacket,
     FwVersionCmdPacket,
     FwVersionRequestPacket,
@@ -128,4 +128,4 @@ from .msft_cerberus import (  # noqa: F401
 )
 
 # Register OEM component map for AttestData response decoding
-AttestationDataResponsePacket.component_maps.append(COMPONENT_MAP)
+# AttestationDataResponsePacket.component_maps.append(COMPONENT_MAP)

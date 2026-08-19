@@ -23,7 +23,7 @@ authors = [
 # Development dependencies
 dependencies = [
     # Core pymctp library (from PyPI)
-    "pymctp[all-exercisers]>=0.2.9",
+    "pymctp[all-exercisers]>=0.4.0",
     # Build tools
     "build>=1.0.0",
     # Testing

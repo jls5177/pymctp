@@ -61,6 +61,15 @@ class MsftVdmProtocolPacket(AllowRawSummary, Packet):
         if isinstance(p, ICanSetMySummaryClasses):
             p.set_mysummary_classes([VdPciHdrPacket, TransportHdrPacket, MsftVdmProtocolPacket])
 
+    def answers(self, other: Packet) -> int:
+        if self.cmd_set != other.cmd_set:
+            return 0
+        if self.cmd != other.cmd:
+            return 0
+        if not _is_response(self) and _is_response(other):
+            return 1
+        return 0
+
 
 bind_layers(
     VdPciHdrPacket,

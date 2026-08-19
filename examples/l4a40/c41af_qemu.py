@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Justin Simon <justin@simonctl.com>
+#
+# SPDX-License-Identifier: MIT
+
 import pathlib
 import sys
 
@@ -20,7 +24,7 @@ lion_config = {
         "supported_msg_types": [
             MsgTypes.CTRL,
         ],
-        "assigned_eid": 66,
+        "assigned_eid": 64,
     },
     "config": {
         "type": "socket",
@@ -35,47 +39,20 @@ lion_config = {
     "thread_kwargs": thread_kwargs,
 }
 
-hsp1_config = {
-    "context": {
-        "physical_address": {
-            "address": 0xB0 >> 1,
-        },
-        "supported_msg_types": [
-            MsgTypes.CTRL,
-            MsgTypes.PLDM,
-        ],
-        "assigned_eid": 34,
-    },
-    "config": {
-        "type": "socket",
-        "out_port": 5565,
-        "in_port": 5555,
-        "name": "HSP1",
-        "iface": "localhost",
-        "iface_out": "localhost",
-        "dump_packet": True,
-        "dump_hex": False,
-    },
-    "thread_kwargs": thread_kwargs,
-}
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     send_discovery_notify = (sys.argv[1] in (1, "1", True, "true", "True")) if len(sys.argv) > 1 else False
     start_threads = True
 
     set_printable_raw_layer()
 
     lion1 = EndpointManager.from_config(lion_config, start_thread=start_threads)
-    hsp1 = EndpointManager.from_config(hsp1_config, start_thread=start_threads)
-    if len(sys.argv) > 2:
-        pcap_file = pathlib.Path(sys.argv[2])
-        import_pcap_dump(pcap_file, False, hsp1.config.context)
 
     if send_discovery_notify:
         # LION uses BMC target address 0x10, all others use BMC target address 0x12
-        resp = lion1.session.sndrcv_control_msg(DiscoveryNotify(), dst_eid=0x0A,
-                                               dst_phy_addr=Smbus7bitAddress(0x20 >> 1), timeout_s=5)
+        resp = lion1.session.sndrcv_control_msg(
+            DiscoveryNotify(), dst_eid=0x0A, dst_phy_addr=Smbus7bitAddress(0x20 >> 1), timeout_s=5
+        )
         if resp:
             print(f"DiscoveryNotify response: ")
             resp.show2()

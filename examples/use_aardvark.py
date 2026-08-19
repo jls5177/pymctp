@@ -132,7 +132,7 @@ fpga0_config = {
 #         "enable_pullups": True,
 #         "slave_only": True,
 #     },
-#     "thread_kwargs": thread_kwargs,
+        #     "thread_kwargs": thread_kwargs,
 # }
 #
 # ovl1 = EndpointManager.from_config(ovl1_config, start_thread=start_threads)

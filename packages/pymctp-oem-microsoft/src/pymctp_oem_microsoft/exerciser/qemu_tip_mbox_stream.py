@@ -261,8 +261,9 @@ class QemuTipMboxStreamSocket(SuperSocket):
         if payload[0] == 0x0F:
             return False
         if len(payload) < _MIN_MBOX_PAYLOAD_LEN + 1:
-            logger.warning("%s: DATA frame too short for address-prefixed mailbox window (%d bytes)",
-                           self.id_str, len(payload))
+            logger.warning(
+                "%s: DATA frame too short for address-prefixed mailbox window (%d bytes)", self.id_str, len(payload)
+            )
             return None
         if payload[1] == 0x0F:
             return True

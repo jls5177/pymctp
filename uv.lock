@@ -1362,7 +1362,7 @@ wheels = [
 
 [[package]]
 name = "pymctp"
-version = "0.3.2"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1377,9 +1377,9 @@ dependencies = [
     { name = "tzlocal", version = "5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "tzlocal", version = "5.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/d3/57f92d13e2ed874c5bb61e9668529e4623e58ee02e1d3ecbaff31af24ccf/pymctp-0.3.2.tar.gz", hash = "sha256:5e96cdecabe526ba27b7ba1aeb3bf5e1f66fb2d5f3216045c330aef401aa3361", size = 115423, upload-time = "2026-02-17T18:33:30.488Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/01/c6a885aa97c76b910dfab04ca854cd2dc4ea189dbbc224b9b306adf9daf7/pymctp-0.4.0.tar.gz", hash = "sha256:8331ba0aa2feba54fb2cbbeb30b58d4936476f6b9b5c33e725a1272f18b2c93c", size = 129795, upload-time = "2026-08-19T19:00:46.921Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/ef/be9bfec20c8d8419fd987da93a8301a5a3084bef328fd99cf8f943b0c924/pymctp-0.3.2-py3-none-any.whl", hash = "sha256:6965183bcbd48a659b6b7fce01dc0fbd7777ed2c9e1a7ceb2e7a7b7286e1324f", size = 178490, upload-time = "2026-02-17T18:33:28.461Z" },
+    { url = "https://files.pythonhosted.org/packages/54/c9/6f1762dae8ceaaf27331a477f4a8bd484f14954bc028324f3d41b24eaaf7/pymctp-0.4.0-py3-none-any.whl", hash = "sha256:806f33758dc607a5a0148bba47591b143d6e8d686bf43889b189bc7a17e70aac", size = 201242, upload-time = "2026-08-19T19:00:45.557Z" },
 ]
 
 [package.optional-dependencies]
@@ -1391,41 +1391,41 @@ all-exercisers = [
 
 [[package]]
 name = "pymctp-exerciser-aardvark"
-version = "0.2.5"
+version = "0.2.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyaardvark" },
     { name = "pymctp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/50/7c/41328660736d7c76f9a6212a791243f21b995f6a2ec40e2053e28431e36f/pymctp_exerciser_aardvark-0.2.5.tar.gz", hash = "sha256:6262918322b1029fe56c5fae6d46d679f99d2a1d330d2bb8e7d3e2eac784c215", size = 5730, upload-time = "2025-12-08T17:42:35.557Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/80/c8806ebcd8319c80a2445e13751b7f22bd29f9e47e9cac1fd85f362d7452/pymctp_exerciser_aardvark-0.2.6.tar.gz", hash = "sha256:7e25a2da7736e5c3c0ec581738c395393fdf9e250002bc52f4dd9225070b91ad", size = 6369, upload-time = "2026-08-19T19:00:44.3Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/a6/fb085990ca9711dded8f0ba2e7c34bb410d05cfee4bf9aa4c842029f3498/pymctp_exerciser_aardvark-0.2.5-py3-none-any.whl", hash = "sha256:ad6e83e40e716dea26744d74741d72141744beef88afad39dfdd62bc41453b9a", size = 6049, upload-time = "2025-12-08T17:42:34.444Z" },
+    { url = "https://files.pythonhosted.org/packages/39/1d/7649b928aa0d2c99c204ec04cdf9329bc802661dbab8595a3888d8836150/pymctp_exerciser_aardvark-0.2.6-py3-none-any.whl", hash = "sha256:e1a520a1e39bfdc9166143e49eda71cfee8630bc8794ab255f0f7cee3de399ec", size = 7129, upload-time = "2026-08-19T19:00:43.304Z" },
 ]
 
 [[package]]
 name = "pymctp-exerciser-qemu"
-version = "0.2.5"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crc8" },
     { name = "pymctp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2d/c5/c64aad074edff8123637e651a1d4d40ade879b46c80a10e05bb96cf7ef83/pymctp_exerciser_qemu-0.2.5.tar.gz", hash = "sha256:eed6bea97bd958d1f603be5d74fcbae33c69b6bfa4f6f6d524edfc3d5dfe1e70", size = 9051, upload-time = "2025-12-08T17:42:37.835Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/4b/672b8779dfd25566ea75cf8ba50cf94fb351ed81b2fa9d5ac9183cc25aaa/pymctp_exerciser_qemu-0.3.0.tar.gz", hash = "sha256:bb88ee76d785804f115a353ec01fb6a7ed7267ab63eb054c98776d575b655640", size = 23391, upload-time = "2026-08-19T19:00:41.856Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/11/454418949dd3b6838b7478f7fe4200bc00b45abdc9ccf2853d1e7cbcacd5/pymctp_exerciser_qemu-0.2.5-py3-none-any.whl", hash = "sha256:88bf503038b837bacc03f435fdd37a7250fdad3c5baf7867a3f01cc0cb609592", size = 9926, upload-time = "2025-12-08T17:42:35.85Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/1f/dc7302232d721439b73af43ab61a39d5c4ab786dd21c3eff6d555fff1fe3/pymctp_exerciser_qemu-0.3.0-py3-none-any.whl", hash = "sha256:8932b861392ac784d26fdf2c95910684e254344f2848f96e8fe54ddc601f1ede", size = 32401, upload-time = "2026-08-19T19:00:40.569Z" },
 ]
 
 [[package]]
 name = "pymctp-exerciser-serial"
-version = "0.2.5"
+version = "0.2.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pymctp" },
     { name = "pyserial" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/27/e0/147b5df69112f73b72191141da20b892d97bc651f1d9f52d3fbbf4fe94c4/pymctp_exerciser_serial-0.2.5.tar.gz", hash = "sha256:42c04d64b97c8a4bebc00ecafc21dceb7c8d717a55f16d48ea7577b796a691b9", size = 4511, upload-time = "2025-12-08T15:47:00.504Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/32/8b45ca3bc77c485a6982b9703a4e3d21f1348c9c89a7eee69ea8d5e69925/pymctp_exerciser_serial-0.2.6.tar.gz", hash = "sha256:caf261f1c27340a69cb3c7bd7d6ae2f387255c8b2f4db8c4776a2c0f4a5eeb4d", size = 4986, upload-time = "2026-08-19T19:00:38.285Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1c/15/426633e639143582db628777f8e066451d76e16ccf502d79a763e7ca18ce/pymctp_exerciser_serial-0.2.5-py3-none-any.whl", hash = "sha256:4312055d75711722e8db85a6352fdc5ad89847da5ac78ab2e682bed928636006", size = 4799, upload-time = "2025-12-08T15:46:59.196Z" },
+    { url = "https://files.pythonhosted.org/packages/41/7b/fe76587e46d261dcd8123823eb3874970d1cb72e265115580e6bad560af0/pymctp_exerciser_serial-0.2.6-py3-none-any.whl", hash = "sha256:29ceb5888bcd3ff3946e17b1012657edcd8be1fa0247e7b8cfc71cc9b41ebd7f", size = 5562, upload-time = "2026-08-19T19:00:37.055Z" },
 ]
 
 [[package]]
@@ -1471,7 +1471,7 @@ dev = [
 requires-dist = [
     { name = "build", specifier = ">=1.0.0" },
     { name = "ipython" },
-    { name = "pymctp", extras = ["all-exercisers"], specifier = ">=0.2.9" },
+    { name = "pymctp", extras = ["all-exercisers"], specifier = ">=0.4.0" },
     { name = "pymctp-oem-microsoft", marker = "extra == 'all'", editable = "packages/pymctp-oem-microsoft" },
     { name = "pytest", specifier = ">=7.0.0" },
     { name = "pytest-cov", specifier = ">=4.0.0" },
@@ -1500,7 +1500,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
-    { name = "pymctp", specifier = ">=0.3.1" },
+    { name = "pymctp", specifier = ">=0.4.0" },
     { name = "pytz" },
     { name = "tzlocal" },
 ]
