@@ -26,6 +26,8 @@ class ConfigTypes(str, Enum):
     Socket = "socket"
     I3CSocket = "i3c-socket"
     I3CSocket2 = "i3c-socket2"
+    I3CStream = "i3c-stream"
+    I2CStream = "i2c-stream"
     Aardvark = "aardvark"
     CharDev = "chardev"
     TTY = "tty"
@@ -239,6 +241,118 @@ class UdpI3CSocket2Config(DataClassDictMixin):
         self.socket.close()
 
 
+@dataclasses.dataclass()
+class I3CStreamSocketConfig(DataClassDictMixin):
+    """TCP stream socket config for QEMU's I3C "remote target" device.
+
+    Reuses the same netdev2 message semantics (SET_REG, HOT_JOIN, CCC
+    notifications, PEC-wrapped MCTP data) as :class:`UdpI3CSocket2Config`,
+    but connects as a single TCP client (``host``/``port``) instead of two
+    UDP ports. A HELLO frame with the wire protocol version is sent on
+    connect. When ``auto_configure`` is True (the default), SET_REG frames
+    are sent to QEMU during socket initialisation for any non-zero register
+    values.
+    """
+
+    type = ConfigTypes.I3CStream
+    host: str
+    port: int
+    name: str
+    dump_hex: bool = True
+    dump_packet: bool = False
+    connect_timeout: float = 5.0
+    pid: int = 0
+    bcr: int = 0
+    dcr: int = 0
+    mwl: int = 0
+    mrl: int = 0
+    static_addr: int = 0
+    auto_configure: bool = True
+
+    socket: Any | None = field(
+        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
+    )
+
+    def __post_init__(self):
+        QemuI3CStreamSocket = _get_exerciser("qemu-i3c-stream")
+        if QemuI3CStreamSocket is None:
+            msg = "QemuI3CStreamSocket is not available. Install pymctp-exerciser-qemu."
+            raise ImportError(msg)
+        self.socket = QemuI3CStreamSocket(
+            host=self.host,
+            port=self.port,
+            id_str=self.name,
+            dump_hex=self.dump_hex,
+            dump_packet=self.dump_packet,
+            connect_timeout=self.connect_timeout,
+            pid=self.pid,
+            bcr=self.bcr,
+            dcr=self.dcr,
+            mwl=self.mwl,
+            mrl=self.mrl,
+            static_addr=self.static_addr,
+        )
+        if self.auto_configure:
+            kwargs = {}
+            if self.pid:
+                kwargs["pid"] = self.pid
+            if self.bcr:
+                kwargs["bcr"] = self.bcr
+            if self.dcr:
+                kwargs["dcr"] = self.dcr
+            if self.mwl:
+                kwargs["mwl"] = self.mwl
+            if self.mrl:
+                kwargs["mrl"] = self.mrl
+            if self.static_addr:
+                kwargs["static_addr"] = self.static_addr
+            if kwargs:
+                self.socket.configure(**kwargs)
+                self.socket.send_hot_join()
+
+    def close_socket(self):
+        self.socket.close()
+
+
+@dataclasses.dataclass()
+class I2CStreamSocketConfig(DataClassDictMixin):
+    """TCP stream socket config for QEMU's I2C "remote target" device.
+
+    Connects as a single TCP client (``host``/``port``) and uses the minimal
+    WRITE/READ_REQ/READ_RSP/ALERT/HELLO framing implemented by
+    :class:`~pymctp_exerciser_qemu.qemu_i2c_stream.QemuI2CStreamSocket`.
+    """
+
+    type = ConfigTypes.I2CStream
+    host: str
+    port: int
+    name: str
+    dump_hex: bool = True
+    dump_packet: bool = False
+    connect_timeout: float = 5.0
+
+    socket: Any | None = field(
+        default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
+    )
+
+    def __post_init__(self):
+        QemuI2CStreamSocket = _get_exerciser("qemu-i2c-stream")
+        if QemuI2CStreamSocket is None:
+            msg = "QemuI2CStreamSocket is not available. Install pymctp-exerciser-qemu."
+            raise ImportError(msg)
+        self.socket = QemuI2CStreamSocket(
+            host=self.host,
+            port=self.port,
+            id_str=self.name,
+            dump_hex=self.dump_hex,
+            dump_packet=self.dump_packet,
+            connect_timeout=self.connect_timeout,
+        )
+
+    def close_socket(self):
+        self.socket.close()
+
+
 def deserialize_aardvark_address(value: str | int | Smbus7bitAddress) -> Smbus7bitAddress:
     if isinstance(value, Smbus7bitAddress):
         return value
@@ -290,7 +404,14 @@ class AardvarkConfig(DataClassDictMixin):
 def deserialize_supersocket(
     value: dict,
 ) -> (
-    AardvarkConfig | UdpSocketConfig | UdpI3CSocketConfig | UdpI3CSocket2Config | CharDevSocketConfig | TTYSocketConfig
+    AardvarkConfig
+    | UdpSocketConfig
+    | UdpI3CSocketConfig
+    | UdpI3CSocket2Config
+    | I3CStreamSocketConfig
+    | I2CStreamSocketConfig
+    | CharDevSocketConfig
+    | TTYSocketConfig
 ):
     config_type = value.get("type")
     if config_type == ConfigTypes.Socket:
@@ -299,6 +420,10 @@ def deserialize_supersocket(
         return UdpI3CSocketConfig.from_dict(value)
     if config_type == ConfigTypes.I3CSocket2:
         return UdpI3CSocket2Config.from_dict(value)
+    if config_type == ConfigTypes.I3CStream:
+        return I3CStreamSocketConfig.from_dict(value)
+    if config_type == ConfigTypes.I2CStream:
+        return I2CStreamSocketConfig.from_dict(value)
     if config_type == ConfigTypes.Aardvark:
         return AardvarkConfig.from_dict(value)
     if config_type == ConfigTypes.CharDev:
@@ -317,6 +442,8 @@ class EndpointConfig(DataClassDictMixin):
         | UdpSocketConfig
         | UdpI3CSocketConfig
         | UdpI3CSocket2Config
+        | I3CStreamSocketConfig
+        | I2CStreamSocketConfig
         | CharDevSocketConfig
         | TTYSocketConfig
     )
@@ -330,6 +457,8 @@ class EndpointConfig(DataClassDictMixin):
             | UdpSocketConfig
             | UdpI3CSocketConfig
             | UdpI3CSocket2Config
+            | I3CStreamSocketConfig
+            | I2CStreamSocketConfig
             | CharDevSocketConfig
             | TTYSocketConfig: {"deserialize": deserialize_supersocket}
         }
