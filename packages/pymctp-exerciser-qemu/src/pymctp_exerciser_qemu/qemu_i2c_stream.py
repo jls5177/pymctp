@@ -342,14 +342,30 @@ class QemuI2CStreamSocket(SuperSocket):
         return pkt
 
     def _send_master_write(self, data: bytes) -> int:
-        """Address-prefix ``data`` with ``target_address`` and send a WRITE frame.
+        """Send a master-mode WRITE frame: ``[addr_byte][smbus payload...]``.
 
         QEMU masters the (virtual) I2C bus on our behalf, so the frame is
         transmitted immediately — there is no READ_REQ/READ_RSP turn-around
         in master mode.
+
+        ``data`` is ``raw(x)`` of a :class:`SmbusTransportPacket`. Such a packet
+        may already carry a physical destination address byte (the conditional
+        ``dst_addr`` field, present iff the first byte is not the 0x0F MCTP-over-
+        SMBus command code). When present, that byte *is* the on-wire address
+        QEMU strips and masters the bus to, and the packet's PEC was computed
+        over it — so the frame is sent unchanged, exactly like the proven
+        ``qemu_i2c_netdev`` transport. Prefixing our own ``target_address`` here
+        would emit a *second* address byte, shifting the 0x0F command code,
+        byte-count and PEC by one and causing the BMC to drop the packet.
+
+        Only when the packet has no embedded address (first byte == 0x0F) do we
+        prefix the configured BMC ``target_address`` so QEMU has an address to
+        master the bus to.
         """
-        addr_byte = (self.target_address << 1) & 0xFF
-        return self._send_raw(I2CStreamMsgType.WRITE, bytes([addr_byte]) + data)
+        if data[:1] == b"\x0f":
+            addr_byte = (self.target_address << 1) & 0xFF
+            data = bytes([addr_byte]) + data
+        return self._send_raw(I2CStreamMsgType.WRITE, data)
 
     def _send_raw(self, msg_type: int, body: bytes = b"") -> int:
         """Encode and transmit a frame to the QEMU peer over the TCP stream."""

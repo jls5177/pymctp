@@ -263,9 +263,10 @@ class TestQemuI2CStreamMasterModeConstruction:
 
 
 class TestQemuI2CStreamMasterModeSend:
-    def test_send_prefixes_target_address_and_transmits_immediately(self, fake_qemu):
-        """Master-mode send() should WRITE ``[addr_byte][data...]`` right away,
-        with no READ_REQ turn-around required."""
+    def test_send_transmits_addressed_packet_unchanged(self, fake_qemu):
+        """Master-mode send() should WRITE the SMBus packet immediately, with a
+        single leading address byte (the packet's own SMBus dst_addr, over which
+        its PEC is computed) — never a duplicate target_address prefix."""
         sock = QemuI2CStreamSocket(
             host=fake_qemu.host,
             port=fake_qemu.port,
@@ -284,7 +285,9 @@ class TestQemuI2CStreamMasterModeSend:
                 )
                 / b"\xde\xad\xbe\xef"
             )
-            wire_pkt = SmbusTransport(dst_addr=0x08, src_addr=0x10, load=mctp_pkt)
+            # dst_addr is the on-wire SMBus destination byte (BMC 7-bit 0x12 << 1);
+            # its PEC is computed over that byte, so the frame must be sent as-is.
+            wire_pkt = SmbusTransport(dst_addr=(0x12 << 1), src_addr=0x10, load=mctp_pkt)
             wire_bytes = bytes(wire_pkt)
 
             n = sock.send(wire_pkt)
@@ -293,7 +296,42 @@ class TestQemuI2CStreamMasterModeSend:
             # No READ_REQ needed: the WRITE frame is on the wire immediately.
             msg_type, body = fake_qemu.recv_frame()
             assert msg_type == I2CStreamMsgType.WRITE
-            assert body[0] == (0x12 << 1)  # target_address<<1 | 0 (write)
+            assert body[0] == (0x12 << 1)  # single SMBus address byte, not duplicated
+            assert body == wire_bytes      # transmitted unchanged (PEC stays valid)
+        finally:
+            sock.close()
+
+    def test_send_prefixes_target_address_when_packet_unaddressed(self, fake_qemu):
+        """When the packet carries no embedded SMBus address (first byte is the
+        0x0F command code), send() prefixes the configured target_address so QEMU
+        has an address to master the bus to."""
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host,
+            port=fake_qemu.port,
+            id_str="test-i2c",
+            dump_hex=False,
+            master=True,
+            target_address=0x12,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+
+            mctp_pkt = (
+                TransportHdrPacket(
+                    dst=0x08, src=0x10, som=1, eom=1, pkt_seq=0, to=0, tag=2, ic=0, msg_type=MsgTypes.CTRL.value
+                )
+                / b"\xde\xad\xbe\xef"
+            )
+            wire_pkt = SmbusTransport(src_addr=0x10, load=mctp_pkt)  # dst_addr unset
+            wire_bytes = bytes(wire_pkt)
+            assert wire_bytes[0] == 0x0F  # no embedded address byte
+
+            sock.send(wire_pkt)
+
+            msg_type, body = fake_qemu.recv_frame()
+            assert msg_type == I2CStreamMsgType.WRITE
+            assert body[0] == (0x12 << 1)  # target_address prefixed
             assert body[1:] == wire_bytes
         finally:
             sock.close()
