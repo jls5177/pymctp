@@ -11,6 +11,7 @@ actually invoked.
 
 import sys
 from importlib import import_module
+from typing import Any
 
 import click
 
@@ -72,6 +73,9 @@ class _LazyCommand(click.BaseCommand):
         **extra,
     ) -> click.Context:
         return self._load().make_context(info_name, args, parent=parent, **extra)
+
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[Any]:
+        return self._load().shell_complete(ctx, incomplete)
 
 
 class _LazyGroup(click.Group):
@@ -153,6 +157,13 @@ cli.add_command(
         "compliance",
         "pymctp.cli.compliance:compliance",
         short_help="Run MCTP compliance tests against a live endpoint.",
+    )
+)
+cli.add_command(
+    _LazyCommand(
+        "machine",
+        "pymctp.cli.machine:machine",
+        short_help="Inspect, validate, and run machine topologies.",
     )
 )
 
