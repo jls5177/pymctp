@@ -276,6 +276,14 @@ class QemuI3CStreamSocket(SuperSocket):
         if not need_poll:
             return ready
 
+        # A closed socket's fileno() is -1, which select() rejects with
+        # ValueError rather than OSError. That happens routinely during
+        # shutdown, when the socket is closed while the sniffer is still
+        # polling, so drop closed sockets instead of tearing down the loop.
+        need_poll = [sock for sock in need_poll if sock.ins is not None and sock.ins.fileno() >= 0]
+        if not need_poll:
+            return ready
+
         socket_fds = [sock.ins for sock in need_poll]
         poll_periods = [x._poll_period_ms for x in need_poll]
         timeout_ms = min(poll_periods + [(remain or 1) * 1000])
@@ -283,7 +291,7 @@ class QemuI3CStreamSocket(SuperSocket):
 
         try:
             ready_fds, _, _ = select.select(socket_fds, [], [], timeout_s)
-        except select.error:
+        except (select.error, ValueError):
             return ready
 
         ready.extend(sock for sock in need_poll if sock.ins in ready_fds)
