@@ -4,7 +4,15 @@
 
 from .simple_endpoint import SimpleEndpointAM
 from .role_endpoint import RoleBasedEndpointAM
-from .roles import create_endpoint, register_role, list_roles, get_behaviors_for_roles
+from .roles import (
+    RoleSpec,
+    as_role_spec,
+    create_endpoint,
+    get_behaviors_for_roles,
+    list_roles,
+    normalize_roles,
+    register_role,
+)
 
 from .sessions import (
     EndpointSession,

@@ -15,7 +15,7 @@ from scapy.supersocket import SuperSocket
 
 from pymctp.automaton import EndpointSession, SimpleEndpointAM
 from pymctp.automaton.role_endpoint import RoleBasedEndpointAM
-from pymctp.automaton.roles import create_endpoint
+from pymctp.automaton.roles import RoleSpec, create_endpoint, normalize_roles
 from pymctp.layers.mctp import EndpointContext
 
 
@@ -118,7 +118,9 @@ class EndpointConfig(DataClassDictMixin):
     config: SupersocketConfig
     thread_kwargs: dict[str, Any] = field(default_factory=dict)
     downstream_endpoints: dict[int, EndpointContext] = field(default_factory=dict)
-    role: str | None = None
+    role: str | list[str] | None = None
+    role_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    name: str | None = None
 
     class Config(BaseConfig):
         serialization_strategy = {
@@ -127,6 +129,11 @@ class EndpointConfig(DataClassDictMixin):
                 "deserialize": deserialize_supersocket,
             }
         }
+
+    @property
+    def roles(self) -> list[RoleSpec]:
+        """The endpoint's roles, normalised and merged with ``role_options``."""
+        return normalize_roles(self.role, self.role_options)
 
 
 @dataclasses.dataclass()
@@ -145,7 +152,6 @@ class EndpointManager:
         import pymctp.exerciser  # noqa: F401
 
         cfg = EndpointConfig.from_dict(config)
-        print(f"DEBUG: {cfg or 'None'}")
         socket = cfg.config.socket
         session = EndpointSession(context=cfg.context, socket=socket)
 
@@ -158,14 +164,12 @@ class EndpointManager:
             downstream_endpoints=cfg.downstream_endpoints,
         )
 
-        if cfg.role:
-            am = create_endpoint(cfg.role, **common_kwargs)
+        roles = cfg.roles
+        if roles:
+            am = create_endpoint(*roles, **common_kwargs)
         else:
             am = SimpleEndpointAM(**common_kwargs)
-        if cfg.context.is_bus_owner:
-            # TODO: add discovery flow answering machine here
-            pass
-        thread = threading.Thread(target=am, kwargs=cfg.thread_kwargs)
+        thread = threading.Thread(target=am, kwargs=cfg.thread_kwargs, name=f"mctp-{cfg.name or 'endpoint'}")
         if start_thread:
             thread.start()
         return EndpointManager(
@@ -177,6 +181,11 @@ class EndpointManager:
         )
 
     @property
+    def name(self) -> str:
+        """Human-readable endpoint name (falls back to the socket's id string)."""
+        return self.config.name or getattr(self.socket, "id_str", None) or "endpoint"
+
+    @property
     def context(self) -> EndpointContext:
         return self.config.context
 
@@ -184,6 +193,9 @@ class EndpointManager:
     def supersocket(self) -> SuperSocket:
         return self.config.config.socket
 
-    def stop_sniffer(self):
-        if self.am.sniffer.running:
-            self.am.stop()
+    def stop_sniffer(self, join: bool = False):
+        # Delegate unconditionally: SimpleEndpointAM.stop_sniffer latches the
+        # request so it still takes effect when the endpoint thread has not
+        # reached its sniff loop yet. Guarding on ``sniffer.running`` here would
+        # silently drop the stop and leave the thread sniffing forever.
+        self.am.stop_sniffer(join=join)

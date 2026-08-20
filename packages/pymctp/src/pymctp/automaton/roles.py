@@ -16,13 +16,24 @@ Extension packages can register additional roles via the
 
 The entry point must reference a callable that returns a
 ``dict[str, list[Behavior]]`` mapping role name → behavior instances.
+
+Roles may be *parameterized*.  A role factory that declares keyword
+arguments can be requested with options::
+
+    create_endpoint(RoleSpec("spdm-responder", {"version": 0x12}), context=ctx)
+    create_endpoint(("spdm-responder", {"version": 0x12}), context=ctx)
+
+Zero-argument factories and bare role-name strings keep working unchanged.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
 import logging
 import sys
-from typing import Callable
+from collections.abc import Mapping
+from typing import Any, Callable, Union
 
 from scapy.supersocket import SuperSocket
 
@@ -41,15 +52,36 @@ logger = logging.getLogger(__name__)
 ENTRY_POINT_GROUP = "pymctp.roles"
 
 # Global role registry: role name → factory that returns list[Behavior]
-_role_registry: dict[str, Callable[[], list[Behavior]]] = {}
+_role_registry: dict[str, Callable[..., list[Behavior]]] = {}
 
 
-def register_role(name: str, factory: Callable[[], list[Behavior]]) -> None:
+@dataclasses.dataclass(frozen=True)
+class RoleSpec:
+    """A role name plus the options to pass to its behavior factory."""
+
+    name: str
+    options: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.options is None:  # tolerate explicit None
+            object.__setattr__(self, "options", {})
+
+    def __str__(self) -> str:  # pragma: no cover - cosmetic
+        return f"{self.name}({dict(self.options)})" if self.options else self.name
+
+
+#: Anything accepted where a role is expected.
+AnyRole = Union[str, RoleSpec, tuple]
+
+
+def register_role(name: str, factory: Callable[..., list[Behavior]]) -> None:
     """Register a named role.
 
     Args:
         name: Role name (e.g. ``"bridge"``).
-        factory: Callable that returns a list of Behavior instances.
+        factory: Callable that returns a list of Behavior instances. It may
+            take no arguments, or accept keyword arguments which are supplied
+            through :class:`RoleSpec` options.
     """
     _role_registry[name] = factory
 
@@ -60,7 +92,68 @@ def list_roles() -> list[str]:
     return sorted(_role_registry.keys())
 
 
-def get_behaviors_for_roles(*role_names: str) -> list[Behavior]:
+def as_role_spec(role: AnyRole) -> RoleSpec:
+    """Coerce a role name / ``(name, options)`` tuple / RoleSpec into a RoleSpec."""
+    if isinstance(role, RoleSpec):
+        return role
+    if isinstance(role, str):
+        return RoleSpec(role)
+    if isinstance(role, tuple):
+        if len(role) == 1:
+            return RoleSpec(str(role[0]))
+        if len(role) == 2:
+            name, options = role
+            return RoleSpec(str(name), dict(options or {}))
+    msg = f"Cannot interpret {role!r} as a role (expected str, RoleSpec or (name, options) tuple)"
+    raise TypeError(msg)
+
+
+def normalize_roles(
+    roles: AnyRole | list[AnyRole] | None,
+    role_options: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[RoleSpec]:
+    """Normalise a role declaration into a list of :class:`RoleSpec`.
+
+    Accepts ``None``, a single role, or a list of roles.  *role_options* maps a
+    role name to extra options and is merged in — this is what lets serialized
+    configs express parameterized roles as plain JSON::
+
+        {"role": ["spdm-responder"], "role_options": {"spdm-responder": {...}}}
+    """
+    if roles is None:
+        items: list[AnyRole] = []
+    elif isinstance(roles, (str, RoleSpec, tuple)):
+        items = [roles]
+    else:
+        items = list(roles)
+
+    specs: list[RoleSpec] = []
+    for item in items:
+        spec = as_role_spec(item)
+        extra = (role_options or {}).get(spec.name)
+        if extra:
+            merged = dict(extra)
+            merged.update(spec.options)
+            spec = RoleSpec(spec.name, merged)
+        specs.append(spec)
+    return specs
+
+
+def _invoke_factory(spec: RoleSpec, factory: Callable[..., list[Behavior]]) -> list[Behavior]:
+    options = dict(spec.options)
+    if not options:
+        return factory()
+    try:
+        inspect.signature(factory).bind(**options)
+    except TypeError as exc:
+        msg = f"Role {spec.name!r} does not accept options {sorted(options)}: {exc}"
+        raise TypeError(msg) from exc
+    except ValueError:  # builtins without an introspectable signature
+        pass
+    return factory(**options)
+
+
+def get_behaviors_for_roles(*roles: AnyRole) -> list[Behavior]:
     """Return the merged behavior list for one or more roles.
 
     Behaviors are deduplicated by name — if two roles contribute a
@@ -69,12 +162,13 @@ def get_behaviors_for_roles(*role_names: str) -> list[Behavior]:
     _ensure_plugins_loaded()
     seen_names: set[str] = set()
     behaviors: list[Behavior] = []
-    for role_name in role_names:
-        factory = _role_registry.get(role_name)
+    for role in roles:
+        spec = as_role_spec(role)
+        factory = _role_registry.get(spec.name)
         if factory is None:
-            msg = f"Unknown role: {role_name!r}. Available: {list_roles()}"
+            msg = f"Unknown role: {spec.name!r}. Available: {list_roles()}"
             raise ValueError(msg)
-        for b in factory():
+        for b in _invoke_factory(spec, factory):
             if b.name not in seen_names:
                 seen_names.add(b.name)
                 behaviors.append(b)
@@ -82,7 +176,7 @@ def get_behaviors_for_roles(*role_names: str) -> list[Behavior]:
 
 
 def create_endpoint(
-    *role_names: str,
+    *roles: AnyRole,
     session: EndpointSession | None = None,
     socket: SuperSocket | None = None,
     context: EndpointContext | None = None,
@@ -97,7 +191,7 @@ def create_endpoint(
     behavior lists of both roles.  Additional one-off behaviors can be
     appended via *extra_behaviors*.
     """
-    behaviors = get_behaviors_for_roles(*role_names)
+    behaviors = get_behaviors_for_roles(*roles)
     if extra_behaviors:
         seen = {b.name for b in behaviors}
         for b in extra_behaviors:
@@ -130,8 +224,53 @@ def _bridge_behaviors() -> list[Behavior]:
     return [BridgeBehavior()]
 
 
+def _bus_owner_behaviors(**options: Any) -> list[Behavior]:
+    from .behaviors.bus_owner import BusOwnerBehavior
+
+    return [BusOwnerBehavior(**options)]
+
+
+def _spdm_responder_behaviors(**options: Any) -> list[Behavior]:
+    from .behaviors.spdm_responder import SpdmResponderBehavior
+
+    return [SpdmResponderBehavior(**options)]
+
+
+def _spdm_requester_behaviors(**options: Any) -> list[Behavior]:
+    from .behaviors.spdm_requester import SpdmRequesterBehavior
+
+    return [SpdmRequesterBehavior(**options)]
+
+
+def _pldm_base_behaviors(**options: Any) -> list[Behavior]:
+    from .behaviors.pldm_responder import PldmBaseBehavior
+
+    return [PldmBaseBehavior(**options)]
+
+
+def _pldm_sensor_behaviors(**options: Any) -> list[Behavior]:
+    from .behaviors.pldm_responder import PldmBaseBehavior, PldmSensorBehavior
+
+    # A sensor endpoint must also answer PLDM Type 0 discovery (GetPLDMTypes /
+    # GetPLDMCommands) or a requester never learns Type 2 is supported.
+    base_options = options.pop("base", None) or {}
+    return [PldmBaseBehavior(**base_options), PldmSensorBehavior(**options)]
+
+
+def _cerberus_rot_behaviors(**options: Any) -> list[Behavior]:
+    from .behaviors.cerberus_responder import CerberusChallengeBehavior
+
+    return [CerberusChallengeBehavior(**options)]
+
+
 register_role("simple", _simple_behaviors)
 register_role("bridge", _bridge_behaviors)
+register_role("bus-owner", _bus_owner_behaviors)
+register_role("spdm-responder", _spdm_responder_behaviors)
+register_role("spdm-requester", _spdm_requester_behaviors)
+register_role("pldm-base", _pldm_base_behaviors)
+register_role("pldm-sensor", _pldm_sensor_behaviors)
+register_role("cerberus-rot", _cerberus_rot_behaviors)
 
 
 # ---------------------------------------------------------------------------
