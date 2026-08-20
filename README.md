@@ -97,6 +97,31 @@ print(decoded.summary())
 - **Hardware Interfaces**: Support for physical and virtual devices
 - **Scapy Integration**: Built on Scapy for powerful packet manipulation
 
+### Machine Topologies
+
+Describe and run multi-endpoint systems with `MachineBuilder` and `Machine`:
+
+```python
+from pymctp.topology import Machine, MachineBuilder
+
+spec = (
+    MachineBuilder("lab")
+    .defaults(host="127.0.0.1", timeout=60)
+    .eids({"owner": 0x08, "ep": 0x0F})
+    .device("owner", transport={"type": "i2c-stream", "port": 5570}, physical_address=0x20, roles=["bus-owner"])
+    .device("ep", transport={"type": "i2c-stream", "port": 5571}, physical_address=0x21, roles=["simple"])
+    .build()
+)
+with Machine(spec) as machine:
+    print(machine.summary())
+```
+
+```bash
+pymctp machine list
+pymctp machine show lab.yaml --json
+pymctp machine run lab.yaml --rediscover --timeout 30
+```
+
 ## Documentation
 
 - **[Core Library Documentation](packages/pymctp/README.md)** - Full API and usage guide
