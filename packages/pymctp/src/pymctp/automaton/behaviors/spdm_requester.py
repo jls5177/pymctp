@@ -100,6 +100,7 @@ class AttestationReport:
     certificate_chain: bytes | None = None
     resolved_eid: int | None = None
     skipped: bool = False
+    target_name: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -117,6 +118,11 @@ class AttestationReport:
             f"{f' - {step.detail}' if step.detail else ''}"
             for step in self.steps
         )
+
+
+#: Called with each completed AttestationReport. Never raises into the requester.
+#: Listeners run on the thread that produced the report and must be thread-safe.
+AttestationListener = Callable[[AttestationReport], None]
 
 
 @dataclass
@@ -196,6 +202,7 @@ class SpdmRequesterBehavior(Behavior):
         self._ctx: EndpointContext | None = None
         self._reports: dict[str, AttestationReport] = {}
         self._last_reports: list[AttestationReport] = []
+        self._report_listeners: list[AttestationListener] = []
         self._shutdown_event = threading.Event()
         self._request_event = threading.Event()
         self._condition = threading.Condition()
@@ -215,6 +222,30 @@ class SpdmRequesterBehavior(Behavior):
     def reports(self) -> dict[str, AttestationReport]:
         """Most recent attestation reports keyed by target name."""
         return dict(self._reports)
+
+    def add_report_listener(self, listener: AttestationListener) -> None:
+        """Register a completed-report listener.
+
+        Listeners are invoked synchronously on whichever thread produced the report,
+        so scheduler callbacks run on the scheduler worker and listeners must be
+        thread-safe.
+        """
+        with self._condition:
+            self._report_listeners.append(listener)
+
+    def remove_report_listener(self, listener: AttestationListener) -> None:
+        """Remove a completed-report listener if it is registered."""
+        with self._condition:
+            try:
+                self._report_listeners.remove(listener)
+            except ValueError:
+                pass
+
+    @property
+    def report_listeners(self) -> list[AttestationListener]:
+        """Registered completed-report listeners in invocation order."""
+        with self._condition:
+            return list(self._report_listeners)
 
     def add_target(self, target: SpdmAttestationTarget | dict) -> None:
         """Add an SPDM attestation target."""
@@ -297,7 +328,8 @@ class SpdmRequesterBehavior(Behavior):
                 return self._reports.get(resolved.name) or AttestationReport(steps=[], started_at=time.time())
             report = self._run_target_attestation(resolved, timeout_s=timeout_s)
             with self._condition:
-                self._record_reports_locked([report], [resolved])
+                reports, listeners = self._record_reports_locked([report], [resolved])
+            self._notify_report_listeners(reports, listeners)
             return report
 
         with self._condition:
@@ -317,7 +349,8 @@ class SpdmRequesterBehavior(Behavior):
         if not worker or not worker.is_alive():
             reports = self._run_all_attestations(timeout_s=timeout_s)
             with self._condition:
-                self._record_reports_locked(reports, list(self._targets))
+                reports_to_notify, listeners = self._record_reports_locked(reports, list(self._targets))
+            self._notify_report_listeners(reports_to_notify, listeners)
             return reports
 
         with self._condition:
@@ -390,7 +423,8 @@ class SpdmRequesterBehavior(Behavior):
             targets = list(self._targets) if all_targets else ([target] if target is not None else due_targets)
             reports = self._run_targets_safely(targets, timeout_s=timeout_s)
             with self._condition:
-                self._record_reports_locked(reports, targets)
+                reports_to_notify, listeners = self._record_reports_locked(reports, targets)
+            self._notify_report_listeners(reports_to_notify, listeners)
 
     def _due_targets_locked(self) -> list[SpdmAttestationTarget]:
         now = self._time_source()
@@ -418,6 +452,7 @@ class SpdmRequesterBehavior(Behavior):
                 logger.exception("SPDM attestation failed for target %s", target.name)
                 reports.append(
                     AttestationReport(
+                        target_name=target.name,
                         steps=[AttestationStep("target-attestation", target.name, False, str(exc))],
                         started_at=time.time(),
                         finished_at=time.time(),
@@ -429,13 +464,28 @@ class SpdmRequesterBehavior(Behavior):
         self,
         reports: list[AttestationReport],
         targets: list[SpdmAttestationTarget],
-    ) -> None:
+    ) -> tuple[list[AttestationReport], list[AttestationListener]]:
         for target, report in zip(targets, reports):
             self._reports[target.name] = report
             self._schedule[target.name] = self._time_source() + self._retry_interval_s(target, report)
         self._last_reports = reports
         self._sweep_generation += 1
         self._condition.notify_all()
+        return list(reports), list(self._report_listeners)
+
+    def _notify_report_listeners(
+        self,
+        reports: list[AttestationReport],
+        listeners: list[AttestationListener],
+    ) -> None:
+        if not listeners:
+            return
+        for report in reports:
+            for listener in listeners:
+                try:
+                    listener(report)
+                except Exception:
+                    logger.exception("SPDM attestation report listener failed for target %s", report.target_name)
 
     def _retry_interval_s(self, target: SpdmAttestationTarget, report: AttestationReport) -> float:
         if self._is_discovery_failure(report):
@@ -470,7 +520,7 @@ class SpdmRequesterBehavior(Behavior):
         *,
         timeout_s: float | None = None,
     ) -> AttestationReport:
-        report = AttestationReport(started_at=time.time())
+        report = AttestationReport(target_name=target.name, started_at=time.time())
         timeout = self.timeout_s if timeout_s is None else timeout_s
 
         try:

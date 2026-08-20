@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -14,6 +16,7 @@ import pytest
 from scapy.packet import Packet
 
 from pymctp.automaton.behaviors.spdm_requester import (
+    AttestationReport,
     SpdmAttestationTarget,
     SpdmRequesterBehavior,
     SpdmRequesterProfile,
@@ -410,6 +413,159 @@ def test_auto_attest_with_zero_initial_delay_runs_one_cycle() -> None:
     try:
         assert _wait_until(lambda: bool(session.spdm_sent))
         assert SpdmRequestCode.GET_VERSION in _spdm_codes(session)
+    finally:
+        behavior.on_stop(am, ctx)
+
+
+def test_report_listener_receives_attest_report_with_target_and_ok() -> None:
+    behavior = SpdmRequesterBehavior(targets=[{"name": "rot", "eid": 0x1D, "full_attestation": False}])
+    _behavior_with_fake_am(behavior, _scripted_responder())
+    seen: list[AttestationReport] = []
+
+    def listener(report: AttestationReport) -> None:
+        assert report.finished_at is not None
+        assert behavior.reports[report.target_name or ""] is report
+        seen.append(report)
+
+    behavior.add_report_listener(listener)
+
+    report = behavior.attest()
+
+    assert seen == [report]
+    assert seen[0].target_name == "rot"
+    assert seen[0].ok is True
+
+
+def test_report_listeners_receive_attest_all_reports_in_target_order() -> None:
+    behavior = SpdmRequesterBehavior(
+        targets=[
+            {"name": "first", "eid": 0x1D, "full_attestation": False},
+            {"name": "second", "eid": 0x40, "full_attestation": False},
+        ]
+    )
+    _behavior_with_fake_am(behavior, _scripted_responder())
+    seen: list[str | None] = []
+    behavior.add_report_listener(lambda report: seen.append(report.target_name))
+
+    reports = behavior.attest_all()
+
+    assert [report.target_name for report in reports] == ["first", "second"]
+    assert seen == ["first", "second"]
+
+
+def test_report_listener_receives_skipped_target() -> None:
+    behavior = SpdmRequesterBehavior(
+        targets=[{"name": "absent", "vendor_id": 0x8086}],
+        eid_resolver=lambda target: 0,
+    )
+    _behavior_with_fake_am(behavior, _scripted_responder())
+    seen: list[AttestationReport] = []
+    behavior.add_report_listener(seen.append)
+
+    report = behavior.attest()
+
+    assert seen == [report]
+    assert seen[0].target_name == "absent"
+    assert seen[0].skipped is True
+
+
+def test_report_listener_receives_failing_target() -> None:
+    behavior = SpdmRequesterBehavior(targets=[{"name": "bad", "eid": 0x1D, "full_attestation": False}], retries=0)
+    _behavior_with_fake_am(
+        behavior,
+        lambda pkt, dst_eid, msg_type: _msg_type_response([int(MsgTypes.CTRL), int(MsgTypes.SPDM)])
+        if msg_type is None
+        else None,
+    )
+    seen: list[AttestationReport] = []
+    behavior.add_report_listener(seen.append)
+
+    report = behavior.attest()
+
+    assert report.ok is False
+    assert seen == [report]
+    assert seen[0].target_name == "bad"
+    assert seen[0].ok is False
+
+
+def test_raising_report_listener_is_logged_and_swallowed(caplog: pytest.LogCaptureFixture) -> None:
+    behavior = SpdmRequesterBehavior(targets=[{"name": "rot", "eid": 0x1D, "full_attestation": False}])
+    _behavior_with_fake_am(behavior, _scripted_responder())
+    calls: list[tuple[str, AttestationReport]] = []
+
+    def raising_listener(report: AttestationReport) -> None:
+        calls.append(("raising", report))
+        raise RuntimeError("listener boom")
+
+    def second_listener(report: AttestationReport) -> None:
+        calls.append(("second", report))
+
+    behavior.add_report_listener(raising_listener)
+    behavior.add_report_listener(second_listener)
+
+    with caplog.at_level(logging.ERROR, logger="pymctp.automaton.behaviors.spdm_requester"):
+        report = behavior.attest()
+
+    assert report.ok is True
+    assert calls == [("raising", report), ("second", report)]
+    assert "SPDM attestation report listener failed for target rot" in caplog.text
+
+
+def test_remove_report_listener_stops_notifications_and_ignores_missing_listener() -> None:
+    behavior = SpdmRequesterBehavior(targets=[{"name": "rot", "eid": 0x1D, "full_attestation": False}])
+    _behavior_with_fake_am(behavior, _scripted_responder())
+    seen: list[AttestationReport] = []
+
+    def listener(report: AttestationReport) -> None:
+        seen.append(report)
+
+    def never_added(report: AttestationReport) -> None:
+        seen.append(report)
+
+    behavior.add_report_listener(listener)
+    first = behavior.attest()
+    behavior.remove_report_listener(listener)
+    behavior.remove_report_listener(never_added)
+
+    behavior.attest()
+
+    assert seen == [first]
+    assert behavior.report_listeners == []
+
+
+def test_multiple_report_listeners_fire_in_registration_order() -> None:
+    behavior = SpdmRequesterBehavior(targets=[{"name": "rot", "eid": 0x1D, "full_attestation": False}])
+    _behavior_with_fake_am(behavior, _scripted_responder())
+    calls: list[str] = []
+    behavior.add_report_listener(lambda report: calls.append("first"))
+    behavior.add_report_listener(lambda report: calls.append("second"))
+
+    behavior.attest()
+
+    assert calls == ["first", "second"]
+
+
+def test_scheduler_report_listener_receives_auto_attestation_report() -> None:
+    behavior = SpdmRequesterBehavior(
+        targets=[{"name": "rot", "eid": 0x1D, "full_attestation": False}],
+        auto_attest=True,
+        initial_delay_s=0,
+        success_retry_s=1000,
+    )
+    seen: list[tuple[str | None, bool, str]] = []
+    notified = threading.Event()
+
+    def listener(report: AttestationReport) -> None:
+        seen.append((report.target_name, report.ok, threading.current_thread().name))
+        notified.set()
+
+    behavior.add_report_listener(listener)
+    _, am, ctx = _behavior_with_fake_am(behavior, _scripted_responder())
+
+    behavior.on_start(am, ctx)
+    try:
+        assert notified.wait(timeout=0.5)
+        assert seen == [("rot", True, f"mctp-spdm-requester-{ctx.eid}")]
     finally:
         behavior.on_stop(am, ctx)
 
