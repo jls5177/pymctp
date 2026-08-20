@@ -2,12 +2,15 @@
 #
 # SPDX-License-Identifier: MIT
 
+import logging
 import random
+import threading
 import time
 from collections.abc import Callable
 from typing import cast
 
 from scapy.ansmachine import AnsweringMachine
+from scapy.error import Scapy_Exception
 from scapy.packet import Packet
 from scapy.plist import PacketList, _PacketIterable  # imported for type hinting on overloaded methods
 from scapy.sendrecv import AsyncSniffer
@@ -18,6 +21,15 @@ from ..layers.interfaces import AnyPacketType
 from ..layers.mctp.control import ControlHdrPacket
 from ..layers.mctp.types import EndpointContext, ICanReply
 from .sessions import EndpointSession
+
+logger = logging.getLogger(__name__)
+
+#: Backoff between attempts to re-assert a sniffer stop (see stop_sniffer).
+_STOP_RETRY_INTERVAL_S = 0.005
+
+#: How long stop_sniffer waits for a sniffer that has not started yet before
+#: concluding it never will.
+_STOP_STARTUP_GRACE_S = 0.25
 
 
 class SimpleEndpointAM(AnsweringMachine):
@@ -82,6 +94,9 @@ class SimpleEndpointAM(AnsweringMachine):
         self.downstream_endpoints = downstream_endpoints or {}
 
         self.sniffer: AsyncSniffer | None = None
+        self._sniff_ready = threading.Event()
+        self._sniff_started = threading.Event()
+        self._stop_requested = threading.Event()
         super().__init__(timeout=timeout, **kwargs)
 
     def sniff(self) -> PacketList | None:
@@ -89,8 +104,56 @@ class SimpleEndpointAM(AnsweringMachine):
         Overloaded the AnsweringMachine.sniff() method to always capture the sniffer in an instance attribute
         """
         self.sniffer = AsyncSniffer()
-        self.sniffer._run(**self.optsniff)  # noqa: SLF001
+        self._sniff_ready.clear()
+        self._sniff_started.clear()
+        if self._stop_requested.is_set():
+            # stop_sniffer() beat this thread to the punch; never start.
+            return None
+        opts = dict(self.optsniff)
+        opts.setdefault("started_callback", self._sniff_started_callback)
+        try:
+            self.sniffer._run(**opts)  # noqa: SLF001
+        finally:
+            self._sniff_ready.clear()
+            self._sniff_started.clear()
+            self._on_sniff_stopped()
         return cast(PacketList, self.sniffer.results)
+
+    def _sniff_started_callback(self) -> None:
+        """Sniffer startup callback: records readiness, then runs the subclass hook.
+
+        Two distinct signals are published because they answer different
+        questions:
+
+        ``_sniff_ready``
+            scapy has installed its ``stop_cb``; :meth:`stop_sniffer` may now
+            call ``stop()`` without it raising.
+        ``_sniff_started``
+            the behaviors' ``on_start`` hooks have run, so the endpoint is
+            fully up.  This is what :meth:`wait_until_started` reports, so a
+            caller that starts an endpoint and immediately sends a request is
+            not racing its own initiator behaviors.
+
+        This deliberately does *not* stop the sniffer when a stop is already
+        pending: scapy re-arms ``continue_sniff = True`` immediately after
+        invoking this callback, so a stop issued here would be undone.
+        :meth:`stop_sniffer` re-asserts the stop instead.
+        """
+        self._sniff_ready.set()
+        if self._stop_requested.is_set():
+            # Shutting down before we ever really started: skip the behaviors'
+            # on_start so they are not brought up just to be torn down.
+            return
+        try:
+            self._on_sniff_started()
+        finally:
+            self._sniff_started.set()
+
+    def _on_sniff_started(self) -> None:
+        """Hook invoked once the sniffer is live and the socket can be used."""
+
+    def _on_sniff_stopped(self) -> None:
+        """Hook invoked after the sniff loop exits (normally or via exception)."""
 
     def parse_options(
         self,
@@ -172,9 +235,57 @@ class SimpleEndpointAM(AnsweringMachine):
 
     @property
     def sniffer_running(self):
-        return self.sniffer.running
+        return self.sniffer is not None and self.sniffer.running
 
-    def stop_sniffer(self, join: bool = False) -> PacketList | None:
-        if self.sniffer_running:
-            return self.sniffer.stop(join=join)
-        return None
+    def wait_until_started(self, timeout: float = 5.0) -> bool:
+        """Block until the sniffer is live (or *timeout* elapses)."""
+        return self._sniff_started.wait(timeout)
+
+    def stop_sniffer(self, join: bool = False, timeout: float = 5.0) -> PacketList | None:
+        """Stop the sniff loop, tolerating a sniffer that has not started yet.
+
+        Shutdown races endpoint startup in several ways, all handled here:
+
+        * The endpoint thread has not reached the sniff loop — the request is
+          latched in ``_stop_requested`` and :meth:`sniff` returns without ever
+          starting.
+        * ``AsyncSniffer`` sets ``running`` at the top of ``_run`` but installs
+          the ``stop_cb`` that ``stop()`` needs a few statements later, so an
+          early ``stop()`` raises ``Scapy_Exception``.
+        * scapy assigns ``continue_sniff = True`` *after* invoking
+          ``started_callback``, so a stop landing in that window is silently
+          undone.
+
+        The last two are why this re-asserts the stop until it actually sticks
+        rather than calling ``stop()`` once.  Without it an endpoint torn down
+        immediately after being started keeps sniffing until its own timeout.
+        """
+        self._stop_requested.set()
+        if self.sniffer is None:
+            # sniff() has not run: the latched request stops it before it starts.
+            return None
+
+        deadline = time.monotonic() + max(timeout, 0.0)
+        grace_deadline = time.monotonic() + _STOP_STARTUP_GRACE_S
+        result: PacketList | None = None
+        observed_running = False
+
+        while True:
+            sniffer = self.sniffer
+            if sniffer is not None and sniffer.running:
+                observed_running = True
+                self._sniff_ready.wait(max(deadline - time.monotonic(), 0.0))
+                try:
+                    result = sniffer.stop(join=join)
+                except Scapy_Exception:
+                    # stop_cb is not installed yet; retry.
+                    pass
+            elif observed_running or time.monotonic() >= grace_deadline:
+                # The loop has genuinely exited, or was never going to start.
+                return result
+
+            now = time.monotonic()
+            if now >= deadline:
+                logger.warning("Sniffer kept running %.1fs after stop() was requested", timeout)
+                return result
+            time.sleep(_STOP_RETRY_INTERVAL_S)
