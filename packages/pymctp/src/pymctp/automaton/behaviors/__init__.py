@@ -6,6 +6,8 @@ from .base import Behavior
 from .bridge import BridgeBehavior
 from .bus_owner import BusOwnerBehavior, DiscoveryReport, DiscoveryStep, DiscoveryTarget
 from .cerberus_responder import (
+    AttestationLogBuilder,
+    AttestationLogEntry,
     CerberusChallengeBehavior,
     CerberusDeviceId,
     CerberusResponderProfile,
@@ -36,6 +38,8 @@ from .spdm_requester import (
 from .spdm_responder import SpdmResponderBehavior, SpdmResponderProfile
 
 __all__ = [
+    "AttestationLogBuilder",
+    "AttestationLogEntry",
     "AttestationReport",
     "AttestationStep",
     "Behavior",

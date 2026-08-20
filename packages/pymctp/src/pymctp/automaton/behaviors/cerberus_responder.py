@@ -12,10 +12,11 @@ emulated transcript data so tests and demos can assert stable responses.  Supply
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, fields
 import hashlib
 import logging
+import struct
 from typing import Any
 
 from scapy.packet import Packet
@@ -61,6 +62,159 @@ _HASH_BY_SIZE = {
     64: hashlib.sha512,
 }
 _MOCK_SIGNATURE_CONTEXT = b"pymctp-cerberus-mock-attestation-v1"
+TCG_SHA256_ALG_ID = 0x000B
+TCG_SHA384_ALG_ID = 0x000C
+TCG_SHA512_ALG_ID = 0x000D
+_DIGEST_SIZE_BY_ALG_ID = {
+    TCG_SHA256_ALG_ID: 32,
+    TCG_SHA384_ALG_ID: 48,
+    TCG_SHA512_ALG_ID: 64,
+}
+_HASH_BY_ALG_ID = {
+    TCG_SHA256_ALG_ID: hashlib.sha256,
+    TCG_SHA384_ALG_ID: hashlib.sha384,
+    TCG_SHA512_ALG_ID: hashlib.sha512,
+}
+
+
+def _digest_size_for_algorithm(digest_algorithm_id: int) -> int:
+    digest_size = _DIGEST_SIZE_BY_ALG_ID.get(int(digest_algorithm_id))
+    if digest_size is None:
+        msg = f"Unsupported TCG digest algorithm id: 0x{int(digest_algorithm_id):04x}"
+        raise ValueError(msg)
+    return digest_size
+
+
+def _hash_factory_for_algorithm(digest_algorithm_id: int) -> Callable[[bytes], Any]:
+    hash_factory = _HASH_BY_ALG_ID.get(int(digest_algorithm_id))
+    if hash_factory is None:
+        msg = f"Unsupported TCG digest algorithm id: 0x{int(digest_algorithm_id):04x}"
+        raise ValueError(msg)
+    return hash_factory
+
+
+@dataclass
+class AttestationLogEntry:
+    """A single Cerberus attestation log entry."""
+
+    entry_id: int
+    event_type: int
+    pcr_bank: int = 0
+    pcr_measurement: int = 0
+    measurement_index: int = 0
+    digest: bytes = b""
+    measurement: bytes = b""
+    digest_algorithm_id: int = TCG_SHA384_ALG_ID
+
+    def __post_init__(self) -> None:
+        digest_size = _digest_size_for_algorithm(self.digest_algorithm_id)
+        self.entry_id = int(self.entry_id)
+        self.event_type = int(self.event_type)
+        self.pcr_bank = int(self.pcr_bank)
+        self.pcr_measurement = int(self.pcr_measurement)
+        self.measurement_index = int(self.measurement_index)
+        self.digest_algorithm_id = int(self.digest_algorithm_id)
+        self.digest = _resize_bytes(bytes(self.digest), digest_size)
+        self.measurement = _resize_bytes(bytes(self.measurement), digest_size)
+
+    @property
+    def measurement_type(self) -> int:
+        """Packed TCG measurement type."""
+        return ((self.measurement_index & 0xFFFF) << 16) | ((self.pcr_bank & 0xFF) << 8) | (
+            self.pcr_measurement & 0xFF
+        )
+
+    def to_bytes(self) -> bytes:
+        """Encode this entry using the Cerberus TCG log framing."""
+        digest_size = _digest_size_for_algorithm(self.digest_algorithm_id)
+        digest = _resize_bytes(self.digest, digest_size)
+        measurement = _resize_bytes(self.measurement, digest_size)
+        body = (
+            struct.pack(
+                "<IIIH",
+                self.event_type & 0xFFFFFFFF,
+                self.measurement_type & 0xFFFFFFFF,
+                1,
+                self.digest_algorithm_id & 0xFFFF,
+            )
+            + digest
+            + struct.pack("<I", digest_size)
+            + measurement
+        )
+
+        if self.digest_algorithm_id == TCG_SHA256_ALG_ID:
+            return b"\xCA" + struct.pack("<I", self.entry_id & 0xFFFFFFFF) + body
+
+        entry_length = 7 + len(body)
+        return b"\xCB" + struct.pack("<HI", entry_length, self.entry_id & 0xFFFFFFFF) + body
+
+
+class AttestationLogBuilder:
+    """Builds a Cerberus attestation log, extending measurements like a PCR."""
+
+    def __init__(self, *, digest_algorithm_id: int = TCG_SHA384_ALG_ID) -> None:
+        self.digest_algorithm_id = int(digest_algorithm_id)
+        _digest_size_for_algorithm(self.digest_algorithm_id)
+        self._entries: list[AttestationLogEntry] = []
+        self._pcr_values: dict[int, bytes] = {}
+
+    def add_entry(
+        self,
+        *,
+        event_type: int,
+        digest: bytes,
+        pcr_bank: int = 0,
+        pcr_measurement: int = 0,
+        measurement_index: int = 0,
+        measurement: bytes | None = None,
+    ) -> AttestationLogEntry:
+        """Append and return an attestation log entry."""
+        digest_size = _digest_size_for_algorithm(self.digest_algorithm_id)
+        normalized_digest = _resize_bytes(bytes(digest), digest_size)
+        normalized_measurement = (
+            self.extend(pcr_bank, normalized_digest)
+            if measurement is None
+            else _resize_bytes(bytes(measurement), digest_size)
+        )
+        if measurement is not None:
+            self._pcr_values[int(pcr_bank)] = normalized_measurement
+
+        entry = AttestationLogEntry(
+            entry_id=len(self._entries),
+            event_type=int(event_type),
+            pcr_bank=int(pcr_bank),
+            pcr_measurement=int(pcr_measurement),
+            measurement_index=int(measurement_index),
+            digest=normalized_digest,
+            measurement=normalized_measurement,
+            digest_algorithm_id=self.digest_algorithm_id,
+        )
+        self._entries.append(entry)
+        return entry
+
+    def extend(self, pcr_bank: int, digest: bytes) -> bytes:
+        """PCR extend: H(current || digest), starting from all-zero."""
+        digest_size = _digest_size_for_algorithm(self.digest_algorithm_id)
+        normalized_digest = _resize_bytes(bytes(digest), digest_size)
+        pcr_key = int(pcr_bank)
+        current = self._pcr_values.get(pcr_key, b"\x00" * digest_size)
+        extended = _hash_factory_for_algorithm(self.digest_algorithm_id)(current + normalized_digest).digest()
+        self._pcr_values[pcr_key] = extended
+        return extended
+
+    def to_bytes(self) -> bytes:
+        """Encode all entries into a Cerberus attestation log blob."""
+        return b"".join(entry.to_bytes() for entry in self._entries)
+
+    def clear(self) -> None:
+        """Remove all entries and reset PCR values."""
+        self._entries.clear()
+        self._pcr_values.clear()
+
+    @property
+    def entries(self) -> list[AttestationLogEntry]:
+        """Return a copy of the currently built entries."""
+        return list(self._entries)
 
 
 @dataclass
@@ -108,10 +262,12 @@ class CerberusResponderProfile:
     max_cert_chunk_size: int | None = None
     signer: Callable[[bytes], bytes] | None = None
     attestation_event_data: int = 0xE000002F
+    default_event_type: int = 0xE000002F
     attestation_status_version: int = 2
     components: list[ComponentAttestation] = field(default_factory=list)
     debug_log: bytes = b""
     attestation_log: bytes = b""
+    attestation_log_builder: AttestationLogBuilder = field(default_factory=AttestationLogBuilder)
     tamper_log: bytes = b""
     manifest_ids: dict[int, tuple[bool, int]] = field(default_factory=dict)
     max_log_chunk: int = 242
@@ -126,6 +282,7 @@ class CerberusResponderProfile:
         self.digest_size = int(self.digest_size)
         self.slot_mask = int(self.slot_mask)
         self.attestation_event_data = int(self.attestation_event_data)
+        self.default_event_type = int(self.default_event_type)
         self.attestation_status_version = int(self.attestation_status_version)
         self.components = [
             component if isinstance(component, ComponentAttestation) else ComponentAttestation(**component)
@@ -133,6 +290,8 @@ class CerberusResponderProfile:
         ]
         self.debug_log = bytes(self.debug_log)
         self.attestation_log = bytes(self.attestation_log)
+        if isinstance(self.attestation_log_builder, dict):
+            self.attestation_log_builder = AttestationLogBuilder(**self.attestation_log_builder)
         self.tamper_log = bytes(self.tamper_log)
         self.manifest_ids = {
             int(cmd): (bool(valid), int(manifest_id)) for cmd, (valid, manifest_id) in self.manifest_ids.items()
@@ -184,6 +343,39 @@ class CerberusChallengeBehavior(Behavior):
     @property
     def name(self) -> str:
         return "cerberus-rot"
+
+    def record_attestation(
+        self,
+        component_id: int,
+        *,
+        instance: int = 1,
+        status: int = ComponentAttestStatus.AUTHENTICATED,
+        measurements: Iterable[bytes] = (),
+        event_type: int | None = None,
+        ctx: EndpointContext | None = None,
+    ) -> None:
+        """Record component attestation status and append measurements to the context log."""
+        target_ctx = ctx or self._ctx
+        selected_event_type = self.profile.default_event_type if event_type is None else int(event_type)
+        if target_ctx is None:
+            _record_component_status(self.profile.components, component_id, instance=instance, status=status)
+            builder = self.profile.attestation_log_builder
+        else:
+            state = self._state(target_ctx)
+            _record_component_status(state["components"], component_id, instance=instance, status=status)
+            builder = state["attestation_log_builder"]
+
+        entries = [bytes(measurement) for measurement in measurements]
+        if not entries:
+            entries = [_hash_factory_for_algorithm(builder.digest_algorithm_id)(int(component_id).to_bytes(4, "little")).digest()]
+        for measurement_index, digest in enumerate(entries):
+            builder.add_entry(
+                event_type=selected_event_type,
+                digest=digest,
+                pcr_bank=int(component_id) & 0xFF,
+                pcr_measurement=max(0, int(instance) - 1) & 0xFF,
+                measurement_index=measurement_index,
+            )
 
     def on_bind(self, am: Any, ctx: EndpointContext) -> None:
         self._ctx = ctx
@@ -371,11 +563,10 @@ class CerberusChallengeBehavior(Behavior):
         return payload / body if body else payload
 
     def _get_log_info(self, pkt: Packet, ctx: EndpointContext) -> Packet:
-        logs = self._state(ctx)["logs"]
         return LogInfoResponsePacket(
-            debug_log_length=len(logs[int(CerberusLogType.DEBUG)]),
-            attestation_log_length=len(logs[int(CerberusLogType.ATTESTATION)]),
-            tamper_log_length=len(logs[int(CerberusLogType.TAMPER)]),
+            debug_log_length=len(self._get_log(ctx, int(CerberusLogType.DEBUG)) or b""),
+            attestation_log_length=len(self._get_log(ctx, int(CerberusLogType.ATTESTATION)) or b""),
+            tamper_log_length=len(self._get_log(ctx, int(CerberusLogType.TAMPER)) or b""),
         )
 
     def _read_log(self, pkt: Packet, ctx: EndpointContext) -> Packet | bytes:
@@ -406,6 +597,8 @@ class CerberusChallengeBehavior(Behavior):
             return self._error_body(CerberusErrorCodes.INVALID_REQ)
 
         self._state(ctx)["logs"][log_type] = b""
+        if log_type == int(CerberusLogType.ATTESTATION):
+            self._state(ctx)["attestation_log_builder"].clear()
         self._state(ctx)["last_cleared_log_type"] = log_type
         return b""
 
@@ -416,7 +609,7 @@ class CerberusChallengeBehavior(Behavior):
         if int(self.profile.attestation_status_version) not in {1, 2}:
             return self._error_body(CerberusErrorCodes.INVALID_REQ)
 
-        payload = self._attestation_data_payload()
+        payload = self._attestation_data_payload(ctx)
         offset = min(max(0, int(request.offset)), len(payload))
         chunk = payload[offset : offset + self._max_log_chunk()]
         self._state(ctx)["last_attestation_data"] = {
@@ -483,15 +676,20 @@ class CerberusChallengeBehavior(Behavior):
         return max(0, int(self.profile.max_log_chunk))
 
     def _get_log(self, ctx: EndpointContext, log_type: int) -> bytes | None:
-        logs = self._state(ctx)["logs"]
-        return logs.get(int(log_type))
+        state = self._state(ctx)
+        log_type = int(log_type)
+        log = state["logs"].get(log_type)
+        if log_type == int(CerberusLogType.ATTESTATION) and log == b"":
+            return state["attestation_log_builder"].to_bytes()
+        return log
 
-    def _attestation_data_payload(self) -> bytes:
+    def _attestation_data_payload(self, ctx: EndpointContext) -> bytes:
+        components = self._state(ctx)["components"]
         status_version = int(self.profile.attestation_status_version)
         if status_version == 1:
-            status_data = bytes(_first_component_status(component) for component in self.profile.components)
+            status_data = bytes(_first_component_status(component) for component in components)
         else:
-            status_data = b"".join(_component_attestation_v2_bytes(component) for component in self.profile.components)
+            status_data = b"".join(_component_attestation_v2_bytes(component) for component in components)
 
         return bytes(
             AttestationDataResponsePacket(
@@ -521,6 +719,8 @@ class CerberusChallengeBehavior(Behavior):
                 int(CerberusLogType.ATTESTATION): bytes(self.profile.attestation_log),
                 int(CerberusLogType.TAMPER): bytes(self.profile.tamper_log),
             },
+            "attestation_log_builder": _clone_attestation_log_builder(self.profile.attestation_log_builder),
+            "components": _clone_components(self.profile.components),
             "last_log_read": {},
             "last_cleared_log_type": None,
             "last_attestation_data": {},
@@ -538,6 +738,72 @@ class CerberusChallengeBehavior(Behavior):
 
 def _resize_bytes(data: bytes, size: int) -> bytes:
     return data[:size].ljust(size, b"\x00")
+
+
+def _clone_attestation_log_builder(builder: AttestationLogBuilder) -> AttestationLogBuilder:
+    cloned = AttestationLogBuilder(digest_algorithm_id=builder.digest_algorithm_id)
+    cloned._entries = [
+        AttestationLogEntry(
+            entry_id=entry.entry_id,
+            event_type=entry.event_type,
+            pcr_bank=entry.pcr_bank,
+            pcr_measurement=entry.pcr_measurement,
+            measurement_index=entry.measurement_index,
+            digest=entry.digest,
+            measurement=entry.measurement,
+            digest_algorithm_id=entry.digest_algorithm_id,
+        )
+        for entry in builder.entries
+    ]
+    cloned._pcr_values = dict(builder._pcr_values)
+    return cloned
+
+
+def _clone_components(components: list[ComponentAttestation]) -> list[ComponentAttestation]:
+    return [
+        ComponentAttestation(
+            component_id=component.component_id,
+            status=component.status,
+            instances=component.instances,
+            statuses=list(component.statuses) if component.statuses is not None else None,
+        )
+        for component in components
+    ]
+
+
+def _record_component_status(
+    components: list[ComponentAttestation],
+    component_id: int,
+    *,
+    instance: int,
+    status: int,
+) -> None:
+    component_id = int(component_id)
+    instance = max(1, int(instance))
+    status = int(status)
+    for component in components:
+        if int(component.component_id) == component_id:
+            component.instances = max(int(component.instances), instance)
+            if component.statuses is None and instance == 1:
+                component.status = status
+                return
+
+            statuses = list(_component_status_bytes(component))
+            if len(statuses) < instance:
+                statuses.extend([int(component.status) & 0xFF] * (instance - len(statuses)))
+            statuses[instance - 1] = status & 0xFF
+            component.statuses = statuses
+            return
+
+    if instance == 1:
+        components.append(ComponentAttestation(component_id=component_id, status=status, instances=1))
+        return
+
+    statuses = [int(ComponentAttestStatus.AUTHENTICATED) & 0xFF] * instance
+    statuses[instance - 1] = status & 0xFF
+    components.append(
+        ComponentAttestation(component_id=component_id, status=status, instances=instance, statuses=statuses)
+    )
 
 
 def _version_bytes(version: str | bytes) -> bytes:

@@ -7,13 +7,21 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import pathlib
+import struct
+import sys
 
+import pytest
 from scapy.plist import PacketList
 
 from pymctp.automaton.behaviors.cerberus_responder import (
+    AttestationLogBuilder,
     CerberusChallengeBehavior,
     CerberusResponderProfile,
     ComponentAttestation,
+    TCG_SHA256_ALG_ID,
+    TCG_SHA384_ALG_ID,
 )
 from pymctp.automaton.roles import create_endpoint, get_behaviors_for_roles
 from pymctp.layers.mctp.transport import SmbusTransport, TransportHdr, TransportHdrPacket
@@ -377,6 +385,24 @@ def _decoded_v2_statuses(response: AttestationDataResponsePacket) -> list[tuple[
     return decoded
 
 
+def _load_tcg_log_decoder():
+    decoder_path = pathlib.Path(
+        "/Volumes/workspace/projects/pymctp-test/pymctp-oem-microsoft/packages/pymctp-oem-microsoft/"
+        "src/pymctp_oem_microsoft/analyzers/tcg_log.py"
+    )
+    if not decoder_path.exists():
+        pytest.skip("internal TCG log decoder is not available")
+
+    spec = importlib.util.spec_from_file_location("tcg_log", decoder_path)
+    if spec is None or spec.loader is None:
+        pytest.skip("internal TCG log decoder could not be loaded")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 class TestCerberusUtilityFlow:
     def test_get_log_info_returns_configured_lengths(self) -> None:
         behavior = CerberusChallengeBehavior(
@@ -673,6 +699,165 @@ class TestCerberusUtilityFlow:
         assert second_log == attestation_log[0x00000FFB : 0x00000FFB + 242]
         assert attest.event_data == 0xE000002F
         assert len(_decoded_v2_statuses(attest)) == 5
+
+
+class TestCerberusAttestationLogBuilder:
+    def test_built_log_round_trips_through_real_decoder(self) -> None:
+        decoder = _load_tcg_log_decoder()
+        builder = AttestationLogBuilder(digest_algorithm_id=TCG_SHA384_ALG_ID)
+        digest = b"\x11" * 48
+        measurement = b"\x22" * 48
+
+        builder.add_entry(
+            event_type=0xE000002F,
+            digest=digest,
+            pcr_bank=3,
+            pcr_measurement=4,
+            measurement_index=5,
+            measurement=measurement,
+        )
+
+        entries = decoder.decode_attestation_log(builder.to_bytes())
+
+        assert len(entries) == 1
+        assert entries[0].entry_id == 0
+        assert entries[0].event_type == 0xE000002F
+        assert entries[0].pcr_bank == 3
+        assert entries[0].pcr_measurement == 4
+        assert entries[0].measurement_index == 5
+        assert entries[0].digest == digest
+        assert entries[0].measurement == measurement
+
+    def test_framing_matches_digest_algorithm(self) -> None:
+        sha256_builder = AttestationLogBuilder(digest_algorithm_id=TCG_SHA256_ALG_ID)
+        sha256_builder.add_entry(event_type=0xE000002F, digest=b"\xAA" * 32)
+        sha256_log = sha256_builder.to_bytes()
+
+        sha384_builder = AttestationLogBuilder(digest_algorithm_id=TCG_SHA384_ALG_ID)
+        sha384_builder.add_entry(event_type=0xE000002F, digest=b"\xBB" * 48)
+        sha384_log = sha384_builder.to_bytes()
+
+        assert sha256_log[0] == 0xCA
+        assert len(sha256_log) == 87
+        assert sha384_log[0] == 0xCB
+        assert struct.unpack_from("<H", sha384_log, 1)[0] == 121
+        assert len(sha384_log) == 121
+
+    def test_extend_chains_like_a_pcr(self) -> None:
+        builder = AttestationLogBuilder(digest_algorithm_id=TCG_SHA384_ALG_ID)
+        digest1 = b"\x01" * 48
+        digest2 = b"\x02" * 48
+
+        first = builder.add_entry(event_type=0xE000002F, digest=digest1)
+        second = builder.add_entry(event_type=0xE000002F, digest=digest2)
+
+        assert first.measurement == hashlib.sha384((b"\x00" * 48) + digest1).digest()
+        assert second.measurement == hashlib.sha384(first.measurement + digest2).digest()
+
+    def test_digest_and_measurement_lengths_are_normalized(self) -> None:
+        builder = AttestationLogBuilder(digest_algorithm_id=TCG_SHA256_ALG_ID)
+
+        short = builder.add_entry(event_type=0xE000002F, digest=b"\xAA")
+        long = builder.add_entry(event_type=0xE000002F, digest=b"\xBB" * 64, measurement=b"\xCC" * 64)
+
+        assert short.digest == b"\xAA" + (b"\x00" * 31)
+        assert len(short.to_bytes()) == 87
+        assert long.digest == b"\xBB" * 32
+        assert long.measurement == b"\xCC" * 32
+        assert len(long.to_bytes()) == 87
+
+    def test_record_attestation_updates_attestation_data_status(self) -> None:
+        behavior = CerberusChallengeBehavior()
+        ctx = _ctx()
+
+        behavior.record_attestation(0x123, status=ComponentAttestStatus.INTERRUPTED, ctx=ctx)
+        response = _reassembled_vdpci(
+            _get_reply(
+                behavior,
+                _request(CerberusCmdCodes.GET_ATTESTATION_DATA, GetAttestationDataRequestPacket(offset=0)),
+                ctx,
+            )
+        ).getlayer(AttestationDataResponsePacket)
+
+        assert _decoded_v2_statuses(response) == [(0x123, [ComponentAttestStatus.INTERRUPTED])]
+
+    def test_record_attestation_after_startup_is_visible_to_log_reads(self) -> None:
+        behavior = CerberusChallengeBehavior()
+        ctx = _ctx()
+        empty_info = _single_vdpci(
+            _get_reply(behavior, _request(CerberusCmdCodes.GET_LOG_INFO, GetLogInfoRequestPacket()), ctx)
+        ).getlayer(LogInfoResponsePacket)
+
+        behavior.record_attestation(0x124, measurements=[b"\x12" * 48], ctx=ctx)
+        expected_log = ctx.msg_type_context[behavior.name]["attestation_log_builder"].to_bytes()
+        info = _single_vdpci(
+            _get_reply(behavior, _request(CerberusCmdCodes.GET_LOG_INFO, GetLogInfoRequestPacket()), ctx)
+        ).getlayer(LogInfoResponsePacket)
+        first_log = _raw_response_payload(
+            _get_reply(
+                behavior,
+                _request(CerberusCmdCodes.READ_LOG, ReadLogRequestPacket(log_type=CerberusLogType.ATTESTATION)),
+                ctx,
+            )
+        )
+
+        assert empty_info.attestation_log_length == 0
+        assert info.attestation_log_length == len(expected_log)
+        assert first_log == expected_log[:242]
+
+    def test_record_attestation_without_measurements_produces_non_empty_log(self) -> None:
+        behavior = CerberusChallengeBehavior()
+        ctx = _ctx()
+
+        behavior.record_attestation(0x125, ctx=ctx)
+        info = _single_vdpci(
+            _get_reply(behavior, _request(CerberusCmdCodes.GET_LOG_INFO, GetLogInfoRequestPacket()), ctx)
+        ).getlayer(LogInfoResponsePacket)
+
+        assert info.attestation_log_length > 0
+
+    def test_clear_log_empties_builder_and_contexts_stay_isolated(self) -> None:
+        behavior = CerberusChallengeBehavior()
+        ctx1 = _ctx()
+        ctx2 = _ctx()
+        behavior.record_attestation(0x126, measurements=[b"\x26" * 48], ctx=ctx1)
+        behavior.record_attestation(0x127, measurements=[b"\x27" * 48], ctx=ctx2)
+
+        _get_reply(
+            behavior,
+            _request(CerberusCmdCodes.CLEAR_LOG, ClearLogRequestPacket(log_type=CerberusLogType.ATTESTATION)),
+            ctx1,
+        )
+        info1 = _single_vdpci(
+            _get_reply(behavior, _request(CerberusCmdCodes.GET_LOG_INFO, GetLogInfoRequestPacket()), ctx1)
+        ).getlayer(LogInfoResponsePacket)
+        info2 = _single_vdpci(
+            _get_reply(behavior, _request(CerberusCmdCodes.GET_LOG_INFO, GetLogInfoRequestPacket()), ctx2)
+        ).getlayer(LogInfoResponsePacket)
+
+        assert info1.attestation_log_length == 0
+        assert ctx1.msg_type_context[behavior.name]["attestation_log_builder"].entries == []
+        assert info2.attestation_log_length > 0
+
+    def test_configured_attestation_log_takes_precedence_over_builder(self) -> None:
+        configured_log = b"configured-log"
+        behavior = CerberusChallengeBehavior(profile=CerberusResponderProfile(attestation_log=configured_log))
+        ctx = _ctx()
+
+        behavior.record_attestation(0x128, measurements=[b"\x28" * 48], ctx=ctx)
+        info = _single_vdpci(
+            _get_reply(behavior, _request(CerberusCmdCodes.GET_LOG_INFO, GetLogInfoRequestPacket()), ctx)
+        ).getlayer(LogInfoResponsePacket)
+        log = _raw_response_payload(
+            _get_reply(
+                behavior,
+                _request(CerberusCmdCodes.READ_LOG, ReadLogRequestPacket(log_type=CerberusLogType.ATTESTATION)),
+                ctx,
+            )
+        )
+
+        assert info.attestation_log_length == len(configured_log)
+        assert log == configured_log
 
 
 class TestRequestDetectionMatchesRealHardware:
