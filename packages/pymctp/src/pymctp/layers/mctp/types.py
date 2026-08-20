@@ -192,6 +192,7 @@ class EndpointContext(DataClassDictMixin):
     assigned_eid: int = 0
     discovered: bool = False
     is_bus_owner: bool = False
+    is_bridge: bool = False
     pool_size: int = 0
     mtu_size: int = 240 - (4 + 5)  # make room for transport and protocol headers
     allocated_pool: list[int] | None = None
@@ -206,6 +207,16 @@ class EndpointContext(DataClassDictMixin):
 
     class Config(BaseConfig):
         serialization_strategy = {list[MsgTypes]: {"deserialize": deserialize_msg_types}}
+
+    @property
+    def supports_bridging(self) -> bool:
+        """True when this endpoint answers bridge/routing control commands.
+
+        A bus owner is always a bridge, but a bridge is not necessarily the bus
+        owner.  ``is_bus_owner`` is still honoured so contexts written before
+        ``is_bridge`` existed keep behaving the same way.
+        """
+        return self.is_bridge or self.is_bus_owner
 
     @property
     def eid(self) -> int:

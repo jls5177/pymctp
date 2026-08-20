@@ -39,7 +39,10 @@ class BridgeBehavior(Behavior):
 
     * Claiming only bridge-specific commands so they are not processed
       by other behaviors.
-    * Ensuring ``ctx.is_bus_owner`` is set when the behavior is attached.
+    * Ensuring ``ctx.is_bridge`` is set when the behavior is attached, which
+      is what the bridge/routing control commands gate on.  Note this is
+      deliberately *not* ``is_bus_owner``: a bridge is not necessarily the
+      bus owner (on L4A40 the BMC bridges for the head node).
     """
 
     @property
@@ -47,8 +50,8 @@ class BridgeBehavior(Behavior):
         return "bridge"
 
     def on_attach(self, ctx: EndpointContext) -> None:
-        if not ctx.is_bus_owner:
-            ctx.is_bus_owner = True
+        if not ctx.is_bridge:
+            ctx.is_bridge = True
 
     def can_handle(self, pkt: Packet, ctx: EndpointContext) -> bool:
         if not pkt.haslayer(ControlHdrPacket):

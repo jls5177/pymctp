@@ -45,9 +45,10 @@ class TestRoleBasedEndpointAM:
 
     def test_on_attach_called(self, ctx):
         """Verify on_attach is called when behavior is added."""
-        assert ctx.is_bus_owner is False
-        am = RoleBasedEndpointAM(behaviors=[BridgeBehavior()], context=ctx)
-        assert ctx.is_bus_owner is True  # BridgeBehavior.on_attach sets this
+        assert ctx.is_bridge is False
+        RoleBasedEndpointAM(behaviors=[BridgeBehavior()], context=ctx)
+        assert ctx.is_bridge is True  # BridgeBehavior.on_attach sets this
+        assert ctx.is_bus_owner is False  # ...but a bridge is not the bus owner
 
 
 class TestEndpointRoles:
@@ -60,7 +61,7 @@ class TestEndpointRoles:
         am = create_endpoint("bridge", context=ctx)
         assert isinstance(am, RoleBasedEndpointAM)
         assert am.role == ["bridge"]
-        assert ctx.is_bus_owner is True
+        assert ctx.is_bridge is True
 
     def test_unknown_role_raises(self, ctx):
         with pytest.raises(ValueError, match="Unknown role"):

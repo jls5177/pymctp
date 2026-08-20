@@ -75,11 +75,12 @@ class TestBridgeBehavior:
         b = BridgeBehavior()
         assert b.name == "bridge"
 
-    def test_on_attach_sets_bus_owner(self, simple_ctx):
-        assert simple_ctx.is_bus_owner is False
+    def test_on_attach_sets_bridge(self, simple_ctx):
+        assert simple_ctx.is_bridge is False
         b = BridgeBehavior()
         b.on_attach(simple_ctx)
-        assert simple_ctx.is_bus_owner is True
+        assert simple_ctx.is_bridge is True
+        assert simple_ctx.is_bus_owner is False
 
     def test_can_handle_bridge_commands(self, bridge_ctx):
         b = BridgeBehavior()

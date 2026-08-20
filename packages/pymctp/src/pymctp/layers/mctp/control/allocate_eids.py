@@ -39,7 +39,7 @@ class AllocateEndpointIDsRequestPacket(Packet):
         return summary, [ControlHdrPacket, TransportHdrPacket]
 
     def make_ctrl_reply(self, ctx: EndpointContext) -> tuple[CompletionCode, AnyPacketType]:
-        if not ctx.is_bus_owner:
+        if not ctx.supports_bridging:
             return CompletionCodes.ERROR_UNSUPPORTED_CMD, None
 
         status = AllocateEIDAllocationStatus.ACCEPTED
