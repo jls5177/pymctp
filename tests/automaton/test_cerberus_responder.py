@@ -695,8 +695,13 @@ class TestCerberusUtilityFlow:
         assert logs.debug_log_length == 35000
         assert logs.attestation_log_length == 5082
         assert logs.tamper_log_length == 0
-        assert first_log == attestation_log[:242]
-        assert second_log == attestation_log[0x00000FFB : 0x00000FFB + 242]
+        # The utility asks for the whole remaining log and rejects a short
+        # reply, so a read returns a full message worth of data. 0x0FFB is
+        # exactly where the captured second read resumes.
+        chunk = CerberusResponderProfile().max_log_chunk
+        assert chunk == 0x00000FFB
+        assert first_log == attestation_log[:chunk]
+        assert second_log == attestation_log[0x00000FFB : 0x00000FFB + chunk]
         assert attest.event_data == 0xE000002F
         assert len(_decoded_v2_statuses(attest)) == 5
 

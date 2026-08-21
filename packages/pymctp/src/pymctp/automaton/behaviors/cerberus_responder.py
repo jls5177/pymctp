@@ -270,7 +270,17 @@ class CerberusResponderProfile:
     attestation_log_builder: AttestationLogBuilder = field(default_factory=AttestationLogBuilder)
     tamper_log: bytes = b""
     manifest_ids: dict[int, tuple[bool, int]] = field(default_factory=dict)
-    max_log_chunk: int = 242
+    #: Bytes returned per READ_LOG / GET_ATTESTATION_DATA request.
+    #:
+    #: The Cerberus Utility asks for the whole remaining log in one request and
+    #: rejects a short reply ("Unexpected response length: Expected N but got
+    #: M"), so this must be a full message worth of data, not a single MCTP
+    #: packet. The MCTP transport fragments it automatically.
+    #:
+    #: 4091 = the 4096-byte max message size minus the 5 header bytes, which is
+    #: exactly what hardware does: a capture reads offset 0x0000 and then
+    #: continues at offset 0x0FFB (4091).
+    max_log_chunk: int = 4091
 
     def __post_init__(self) -> None:
         if isinstance(self.device_id, dict):
