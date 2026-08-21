@@ -23,6 +23,9 @@ from pymctp.utils import set_printable_raw_layer
 
 timestampRE = r"([\d]{2}:[\d]{2}:[\d]{2}\.[\d]{6,9})"
 timestampRegex = re.compile(timestampRE)
+journalTimestampRegex = re.compile(
+    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.)(\d{6})(\d{0,3})(Z|[+-]\d{2}:?\d{2})"
+)
 
 
 def parse_timestamp(line: str, timezone_str: str, is_dst: bool, date_str: str) -> datetime | None:
@@ -38,22 +41,47 @@ def parse_timestamp(line: str, timezone_str: str, is_dst: bool, date_str: str) -
         Parsed timestamp in UTC or None if no timestamp found
     """
     line = line.strip()
+    journal_matches = list(journalTimestampRegex.finditer(line))
+    journal_spans = [match.span() for match in journal_matches]
+
     for match in timestampRegex.finditer(line):
+        if any(span_start <= match.start() < span_end for span_start, span_end in journal_spans):
+            continue
         timestampStr = match.group(1)
         dt_obj = datetime.strptime(f"{date_str} {timestampStr}", "%Y-%m-%d %H:%M:%S.%f")
         tz = pytz.timezone(timezone_str)
         dt_obj = tz.localize(dt_obj, is_dst=is_dst)
         return dt_obj.astimezone(pytz.utc)
+
+    if journal_matches:
+        match = journal_matches[0]
+        tz_text = "+0000" if match.group(4) == "Z" else match.group(4).replace(":", "")
+        dt_obj = datetime.strptime(f"{match.group(1)}{match.group(2)}{tz_text}", "%Y-%m-%dT%H:%M:%S.%f%z")
+        return dt_obj.astimezone(pytz.utc)
+
     return None
 
 
 def parse_line(line: str) -> tuple[int | None, bytes]:
     """Parse single line of hex dump."""
     line = line.strip()
-    if not line.startswith("0x") or line.count("  ") < 2:
+    if line.startswith("0x") and line.count("  ") >= 2:
+        offset, data_line, *_ = line.split("  ")
+        return int(offset[:-1], 16), bytes.fromhex(data_line)
+
+    parts = line.split()
+    offset_index = next((index for index, part in enumerate(parts) if part.startswith("0x")), None)
+    if offset_index is None:
         return None, b""
-    offset, data_line, *_ = line.split("  ")
-    return int(offset[:-1], 16), bytes.fromhex(data_line)
+
+    data_parts = []
+    for part in parts[offset_index + 1 :]:
+        if len(part) % 2 or any(char not in "0123456789abcdefABCDEF" for char in part):
+            break
+        data_parts.append(part)
+    if not data_parts:
+        return None, b""
+    return int(parts[offset_index].rstrip(":"), 16), bytes.fromhex("".join(data_parts))
 
 
 def parse_text_file(
@@ -72,23 +100,32 @@ def parse_text_file(
     """
     next_request = b""
     next_request_timestamp = None
-    for line in filename.read_text().splitlines():
-        timestamp = parse_timestamp(line, timezone_str, is_dst, date_str)
-        if timestamp is not None:
-            # next request is started, save previous request
+    for line in filename.open(errors="replace"):
+        offset, data = parse_line(line)
+        timestamp = parse_timestamp(line, timezone_str, is_dst, date_str) if offset in (None, 0) else None
+        if offset is None:
+            if timestamp is None:
+                continue
             if next_request:
                 try:
                     mctp_packet = TransportHdr(next_request)
                 except Exception:
                     mctp_packet = Raw(next_request)
                 yield (next_request_timestamp, mctp_packet)
+                next_request = b""
             next_request_timestamp = timestamp
             continue
-        offset, data = parse_line(line)
-        if offset is None and data is None:
-            continue
+
         if offset == 0:
+            if next_request:
+                try:
+                    mctp_packet = TransportHdr(next_request)
+                except Exception:
+                    mctp_packet = Raw(next_request)
+                yield (next_request_timestamp, mctp_packet)
             next_request = data
+            if timestamp is not None:
+                next_request_timestamp = timestamp
         else:
             next_request += data
     if next_request:
