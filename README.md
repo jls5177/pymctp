@@ -125,7 +125,7 @@ pymctp machine run lab.yaml --rediscover --timeout 30
 ## Documentation
 
 - **[Core Library Documentation](packages/pymctp/README.md)** - Full API and usage guide
-- **[PLDM capture workflow](docs/pldm-from-capture.md)** - Generate PDR/sensor model artifacts from captures
+- **[PLDM capture workflow](docs/pldm-from-capture.md)** - Generate JSON artifacts or editable Python PDR/sensor models from captures
 - **[Extension Development](EXTENSIONS.md)** - Creating custom OEM/layer extensions
 - **[CLI Extension Development](CLI-EXTENSIONS.md)** - Creating custom CLI commands
 - **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to the project

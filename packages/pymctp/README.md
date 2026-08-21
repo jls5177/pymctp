@@ -81,8 +81,8 @@ pymctp analyze-tcpdump capture.pcap
 # Analyze text dump with custom timezone and date
 pymctp analyze-tcpdump dump.txt --timezone America/New_York --date 2024-03-20
 
-# Generate PLDM PDR artifacts from a complete PDR fetch capture
-pymctp pldm-from-capture capture.tcpdump.log --output ./pldm-models --eid 17
+# Generate PLDM PDR artifacts or editable Python models from a complete PDR fetch capture
+pymctp pldm-from-capture capture.tcpdump.log --output ./pldm-models --eid 17 --emit both
 ```
 
 The `analyze-tcpdump` command supports:
@@ -94,17 +94,16 @@ The `analyze-tcpdump` command supports:
 Run `pymctp analyze-tcpdump --help` for all available options.
 
 The `pldm-from-capture` command supports pcap files and ASCII tcpdump output,
-including journal-wrapped tcpdump lines with ISO-8601 prefixes. It writes
-`pldm-terminus-<eid>.json` files containing `eid`, `tid`, `source`,
-`repository_info`, `pdrs`, `sensors`, and `warnings`. Options are
-`--output DIR`, repeatable `--eid N`, `--timezone TZ`, `--date YYYY-MM-DD`, and
-`--force`.
+including journal-wrapped tcpdump lines with ISO-8601 prefixes. It writes JSON
+capture artifacts by default, and `--emit {json,python,both}` can also produce
+editable Python `Terminus` models.
 
 Decoded PDRs are guarded by a byte-for-byte round trip: each decoded record is
 re-encoded and compared with the capture. If it does not match, the record is
 kept as `opaque`, which still replays exactly in `GetPDR` but is not editable
-field-by-field. Machine specs consume artifacts with the `pdrs_from` option on a
-`pldm-sensor` role; relative paths resolve against the machine spec file.
+field-by-field. Machine specs consume JSON artifacts with `pdrs_from` or Python
+models with `pdrs_model = "module:attribute"` on a `pldm-sensor` role. The two
+options are mutually exclusive; relative paths only apply to `pdrs_from`.
 Capture the whole PDR fetch, because starting mid-fetch can lose record handle
 0. Also preserve MCTP fragmentation; treating each packet as a complete message
 can truncate records while `transferFlag = StartAndEnd` still looks successful.
