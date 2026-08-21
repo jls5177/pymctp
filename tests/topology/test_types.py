@@ -122,3 +122,63 @@ def test_validate_catches_duplicate_names_duplicate_eids_unknown_downstream_and_
             eids=EidMap({"other": 1}),
             devices=[DeviceSpec(name="a", transport={"type": "topology-fake"}, eid_key="missing")],
         ).validate()
+
+
+def test_validate_warns_when_vdpci_is_offered_without_a_capability_set(caplog) -> None:
+    """An endpoint that offers VDPCI but declares no vendor capability set fails discovery.
+
+    ``GetVendorDefinedMessageSupport`` answers ERROR_INVALID_DATA when
+    ``supported_vdm_msg_types`` is empty, so a bus owner following up on the
+    advertised VDPCI message type gets an error instead of the vendor id.
+    """
+    spec = MachineSpec(
+        name="vdpci-no-caps",
+        eids=EidMap({"a": 1}),
+        devices=[
+            DeviceSpec(
+                name="a",
+                transport={"type": "topology-fake"},
+                supported_msg_types=["CTRL", "VDPCI"],
+            )
+        ],
+    )
+
+    with caplog.at_level("WARNING"):
+        spec.validate()
+
+    assert "supported_vdm_msg_types" in caplog.text
+
+
+def test_validate_is_quiet_when_vdpci_declares_a_capability_set(caplog) -> None:
+    spec = MachineSpec(
+        name="vdpci-with-caps",
+        eids=EidMap({"a": 1}),
+        devices=[
+            DeviceSpec(
+                name="a",
+                transport={"type": "topology-fake"},
+                supported_msg_types=["CTRL", "VDPCI"],
+                supported_vdm_msg_types=[{"vendor_id": 0x1414, "command_set_type": 0x04}],
+            )
+        ],
+    )
+
+    with caplog.at_level("WARNING"):
+        spec.validate()
+
+    assert "supported_vdm_msg_types" not in caplog.text
+
+
+def test_validate_does_not_require_capability_sets_without_vdpci(caplog) -> None:
+    spec = MachineSpec(
+        name="no-vdpci",
+        eids=EidMap({"a": 1}),
+        devices=[
+            DeviceSpec(name="a", transport={"type": "topology-fake"}, supported_msg_types=["CTRL", "PLDM"])
+        ],
+    )
+
+    with caplog.at_level("WARNING"):
+        spec.validate()
+
+    assert "supported_vdm_msg_types" not in caplog.text

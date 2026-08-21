@@ -216,6 +216,7 @@ class MachineSpec(DataClassDictMixin):
                     )
                     raise ValueError(msg)
             self._warn_unknown_transport(device)
+            self._warn_vdpci_without_capability_set(device)
 
     def _validate_device_names(self) -> None:
         seen: set[str] = set()
@@ -227,6 +228,21 @@ class MachineSpec(DataClassDictMixin):
         if duplicates:
             msg = f"Duplicate device names: {', '.join(sorted(duplicates))}"
             raise ValueError(msg)
+
+    def _warn_vdpci_without_capability_set(self, device: DeviceSpec) -> None:
+        """Warn when an endpoint offers VDPCI but reports no vendor capability set.
+
+        ``GetVendorDefinedMessageSupport`` answers ERROR_INVALID_DATA when the
+        endpoint has no capability sets, so a bus owner that follows up on the
+        advertised VDPCI message type fails discovery against it.
+        """
+        msg_types = {str(msg_type).upper() for msg_type in device.supported_msg_types}
+        if "VDPCI" in msg_types and not device.supported_vdm_msg_types:
+            logger.warning(
+                "Device %r supports VDPCI but declares no supported_vdm_msg_types; "
+                "GetVendorDefinedMessageSupport will answer ERROR_INVALID_DATA",
+                device.name,
+            )
 
     def _warn_unknown_transport(self, device: DeviceSpec) -> None:
         transport_type = device.transport.get("type")
