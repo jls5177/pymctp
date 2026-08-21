@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import binascii
+import importlib
 import json
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
@@ -866,23 +867,39 @@ class PldmSensorProfile:
     effecters: dict[int, EffecterDefinition] = field(default_factory=dict)
     pdr_repository: PdrRepository | list[PdrRecord] | None = None
     pdrs_from: str | None = None
+    pdrs_model: str | None = None
     emit_events: bool = False
     event_buffer_size: int = 256
     event_poll_chunk_size: int = 256
     event_msg_tag: int = 0
     event_timeout_s: float = 0.5
     terminus_uid: uuid.UUID | str | bytes | None = None
+    _device_name: str | None = None
 
     def __post_init__(self) -> None:
+        if self.pdrs_from and self.pdrs_model:
+            msg = (
+                f"PLDM sensor profile options 'pdrs_from' ({self.pdrs_from!r}) and "
+                f"'pdrs_model' ({self.pdrs_model!r}) are mutually exclusive"
+                f" for device {_format_device_name(self._device_name)}"
+            )
+            raise ValueError(msg)
         configured_sensors = _coerce_sensors(self.sensors)
         configured_effecters = _coerce_effecters(self.effecters)
         loaded_repository: PdrRepository | None = None
         loaded_sensors: dict[int, SensorDefinition] = {}
+        loaded_effecters: dict[int, EffecterDefinition] = {}
         if self.pdrs_from:
             loaded_repository, loaded_sensors = _load_pdrs_from(self.pdrs_from)
+        elif self.pdrs_model:
+            loaded_profile = _load_pdrs_model(self.pdrs_model, self._device_name)
+            loaded_repository = loaded_profile.pdr_repository
+            loaded_sensors = loaded_profile.sensors
+            loaded_effecters = loaded_profile.effecters
         loaded_sensors.update(configured_sensors)
+        loaded_effecters.update(configured_effecters)
         self.sensors = loaded_sensors
-        self.effecters = configured_effecters
+        self.effecters = loaded_effecters
         if self.pdr_repository is None:
             self.pdr_repository = (
                 loaded_repository if loaded_repository is not None else _derive_pdr_repository(self.sensors, self.effecters)
@@ -924,7 +941,8 @@ class PldmSensorBehavior(Behavior):
             data["effecters"] = effecters
             if "pdr_repository" not in overrides:
                 data["pdr_repository"] = None
-        if overrides.get("pdrs_from") is not None and "pdr_repository" not in overrides:
+        loads_external_pdrs = overrides.get("pdrs_from") is not None or overrides.get("pdrs_model") is not None
+        if loads_external_pdrs and "pdr_repository" not in overrides:
             data["pdr_repository"] = None
         if overrides:
             profile_fields = {item.name for item in fields(PldmSensorProfile)}
@@ -1792,6 +1810,63 @@ def _load_pdrs_from(path: str) -> tuple[PdrRepository, dict[int, SensorDefinitio
     except (TypeError, ValueError) as exc:
         msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} has invalid sensors: {exc}"
         raise ValueError(msg) from exc
+
+
+def _load_pdrs_model(reference: str, device_name: str | None) -> PldmSensorProfile:
+    if not isinstance(reference, str):
+        msg = (
+            f"PLDM sensor profile option 'pdrs_model' reference {reference!r} for device "
+            f"{_format_device_name(device_name)} must be in module:attribute form"
+        )
+        raise ValueError(msg)
+    module_name, separator, attribute_name = reference.partition(":")
+    if not separator or not module_name or not attribute_name:
+        msg = (
+            f"PLDM sensor profile option 'pdrs_model' reference {reference!r} for device "
+            f"{_format_device_name(device_name)} must be in module:attribute form"
+        )
+        raise ValueError(msg)
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as exc:
+        msg = (
+            f"PLDM sensor profile option 'pdrs_model' reference {reference!r} for device "
+            f"{_format_device_name(device_name)} could not import module {module_name!r}: {exc}"
+        )
+        raise ValueError(msg) from exc
+
+    try:
+        value = getattr(module, attribute_name)
+    except AttributeError as exc:
+        msg = (
+            f"PLDM sensor profile option 'pdrs_model' reference {reference!r} for device "
+            f"{_format_device_name(device_name)} has no attribute {attribute_name!r}"
+        )
+        raise ValueError(msg) from exc
+
+    from pymctp.pldm.model import Terminus
+
+    if callable(value):
+        try:
+            value = value()
+        except TypeError as exc:
+            msg = (
+                f"PLDM sensor profile option 'pdrs_model' reference {reference!r} for device "
+                f"{_format_device_name(device_name)} callable must accept no arguments and return Terminus: {exc}"
+            )
+            raise ValueError(msg) from exc
+    if not isinstance(value, Terminus):
+        msg = (
+            f"PLDM sensor profile option 'pdrs_model' reference {reference!r} for device "
+            f"{_format_device_name(device_name)} must be a Terminus or a zero-argument callable returning Terminus, "
+            f"got {type(value).__name__}"
+        )
+        raise ValueError(msg)
+    return value.build()
+
+
+def _format_device_name(device_name: str | None) -> str:
+    return repr(device_name or "<unknown>")
 
 
 def _load_pdr_records(pdrs: list[Any], model_path: Path) -> list[PdrRecord]:

@@ -109,16 +109,21 @@ class DeviceSpec(DataClassDictMixin):
         thread_kwargs = dict(machine.defaults.thread_kwargs)
         thread_kwargs.update(self.thread_kwargs)
 
+        role_options = _resolve_role_option_paths(
+            deepcopy(self.role_options),
+            getattr(machine, "_source_dir", None),
+            self.name,
+        )
+        pldm_options = role_options.get("pldm-sensor")
+        if isinstance(pldm_options, dict):
+            pldm_options.setdefault("_device_name", self.name)
+
         return {
             "context": context,
             "config": config,
             "thread_kwargs": thread_kwargs,
             "role": list(self.roles),
-            "role_options": _resolve_role_option_paths(
-                deepcopy(self.role_options),
-                getattr(machine, "_source_dir", None),
-                self.name,
-            ),
+            "role_options": role_options,
             "name": self.name,
             "downstream_endpoints": downstream_endpoints,
         }
