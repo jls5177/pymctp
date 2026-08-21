@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import binascii
+import logging
 import struct
 import time
+import uuid
 
 import pytest
 from scapy.packet import Raw
@@ -47,6 +49,14 @@ from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
     PollForPlatformEventOperation,
     PollForPlatformEventTransferFlag,
     PldmPlatformMonitoringCmdCodes,
+)
+from pymctp.layers.mctp.pldm.pdr import (
+    OpaquePdr,
+    PDR_TYPE_NUMERIC_EFFECTER,
+    NumericEffecterPdr,
+    PdrHeader,
+    StateEffecterPdr,
+    decode_pdr,
 )
 from pymctp.layers.mctp.pldm.types import CompletionCodes, PldmControlCmdCodes, PldmTypeCodes
 from pymctp.layers.mctp.transport import SmbusTransport, TransportHdr, TransportHdrPacket
@@ -128,6 +138,85 @@ def _sensor_request(sensor_id: int = 1, **kwargs):
         GetSensorReadingPacket(sensorID=sensor_id, rearmEventState=0),
         **kwargs,
     )
+
+
+def _set_numeric_sensor_enable_request(sensor_id: int, operational_state: int = 0, event_message_enable: int = 0):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable,
+        Raw(struct.pack("<HBB", sensor_id, operational_state, event_message_enable)),
+    )
+
+
+def _set_state_sensor_enables_request(sensor_id: int, payload: bytes | None = None):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.SetStateSensorEnables,
+        Raw(payload if payload is not None else struct.pack("<HBBB", sensor_id, 1, 0, 0)),
+    )
+
+
+def _get_state_sensor_readings_request(sensor_id: int, payload: bytes | None = None):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.GetStateSensorReadings,
+        Raw(payload if payload is not None else struct.pack("<HBB", sensor_id, 0, 0)),
+    )
+
+
+def _set_numeric_effecter_enable_request(effecter_id: int, operational_state: int = 0):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.SetNumericEffecterEnable,
+        Raw(struct.pack("<HB", effecter_id, operational_state)),
+    )
+
+
+def _set_numeric_effecter_value_request(
+    effecter_id: int,
+    data_size: GetSensorReadingDataSizeEnum | int,
+    value: int,
+):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.SetNumericEffecterValue,
+        Raw(struct.pack("<HB", effecter_id, int(data_size)) + _encode_test_value(data_size, value)),
+    )
+
+
+def _get_numeric_effecter_value_request(effecter_id: int, payload: bytes | None = None):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.GetNumericEffecterValue,
+        Raw(payload if payload is not None else struct.pack("<H", effecter_id)),
+    )
+
+
+def _set_state_effecter_enables_request(effecter_id: int, payload: bytes | None = None):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.SetStateEffecterEnables,
+        Raw(payload if payload is not None else struct.pack("<HBBB", effecter_id, 1, 0, 0)),
+    )
+
+
+def _set_state_effecter_states_request(effecter_id: int, payload: bytes | None = None):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.SetStateEffecterStates,
+        Raw(payload if payload is not None else struct.pack("<HBBB", effecter_id, 1, 1, 0)),
+    )
+
+
+def _get_state_effecter_states_request(effecter_id: int, payload: bytes | None = None):
+    return _platform_request(
+        PldmPlatformMonitoringCmdCodes.GetStateEffecterStates,
+        Raw(payload if payload is not None else struct.pack("<H", effecter_id)),
+    )
+
+
+def _encode_test_value(data_size: GetSensorReadingDataSizeEnum | int, value: int) -> bytes:
+    formats = {
+        GetSensorReadingDataSizeEnum.UINT8: "<B",
+        GetSensorReadingDataSizeEnum.SINT8: "<b",
+        GetSensorReadingDataSizeEnum.UINT16: "<H",
+        GetSensorReadingDataSizeEnum.SINT16: "<h",
+        GetSensorReadingDataSizeEnum.UINT32: "<I",
+        GetSensorReadingDataSizeEnum.SINT32: "<i",
+    }
+    return struct.pack(formats[GetSensorReadingDataSizeEnum(data_size)], value)
 
 
 def _platform_request(cmd_code: int, payload=None, **kwargs):
@@ -251,13 +340,27 @@ def test_get_pldm_commands_reports_32_byte_command_bitfield() -> None:
 
     assert pldm.completion_code == CompletionCodes.SUCCESS
     assert len(payload.cmds) == 32
+    assert payload.cmds[0] == 0x18
+    assert payload.cmds[4] == 0x03
+    assert payload.cmds[6] == 0x07
+    assert payload.cmds[7] == 0x07
     for command in (
+        PldmPlatformMonitoringCmdCodes.GetTerminusUID,
         PldmPlatformMonitoringCmdCodes.SetEventReceiver,
         PldmPlatformMonitoringCmdCodes.PlatformEventMessage,
         PldmPlatformMonitoringCmdCodes.PollForPlatformEventMessage,
         PldmPlatformMonitoringCmdCodes.EventMessageSupported,
         PldmPlatformMonitoringCmdCodes.EventMessageBufferSize,
+        PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable,
         PldmPlatformMonitoringCmdCodes.GetSensorReading,
+        PldmPlatformMonitoringCmdCodes.SetStateSensorEnables,
+        PldmPlatformMonitoringCmdCodes.GetStateSensorReadings,
+        PldmPlatformMonitoringCmdCodes.SetNumericEffecterEnable,
+        PldmPlatformMonitoringCmdCodes.SetNumericEffecterValue,
+        PldmPlatformMonitoringCmdCodes.GetNumericEffecterValue,
+        PldmPlatformMonitoringCmdCodes.SetStateEffecterEnables,
+        PldmPlatformMonitoringCmdCodes.SetStateEffecterStates,
+        PldmPlatformMonitoringCmdCodes.GetStateEffecterStates,
         PldmPlatformMonitoringCmdCodes.GetPDRRepositoryInfo,
         PldmPlatformMonitoringCmdCodes.GetPDR,
     ):
@@ -616,6 +719,475 @@ def test_pdrs_are_derived_from_configured_sensors_and_match_readings() -> None:
 
     assert struct.unpack_from("<H", pdr, 12)[0] == 7
     assert reading.presentReading8 == 0x55
+
+
+def test_numeric_sensor_pdr_without_sensor_definition_is_synthesized() -> None:
+    """A requester enables sensors it discovered from GetPDR, so advertised IDs must be servable."""
+    sensor_id = 0x2201
+    record = NumericSensorPdr(
+        record_handle=0x31,
+        sensor_id=sensor_id,
+        data_size=GetSensorReadingDataSizeEnum.UINT16,
+        entity_type=0x1234,
+        entity_instance=3,
+        container_id=0x42,
+        base_unit=5,
+        max_readable=400,
+        min_readable=100,
+        range_field_support=0b01111111,
+        nominal_value=250,
+        normal_max=300,
+        normal_min=200,
+        warning_high=350,
+        warning_low=150,
+        critical_high=390,
+        critical_low=110,
+    )
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([record]))
+    ctx = _ctx()
+
+    sensor = behavior.profile.sensors[sensor_id]
+    enable = _single_pldm(_get_reply(behavior, _set_numeric_sensor_enable_request(sensor_id), ctx))
+    reading = _single_pldm(_get_reply(behavior, _sensor_request(sensor_id), ctx)).getlayer(GetSensorReadingPacket)
+
+    assert sensor.data_size == GetSensorReadingDataSizeEnum.UINT16
+    assert (sensor.entity_type, sensor.entity_instance, sensor.container_id, sensor.base_unit) == (0x1234, 3, 0x42, 5)
+    assert (sensor.warning_high, sensor.warning_low, sensor.critical_high, sensor.critical_low) == (350, 150, 390, 110)
+    assert enable.completion_code == CompletionCodes.SUCCESS
+    assert reading.sensorDataSize == GetSensorReadingDataSizeEnum.UINT16
+    assert reading.presentReading16 == 250
+
+
+def test_synthesized_numeric_sensor_reading_uses_declared_range_without_nominal_value() -> None:
+    record = NumericSensorPdr(
+        record_handle=0x32,
+        sensor_id=0x2202,
+        data_size=GetSensorReadingDataSizeEnum.UINT16,
+        min_readable=1000,
+        max_readable=2000,
+        range_field_support=0,
+    )
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([record]))
+
+    reading = _single_pldm(_get_reply(behavior, _sensor_request(0x2202), _ctx())).getlayer(GetSensorReadingPacket)
+
+    assert 1000 <= reading.presentReading16 <= 2000
+
+
+def test_explicit_sensor_definition_is_not_overridden_by_pdr_synthesis() -> None:
+    """Captured models may patch selected sensor values; PDR synthesis must only fill gaps."""
+    sensor_id = 0x2203
+    record = NumericSensorPdr(
+        record_handle=0x33,
+        sensor_id=sensor_id,
+        data_size=GetSensorReadingDataSizeEnum.UINT16,
+        range_field_support=0b01001001,
+        nominal_value=500,
+        warning_high=600,
+        critical_high=700,
+    )
+    explicit = SensorDefinition(
+        sensor_id=sensor_id,
+        reading=7,
+        data_size=GetSensorReadingDataSizeEnum.UINT8,
+        warning_high=9,
+    )
+    behavior = PldmSensorBehavior(sensors={sensor_id: explicit}, pdr_repository=PdrRepository([record]))
+    sensor = behavior.profile.sensors[sensor_id]
+
+    assert sensor.data_size == GetSensorReadingDataSizeEnum.UINT8
+    assert sensor.warning_high == 9
+    assert sensor.next_reading() == 7
+
+
+def test_state_sensor_pdr_without_sensor_definition_is_synthesized() -> None:
+    record = StateSensorPdr(
+        record_handle=0x34,
+        sensor_id=0x2204,
+        entity_type=0x2222,
+        entity_instance=4,
+        container_id=0x44,
+    )
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([record]))
+
+    sensor = behavior.profile.sensors[0x2204]
+
+    assert (sensor.entity_type, sensor.entity_instance, sensor.container_id) == (0x2222, 4, 0x44)
+
+
+def test_set_state_sensor_enables_and_get_readings_match_wire_layouts() -> None:
+    record = StateSensorPdr(record_handle=1, sensor_id=1, possible_states={0: [0x0A]})
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([record]))
+    ctx = _ctx()
+    enable_request = _set_state_sensor_enables_request(1)
+    reading_request = _get_state_sensor_readings_request(1)
+
+    assert _raw_payload(enable_request.getlayer(PldmHdrPacket)) == bytes.fromhex("0100010000")
+    assert _raw_payload(reading_request.getlayer(PldmHdrPacket)) == bytes.fromhex("01000000")
+
+    enable = _single_pldm(_get_reply(behavior, enable_request, ctx))
+    reading = _single_pldm(_get_reply(behavior, reading_request, ctx))
+
+    assert enable.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(enable) == b""
+    assert reading.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(reading) == bytes.fromhex("01000a000a")
+
+
+def test_composite_state_sensor_enables_are_retained_and_states_advance() -> None:
+    """Composite counts and state values must come from the PDR, not a one-field shortcut."""
+    record = StateSensorPdr(record_handle=1, sensor_id=1, possible_states={0: [1, 2], 1: [3, 4]})
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([record]))
+    ctx = _ctx()
+    request = _set_state_sensor_enables_request(
+        1,
+        struct.pack(
+            "<HBBBBB",
+            1,
+            2,
+            GetSensorReadingOperationalStateEnum.DISABLED,
+            GetSensorReadingEventMsgEnableEnum.EVENTS_ENABLED,
+            GetSensorReadingOperationalStateEnum.ENABLED,
+            GetSensorReadingEventMsgEnableEnum.NO_EVENT_GENERATION,
+        ),
+    )
+
+    enable = _single_pldm(_get_reply(behavior, request, ctx))
+    first = _single_pldm(_get_reply(behavior, _get_state_sensor_readings_request(1), ctx))
+    second = _single_pldm(_get_reply(behavior, _get_state_sensor_readings_request(1), ctx))
+    state_sensor = behavior._state(ctx)["sensors"][1].state_sensor
+
+    assert enable.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(first) == bytes([2, 1, 1, 0, 1, 0, 3, 0, 3])
+    assert _raw_payload(second) == bytes([2, 1, 2, 1, 2, 0, 4, 3, 4])
+    assert state_sensor is not None
+    assert state_sensor.event_message_enables == [
+        GetSensorReadingEventMsgEnableEnum.EVENTS_ENABLED,
+        GetSensorReadingEventMsgEnableEnum.NO_EVENT_GENERATION,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pkt", "completion_code"),
+    [
+        (_set_state_sensor_enables_request(99), 0x80),
+        (_get_state_sensor_readings_request(99), 0x80),
+        (_set_state_sensor_enables_request(1, b"\x01\x00"), CompletionCodes.ERROR_INVALID_LENGTH),
+        (_get_state_sensor_readings_request(1, b"\x01\x00\x00"), CompletionCodes.ERROR_INVALID_LENGTH),
+    ],
+)
+def test_state_sensor_commands_reject_unknown_ids_and_short_requests(pkt, completion_code: int) -> None:
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([StateSensorPdr(record_handle=1, sensor_id=1)]))
+
+    pldm = _single_pldm(_get_reply(behavior, pkt, _ctx()))
+
+    assert pldm.completion_code == completion_code
+
+
+def test_numeric_effecter_enable_and_get_value_match_wire_layouts() -> None:
+    behavior = PldmSensorBehavior(
+        pdr_repository=PdrRepository(
+            [
+                NumericEffecterPdr(
+                    record_handle=1,
+                    effecter_id=0x1002,
+                    effecter_data_size=GetSensorReadingDataSizeEnum.UINT32,
+                )
+            ]
+        )
+    )
+    ctx = _ctx()
+    enable_request = _set_numeric_effecter_enable_request(0x1002, operational_state=1)
+    get_request = _get_numeric_effecter_value_request(0x1002)
+
+    assert _raw_payload(enable_request.getlayer(PldmHdrPacket)) == bytes.fromhex("021001")
+    assert _raw_payload(get_request.getlayer(PldmHdrPacket)) == bytes.fromhex("0210")
+
+    enable = _single_pldm(_get_reply(behavior, enable_request, ctx))
+    value = _single_pldm(_get_reply(behavior, get_request, ctx))
+
+    assert enable.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(enable) == b""
+    assert value.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(value) == bytes.fromhex("04010000000000000000")
+
+
+def test_set_numeric_effecter_value_is_reported_by_get_value() -> None:
+    """SetNumericEffecterValue is enough for requesters to observe their own write."""
+    behavior = PldmSensorBehavior(
+        pdr_repository=PdrRepository(
+            [
+                NumericEffecterPdr(
+                    record_handle=1,
+                    effecter_id=0x1002,
+                    effecter_data_size=GetSensorReadingDataSizeEnum.UINT32,
+                )
+            ]
+        )
+    )
+    ctx = _ctx()
+    set_request = _set_numeric_effecter_value_request(0x1002, GetSensorReadingDataSizeEnum.UINT32, 0x12345678)
+
+    assert _raw_payload(set_request.getlayer(PldmHdrPacket)) == bytes.fromhex("02100478563412")
+
+    set_value = _single_pldm(_get_reply(behavior, set_request, ctx))
+    value = _single_pldm(_get_reply(behavior, _get_numeric_effecter_value_request(0x1002), ctx))
+
+    assert set_value.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(set_value) == b""
+    assert value.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(value) == bytes.fromhex("04007856341278563412")
+
+
+@pytest.mark.parametrize(
+    ("data_size", "set_value", "expected"),
+    [
+        (GetSensorReadingDataSizeEnum.UINT8, 0xFE, bytes.fromhex("0000fefe")),
+        (GetSensorReadingDataSizeEnum.UINT16, 0x1234, bytes.fromhex("020034123412")),
+        (GetSensorReadingDataSizeEnum.SINT16, -7, bytes.fromhex("0300f9fff9ff")),
+    ],
+)
+def test_numeric_effecter_data_size_widths_are_honored(
+    data_size: GetSensorReadingDataSizeEnum,
+    set_value: int,
+    expected: bytes,
+) -> None:
+    behavior = PldmSensorBehavior(
+        pdr_repository=PdrRepository([NumericEffecterPdr(record_handle=1, effecter_id=1, effecter_data_size=data_size)])
+    )
+    ctx = _ctx()
+
+    set_reply = _single_pldm(_get_reply(behavior, _set_numeric_effecter_value_request(1, data_size, set_value), ctx))
+    get_reply = _single_pldm(_get_reply(behavior, _get_numeric_effecter_value_request(1), ctx))
+
+    assert set_reply.completion_code == CompletionCodes.SUCCESS
+    assert get_reply.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(get_reply) == expected
+
+
+def test_numeric_effecter_pdr_without_effecter_definition_is_synthesized() -> None:
+    """Effecters advertised by a PDR repository must be servable even without explicit configuration."""
+    effecter_id = 0x2201
+    record = NumericEffecterPdr(
+        record_handle=0x41,
+        effecter_id=effecter_id,
+        effecter_data_size=GetSensorReadingDataSizeEnum.UINT16,
+        entity_type=0x1234,
+        entity_instance=3,
+        container_id=0x42,
+        base_unit=5,
+        max_settable=400,
+        min_settable=100,
+        range_field_support=0b00000001,
+        nominal_value=250,
+    )
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([record]))
+
+    effecter = behavior.profile.effecters[effecter_id]
+    value = _single_pldm(_get_reply(behavior, _get_numeric_effecter_value_request(effecter_id), _ctx()))
+
+    assert effecter.data_size == GetSensorReadingDataSizeEnum.UINT16
+    assert (effecter.entity_type, effecter.entity_instance, effecter.container_id, effecter.base_unit) == (
+        0x1234,
+        3,
+        0x42,
+        5,
+    )
+    assert (effecter.min_settable, effecter.max_settable) == (100, 400)
+    assert value.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(value) == bytes.fromhex("0200fa00fa00")
+
+
+def test_state_effecter_enables_and_get_states_match_wire_layouts() -> None:
+    behavior = PldmSensorBehavior(
+        pdr_repository=PdrRepository([StateEffecterPdr(record_handle=1, effecter_id=1, possible_states={0: [0]})])
+    )
+    ctx = _ctx()
+    enable_request = _set_state_effecter_enables_request(1, bytes.fromhex("0100010101"))
+    get_request = _get_state_effecter_states_request(1)
+
+    assert _raw_payload(enable_request.getlayer(PldmHdrPacket)) == bytes.fromhex("0100010101")
+    assert _raw_payload(get_request.getlayer(PldmHdrPacket)) == bytes.fromhex("0100")
+
+    enable = _single_pldm(_get_reply(behavior, enable_request, ctx))
+    states = _single_pldm(_get_reply(behavior, get_request, ctx))
+
+    assert enable.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(enable) == b""
+    assert states.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(states) == bytes.fromhex("01010000")
+
+
+def test_set_state_effecter_states_is_reported_by_get_states() -> None:
+    """State effecter writes complete synchronously, so pending and present states match."""
+    behavior = PldmSensorBehavior(
+        pdr_repository=PdrRepository([StateEffecterPdr(record_handle=1, effecter_id=1, possible_states={0: [0, 2]})])
+    )
+    ctx = _ctx()
+    set_request = _set_state_effecter_states_request(1, bytes.fromhex("0100010102"))
+
+    assert _raw_payload(set_request.getlayer(PldmHdrPacket)) == bytes.fromhex("0100010102")
+
+    set_states = _single_pldm(_get_reply(behavior, set_request, ctx))
+    states = _single_pldm(_get_reply(behavior, _get_state_effecter_states_request(1), ctx))
+
+    assert set_states.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(set_states) == b""
+    assert states.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(states) == bytes.fromhex("01000202")
+
+
+def test_composite_state_effecter_states_round_trip() -> None:
+    """Composite effecters must retain each field instead of reporting one shared state."""
+    behavior = PldmSensorBehavior(
+        pdr_repository=PdrRepository(
+            [StateEffecterPdr(record_handle=1, effecter_id=1, possible_states={0: [1, 2], 1: [3, 4]})]
+        )
+    )
+    ctx = _ctx()
+    request = _set_state_effecter_states_request(1, bytes.fromhex("01000201020104"))
+
+    set_states = _single_pldm(_get_reply(behavior, request, ctx))
+    states = _single_pldm(_get_reply(behavior, _get_state_effecter_states_request(1), ctx))
+
+    assert set_states.completion_code == CompletionCodes.SUCCESS
+    assert states.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(states) == bytes([2, 0, 2, 2, 0, 4, 4])
+
+
+def test_state_effecter_pdr_without_effecter_definition_is_synthesized() -> None:
+    record = StateEffecterPdr(
+        record_handle=0x42,
+        effecter_id=0x2202,
+        entity_type=0x2222,
+        entity_instance=4,
+        container_id=0x44,
+        possible_states={0: [1, 2]},
+    )
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([record]))
+
+    effecter = behavior.profile.effecters[0x2202]
+    states = _single_pldm(_get_reply(behavior, _get_state_effecter_states_request(0x2202), _ctx()))
+
+    assert (effecter.entity_type, effecter.entity_instance, effecter.container_id) == (0x2222, 4, 0x44)
+    assert states.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(states) == bytes([1, 0, 1, 1])
+
+
+@pytest.mark.parametrize(
+    ("pkt", "completion_code"),
+    [
+        (_set_numeric_effecter_enable_request(99), 0x80),
+        (_set_numeric_effecter_value_request(99, GetSensorReadingDataSizeEnum.UINT8, 1), 0x80),
+        (_get_numeric_effecter_value_request(99), 0x80),
+        (_set_state_effecter_enables_request(99), 0x80),
+        (_set_state_effecter_states_request(99), 0x80),
+        (_get_state_effecter_states_request(99), 0x80),
+        (
+            _platform_request(PldmPlatformMonitoringCmdCodes.SetNumericEffecterEnable, Raw(b"\x01\x00")),
+            CompletionCodes.ERROR_INVALID_LENGTH,
+        ),
+        (
+            _platform_request(PldmPlatformMonitoringCmdCodes.SetNumericEffecterValue, Raw(b"\x01\x00")),
+            CompletionCodes.ERROR_INVALID_LENGTH,
+        ),
+        (
+            _platform_request(PldmPlatformMonitoringCmdCodes.GetNumericEffecterValue, Raw(b"\x01")),
+            CompletionCodes.ERROR_INVALID_LENGTH,
+        ),
+        (
+            _platform_request(PldmPlatformMonitoringCmdCodes.SetStateEffecterEnables, Raw(b"\x01\x00")),
+            CompletionCodes.ERROR_INVALID_LENGTH,
+        ),
+        (
+            _platform_request(PldmPlatformMonitoringCmdCodes.SetStateEffecterStates, Raw(b"\x01\x00")),
+            CompletionCodes.ERROR_INVALID_LENGTH,
+        ),
+        (
+            _platform_request(PldmPlatformMonitoringCmdCodes.GetStateEffecterStates, Raw(b"\x01")),
+            CompletionCodes.ERROR_INVALID_LENGTH,
+        ),
+    ],
+)
+def test_effecter_commands_reject_unknown_ids_and_short_requests(pkt, completion_code: int) -> None:
+    behavior = PldmSensorBehavior(
+        pdr_repository=PdrRepository(
+            [
+                NumericEffecterPdr(record_handle=1, effecter_id=1),
+                StateEffecterPdr(record_handle=2, effecter_id=2),
+            ]
+        )
+    )
+
+    pldm = _single_pldm(_get_reply(behavior, pkt, _ctx()))
+
+    assert pldm.completion_code == completion_code
+
+
+def test_opaque_effecter_pdr_is_skipped_without_error() -> None:
+    behavior = PldmSensorBehavior(
+        pdr_repository=PdrRepository([OpaquePdr(PdrHeader(1, 1, PDR_TYPE_NUMERIC_EFFECTER, 0, 0), b"")])
+    )
+
+    pldm = _single_pldm(_get_reply(behavior, _get_numeric_effecter_value_request(1), _ctx()))
+
+    assert behavior.profile.effecters == {}
+    assert pldm.completion_code == 0x80  # PLDM_PLATFORM_INVALID_EFFECTER_ID
+
+
+def test_get_terminus_uid_returns_profile_uuid_and_matches_wire_layout() -> None:
+    terminus_uid = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+    behavior = PldmSensorBehavior(terminus_uid=terminus_uid)
+    request = _platform_request(PldmPlatformMonitoringCmdCodes.GetTerminusUID)
+
+    assert _raw_payload(request.getlayer(PldmHdrPacket)) == b""
+
+    pldm = _single_pldm(_get_reply(behavior, request, _ctx()))
+
+    assert pldm.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(pldm) == terminus_uid.bytes
+
+
+def test_get_terminus_uid_falls_back_to_zero_when_no_uuid_is_set() -> None:
+    ctx = _ctx()
+    ctx.endpoint_uuid = None
+
+    pldm = _single_pldm(
+        _get_reply(PldmSensorBehavior(), _platform_request(PldmPlatformMonitoringCmdCodes.GetTerminusUID), ctx)
+    )
+
+    assert pldm.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(pldm) == b"\x00" * 16
+
+
+def test_opaque_pdr_is_skipped_by_sensor_synthesis() -> None:
+    raw = struct.pack("<IBBHH", 0xABC, 1, 0x99, 0, 1) + b"\x00"
+    opaque = decode_pdr(raw)
+
+    behavior = PldmSensorBehavior(pdr_repository=PdrRepository([opaque]))
+
+    assert behavior.profile.sensors == {}
+
+
+def test_warning_fires_when_defined_sensor_has_no_pdr(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="pymctp.automaton.behaviors.pldm_responder")
+
+    PldmSensorBehavior(sensors={0x2205: SensorDefinition(sensor_id=0x2205, reading=1)}, pdr_repository=PdrRepository())
+
+    assert "PLDM sensor/PDR mismatch" in caplog.text
+    assert "sensor definition(s) without PDRs: [8709]" in caplog.text
+
+
+def test_sensor_derived_pdr_path_is_unchanged_and_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    """When no repository is supplied, sensors still generate their own PDR repository."""
+    caplog.set_level(logging.WARNING, logger="pymctp.automaton.behaviors.pldm_responder")
+
+    behavior = PldmSensorBehavior(sensors={7: SensorDefinition(sensor_id=7, reading=0x55)})
+    pdr = behavior.profile.pdr_repository.get_record(0)
+
+    assert pdr is not None
+    assert struct.unpack_from("<H", pdr, 12)[0] == 7
+    assert "PLDM sensor/PDR mismatch" not in caplog.text
 
 
 def test_set_event_receiver_and_poll_for_platform_event_message() -> None:

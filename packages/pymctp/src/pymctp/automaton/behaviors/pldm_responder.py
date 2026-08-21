@@ -17,15 +17,22 @@ from pathlib import Path
 import struct
 import threading
 from typing import TYPE_CHECKING, Any
+import uuid
 
 from scapy.packet import Packet, Raw
 
 from ...layers.mctp.pldm.pdr import (
     PDR_TYPE_ENTITY_AUXILIARY_NAMES,
+    PDR_TYPE_EFFECTER_AUXILIARY_NAMES,
+    PDR_TYPE_NUMERIC_EFFECTER,
     PDR_TYPE_NUMERIC_SENSOR,
     PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+    PDR_TYPE_STATE_EFFECTER,
     PDR_TYPE_STATE_SENSOR,
     PDR_TYPE_TERMINUS_LOCATOR,
+    NumericEffecterPdr,
+    StateEffecterPdr,
+    decode_pdr,
     encode_pdr,
     pdr_from_dict,
 )
@@ -80,12 +87,20 @@ _PLATFORM_CC_INVALID_RECORD_HANDLE = 0x82
 _PLATFORM_CC_INVALID_RECORD_CHANGE_NUMBER = 0x83
 #: DSP0248 SetNumericSensorEnable / GetSensorReading command-specific codes.
 _PLATFORM_CC_INVALID_SENSOR_ID = 0x80
+_PLATFORM_CC_INVALID_EFFECTER_ID = 0x80
 _PLATFORM_CC_EVENT_GENERATION_NOT_SUPPORTED = 0x82
 _PLATFORM_TRANSFER_DONE = 0
 _PLATFORM_EVENT_FORMAT_VERSION = 1
 _PLATFORM_SENSOR_EVENT_NUMERIC_SENSOR_STATE = 2
 _MCTP_TRANSPORT_PROTOCOL_TYPE = 0
 _EVENT_ID_NONE = 0
+_RANGE_FIELD_NOMINAL_VALUE = 0
+_RANGE_FIELD_NORMAL_MAX = 1
+_RANGE_FIELD_NORMAL_MIN = 2
+_RANGE_FIELD_WARNING_HIGH = 3
+_RANGE_FIELD_WARNING_LOW = 4
+_RANGE_FIELD_CRITICAL_HIGH = 5
+_RANGE_FIELD_CRITICAL_LOW = 6
 
 _BASE_COMMANDS = [
     PldmControlCmdCodes.SetTID,
@@ -95,6 +110,7 @@ _BASE_COMMANDS = [
     PldmControlCmdCodes.GetPLDMCommands,
 ]
 _PLATFORM_COMMANDS = [
+    PldmPlatformMonitoringCmdCodes.GetTerminusUID,
     PldmPlatformMonitoringCmdCodes.SetEventReceiver,
     PldmPlatformMonitoringCmdCodes.PlatformEventMessage,
     PldmPlatformMonitoringCmdCodes.PollForPlatformEventMessage,
@@ -102,6 +118,14 @@ _PLATFORM_COMMANDS = [
     PldmPlatformMonitoringCmdCodes.EventMessageBufferSize,
     PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable,
     PldmPlatformMonitoringCmdCodes.GetSensorReading,
+    PldmPlatformMonitoringCmdCodes.SetStateSensorEnables,
+    PldmPlatformMonitoringCmdCodes.GetStateSensorReadings,
+    PldmPlatformMonitoringCmdCodes.SetNumericEffecterEnable,
+    PldmPlatformMonitoringCmdCodes.SetNumericEffecterValue,
+    PldmPlatformMonitoringCmdCodes.GetNumericEffecterValue,
+    PldmPlatformMonitoringCmdCodes.SetStateEffecterEnables,
+    PldmPlatformMonitoringCmdCodes.SetStateEffecterStates,
+    PldmPlatformMonitoringCmdCodes.GetStateEffecterStates,
     PldmPlatformMonitoringCmdCodes.GetPDRRepositoryInfo,
     PldmPlatformMonitoringCmdCodes.GetPDR,
 ]
@@ -358,8 +382,58 @@ class SensorSimulation:
 
 
 @dataclass
+class StateSensorSimulation:
+    """Simple state source for composite PLDM state sensors."""
+
+    possible_states: dict[int, Iterable[int]] = field(default_factory=lambda: {0: [0]})
+    operational_states: list[GetSensorReadingOperationalStateEnum | int] = field(default_factory=list)
+    event_message_enables: list[GetSensorReadingEventMsgEnableEnum | int] = field(default_factory=list)
+    present_states: list[int] = field(default_factory=list)
+    previous_states: list[int] = field(default_factory=list)
+    event_states: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.possible_states = {
+            int(state_set): [int(state) for state in states] for state_set, states in self.possible_states.items()
+        }
+        count = self.composite_count
+        first_states = [states[0] if states else 0 for states in self.possible_states.values()]
+        self.operational_states = [
+            GetSensorReadingOperationalStateEnum(value)
+            for value in _state_list(self.operational_states, count, GetSensorReadingOperationalStateEnum.ENABLED)
+        ]
+        self.event_message_enables = [
+            GetSensorReadingEventMsgEnableEnum(value)
+            for value in _state_list(
+                self.event_message_enables,
+                count,
+                GetSensorReadingEventMsgEnableEnum.NO_EVENT_GENERATION,
+            )
+        ]
+        self.present_states = [int(value) for value in _state_list(self.present_states, count, first_states)]
+        self.previous_states = [int(value) for value in _state_list(self.previous_states, count, 0)]
+        self.event_states = [int(value) for value in _state_list(self.event_states, count, self.present_states)]
+
+    @property
+    def composite_count(self) -> int:
+        return len(self.possible_states)
+
+    def next_readings(self) -> list[tuple[GetSensorReadingOperationalStateEnum, int, int, int]]:
+        readings = list(
+            zip(self.operational_states, self.present_states, self.previous_states, self.event_states, strict=False)
+        )
+        for index, states in enumerate(self.possible_states.values()):
+            present = self.present_states[index]
+            next_state = _next_state_value(states, present)
+            self.previous_states[index] = present
+            self.present_states[index] = next_state
+            self.event_states[index] = next_state
+        return readings
+
+
+@dataclass
 class SensorDefinition:
-    """A numeric PLDM sensor definition and its current reading source."""
+    """A PLDM sensor definition and its current reading source."""
 
     sensor_id: int
     reading: ReadingSource = 0
@@ -378,6 +452,7 @@ class SensorDefinition:
     warning_low: ReadingValue | None = None
     critical_high: ReadingValue | None = None
     critical_low: ReadingValue | None = None
+    state_sensor: StateSensorSimulation | dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.sensor_id = int(self.sensor_id)
@@ -389,6 +464,8 @@ class SensorDefinition:
         self.event_message_enable = GetSensorReadingEventMsgEnableEnum(self.event_message_enable)
         if isinstance(self.simulation, dict):
             self.simulation = SensorSimulation(**self.simulation)
+        if isinstance(self.state_sensor, dict):
+            self.state_sensor = StateSensorSimulation(**self.state_sensor)
         if self.simulation is not None:
             self.warning_high = self.warning_high if self.warning_high is not None else self.simulation.warning_high
             self.warning_low = self.warning_low if self.warning_low is not None else self.simulation.warning_low
@@ -413,6 +490,83 @@ class SensorDefinition:
         if self.warning_low is not None and value <= float(self.warning_low):
             return GetSensorReadingPresentEnum.LOWERWARNING
         return GetSensorReadingPresentEnum.NORMAL
+
+
+@dataclass
+class StateEffecterSimulation:
+    """Current state for a composite PLDM state effecter."""
+
+    possible_states: dict[int, Iterable[int]] = field(default_factory=lambda: {0: [0]})
+    operational_states: list[GetSensorReadingOperationalStateEnum | int] = field(default_factory=list)
+    event_message_enables: list[GetSensorReadingEventMsgEnableEnum | int] = field(default_factory=list)
+    pending_states: list[int] = field(default_factory=list)
+    present_states: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.possible_states = {
+            int(state_set): [int(state) for state in states] for state_set, states in self.possible_states.items()
+        }
+        count = self.composite_count
+        first_states = [states[0] if states else 0 for states in self.possible_states.values()]
+        self.operational_states = [
+            GetSensorReadingOperationalStateEnum(value)
+            for value in _state_list(self.operational_states, count, GetSensorReadingOperationalStateEnum.ENABLED)
+        ]
+        self.event_message_enables = [
+            GetSensorReadingEventMsgEnableEnum(value)
+            for value in _state_list(
+                self.event_message_enables,
+                count,
+                GetSensorReadingEventMsgEnableEnum.NO_EVENT_GENERATION,
+            )
+        ]
+        self.pending_states = [int(value) for value in _state_list(self.pending_states, count, first_states)]
+        self.present_states = [int(value) for value in _state_list(self.present_states, count, first_states)]
+
+    @property
+    def composite_count(self) -> int:
+        return len(self.possible_states)
+
+    def states(self) -> list[tuple[GetSensorReadingOperationalStateEnum, int, int]]:
+        return list(zip(self.operational_states, self.pending_states, self.present_states, strict=False))
+
+    def set_states(self, requests: Iterable[tuple[int, int]]) -> bool:
+        for index, (set_request, effecter_state) in enumerate(requests):
+            if not set_request:
+                continue
+            possible_states = list(self.possible_states.values())[index]
+            if possible_states and int(effecter_state) not in possible_states:
+                return False
+            self.pending_states[index] = int(effecter_state)
+            self.present_states[index] = int(effecter_state)
+        return True
+
+
+@dataclass
+class EffecterDefinition:
+    """A PLDM effecter definition and current reported value or state."""
+
+    effecter_id: int
+    data_size: GetSensorReadingDataSizeEnum = GetSensorReadingDataSizeEnum.UINT8
+    operational_state: GetSensorReadingOperationalStateEnum = GetSensorReadingOperationalStateEnum.ENABLED
+    event_message_enable: GetSensorReadingEventMsgEnableEnum = GetSensorReadingEventMsgEnableEnum.NO_EVENT_GENERATION
+    pending_value: ReadingValue = 0
+    present_value: ReadingValue = 0
+    entity_type: int = 0
+    entity_instance: int = 1
+    container_id: int = 0
+    base_unit: int = 0
+    min_settable: ReadingValue | None = None
+    max_settable: ReadingValue | None = None
+    state_effecter: StateEffecterSimulation | dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.effecter_id = int(self.effecter_id)
+        self.data_size = GetSensorReadingDataSizeEnum(self.data_size)
+        self.operational_state = GetSensorReadingOperationalStateEnum(self.operational_state)
+        self.event_message_enable = GetSensorReadingEventMsgEnableEnum(self.event_message_enable)
+        if isinstance(self.state_effecter, dict):
+            self.state_effecter = StateEffecterSimulation(**self.state_effecter)
 
 
 @dataclass
@@ -709,6 +863,7 @@ class PldmSensorProfile:
     """PLDM Type 2 sensors served by ``PldmSensorBehavior``."""
 
     sensors: dict[int, SensorDefinition] = field(default_factory=dict)
+    effecters: dict[int, EffecterDefinition] = field(default_factory=dict)
     pdr_repository: PdrRepository | list[PdrRecord] | None = None
     pdrs_from: str | None = None
     emit_events: bool = False
@@ -716,26 +871,36 @@ class PldmSensorProfile:
     event_poll_chunk_size: int = 256
     event_msg_tag: int = 0
     event_timeout_s: float = 0.5
+    terminus_uid: uuid.UUID | str | bytes | None = None
 
     def __post_init__(self) -> None:
         configured_sensors = _coerce_sensors(self.sensors)
+        configured_effecters = _coerce_effecters(self.effecters)
         loaded_repository: PdrRepository | None = None
         loaded_sensors: dict[int, SensorDefinition] = {}
         if self.pdrs_from:
             loaded_repository, loaded_sensors = _load_pdrs_from(self.pdrs_from)
         loaded_sensors.update(configured_sensors)
         self.sensors = loaded_sensors
+        self.effecters = configured_effecters
         if self.pdr_repository is None:
-            self.pdr_repository = loaded_repository if loaded_repository is not None else _derive_pdr_repository(self.sensors)
+            self.pdr_repository = (
+                loaded_repository if loaded_repository is not None else _derive_pdr_repository(self.sensors, self.effecters)
+            )
         elif isinstance(self.pdr_repository, PdrRepository):
             pass
         else:
             self.pdr_repository = PdrRepository(list(self.pdr_repository))
+        self.sensors.update(_synthesized_sensors_from_pdrs(self.pdr_repository, self.sensors))
+        self.effecters.update(_synthesized_effecters_from_pdrs(self.pdr_repository, self.effecters))
+        _warn_sensor_pdr_mismatches(self.sensors, self.pdr_repository)
+        _warn_effecter_pdr_mismatches(self.effecters, self.pdr_repository)
         self.emit_events = bool(self.emit_events)
         self.event_buffer_size = int(self.event_buffer_size)
         self.event_poll_chunk_size = int(self.event_poll_chunk_size)
         self.event_msg_tag = int(self.event_msg_tag)
         self.event_timeout_s = float(self.event_timeout_s)
+        self.terminus_uid = _coerce_uuid(self.terminus_uid)
 
 
 class PldmSensorBehavior(Behavior):
@@ -746,12 +911,17 @@ class PldmSensorBehavior(Behavior):
         *,
         profile: PldmSensorProfile | dict[str, Any] | None = None,
         sensors: dict[int, SensorDefinition | dict[str, Any] | ReadingSource] | None = None,
+        effecters: dict[int, EffecterDefinition | dict[str, Any] | ReadingValue] | None = None,
         **overrides: Any,
     ) -> None:
         sensor_profile = self._coerce_profile(profile)
         data = {item.name: getattr(sensor_profile, item.name) for item in fields(PldmSensorProfile)}
         if sensors is not None:
             data["sensors"] = sensors
+            if "pdr_repository" not in overrides:
+                data["pdr_repository"] = None
+        if effecters is not None:
+            data["effecters"] = effecters
             if "pdr_repository" not in overrides:
                 data["pdr_repository"] = None
         if overrides.get("pdrs_from") is not None and "pdr_repository" not in overrides:
@@ -894,8 +1064,17 @@ class PldmSensorBehavior(Behavior):
             return self._reply(pkt, ctx, None, CompletionCodes.ERROR_UNSUPPORTED_CMD)
 
         handlers = {
+            PldmPlatformMonitoringCmdCodes.GetTerminusUID: self._get_terminus_uid,
             PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable: self._set_numeric_sensor_enable,
             PldmPlatformMonitoringCmdCodes.GetSensorReading: self._get_sensor_reading,
+            PldmPlatformMonitoringCmdCodes.SetStateSensorEnables: self._set_state_sensor_enables,
+            PldmPlatformMonitoringCmdCodes.GetStateSensorReadings: self._get_state_sensor_readings,
+            PldmPlatformMonitoringCmdCodes.SetNumericEffecterEnable: self._set_numeric_effecter_enable,
+            PldmPlatformMonitoringCmdCodes.SetNumericEffecterValue: self._set_numeric_effecter_value,
+            PldmPlatformMonitoringCmdCodes.GetNumericEffecterValue: self._get_numeric_effecter_value,
+            PldmPlatformMonitoringCmdCodes.SetStateEffecterEnables: self._set_state_effecter_enables,
+            PldmPlatformMonitoringCmdCodes.SetStateEffecterStates: self._set_state_effecter_states,
+            PldmPlatformMonitoringCmdCodes.GetStateEffecterStates: self._get_state_effecter_states,
             PldmPlatformMonitoringCmdCodes.GetPDRRepositoryInfo: self._get_pdr_repository_info,
             PldmPlatformMonitoringCmdCodes.GetPDR: self._get_pdr,
             PldmPlatformMonitoringCmdCodes.SetEventReceiver: self._set_event_receiver,
@@ -942,6 +1121,11 @@ class PldmSensorBehavior(Behavior):
         sensor.event_message_enable = events
         return self._reply(pkt, ctx, None, CompletionCodes.SUCCESS)
 
+    def _get_terminus_uid(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        if _pldm_payload_bytes(pldm):
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+        return self._reply(pkt, ctx, _terminus_uid_bytes(ctx, self.profile.terminus_uid), CompletionCodes.SUCCESS)
+
     def _get_sensor_reading(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
         request = pkt.getlayer(GetSensorReadingPacket)
         if request is None:
@@ -954,6 +1138,195 @@ class PldmSensorBehavior(Behavior):
         reading = sensor.next_reading()
         self._record_threshold_transition(ctx, sensor, reading)
         payload = _sensor_reading_payload(sensor, reading)
+        return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
+
+    def _set_state_sensor_enables(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 3:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        sensor_id, composite_count = struct.unpack_from("<HB", data)
+        expected_size = 3 + (int(composite_count) * 2)
+        if len(data) < expected_size:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        state_sensor = self._state_sensor(ctx, sensor_id)
+        if state_sensor is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_SENSOR_ID)
+        if composite_count != state_sensor.composite_count:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+
+        operational_states: list[GetSensorReadingOperationalStateEnum] = []
+        event_enables: list[GetSensorReadingEventMsgEnableEnum] = []
+        offset = 3
+        for _ in range(composite_count):
+            operational_state, event_message_enable = struct.unpack_from("<BB", data, offset)
+            offset += 2
+            try:
+                operational_states.append(GetSensorReadingOperationalStateEnum(operational_state))
+            except ValueError:
+                return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+            try:
+                event_enables.append(GetSensorReadingEventMsgEnableEnum(event_message_enable))
+            except ValueError:
+                return self._reply(pkt, ctx, None, _PLATFORM_CC_EVENT_GENERATION_NOT_SUPPORTED)
+
+        state_sensor.operational_states = operational_states
+        state_sensor.event_message_enables = event_enables
+        return self._reply(pkt, ctx, None, CompletionCodes.SUCCESS)
+
+    def _get_state_sensor_readings(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 4:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        sensor_id, _sensor_rearm, _reserved = struct.unpack_from("<HBB", data)
+        state_sensor = self._state_sensor(ctx, sensor_id)
+        if state_sensor is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_SENSOR_ID)
+
+        payload = bytes([state_sensor.composite_count & 0xFF]) + b"".join(
+            struct.pack("<BBBB", int(operational_state), present_state, previous_state, event_state)
+            for operational_state, present_state, previous_state, event_state in state_sensor.next_readings()
+        )
+        return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
+
+    def _set_numeric_effecter_enable(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 3:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        effecter_id, operational_state = struct.unpack_from("<HB", data)
+        effecter = self._numeric_effecter(ctx, effecter_id)
+        if effecter is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_EFFECTER_ID)
+
+        try:
+            effecter.operational_state = GetSensorReadingOperationalStateEnum(operational_state)
+        except ValueError:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+        return self._reply(pkt, ctx, None, CompletionCodes.SUCCESS)
+
+    def _set_numeric_effecter_value(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 3:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        effecter_id, data_size_value = struct.unpack_from("<HB", data)
+        effecter = self._numeric_effecter(ctx, effecter_id)
+        if effecter is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_EFFECTER_ID)
+        try:
+            data_size = GetSensorReadingDataSizeEnum(data_size_value)
+        except ValueError:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+        if data_size != effecter.data_size:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+
+        value_size = _sensor_value_size(data_size)
+        if len(data) < 3 + value_size:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        value = _decode_numeric_value(data_size, data, 3)
+        effecter.pending_value = value
+        effecter.present_value = value
+        return self._reply(pkt, ctx, None, CompletionCodes.SUCCESS)
+
+    def _get_numeric_effecter_value(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 2:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        (effecter_id,) = struct.unpack_from("<H", data)
+        effecter = self._numeric_effecter(ctx, effecter_id)
+        if effecter is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_EFFECTER_ID)
+
+        payload = (
+            bytes([int(effecter.data_size) & 0xFF, int(effecter.operational_state) & 0xFF])
+            + _encode_sensor_value(effecter.data_size, effecter.pending_value)
+            + _encode_sensor_value(effecter.data_size, effecter.present_value)
+        )
+        return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
+
+    def _set_state_effecter_enables(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 3:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        effecter_id, composite_count = struct.unpack_from("<HB", data)
+        expected_size = 3 + (int(composite_count) * 2)
+        if len(data) < expected_size:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        state_effecter = self._state_effecter(ctx, effecter_id)
+        if state_effecter is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_EFFECTER_ID)
+        if composite_count != state_effecter.composite_count:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+
+        operational_states: list[GetSensorReadingOperationalStateEnum] = []
+        event_enables: list[GetSensorReadingEventMsgEnableEnum] = []
+        offset = 3
+        for _ in range(composite_count):
+            operational_state, event_message_enable = struct.unpack_from("<BB", data, offset)
+            offset += 2
+            try:
+                operational_states.append(GetSensorReadingOperationalStateEnum(operational_state))
+            except ValueError:
+                return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+            try:
+                event_enables.append(GetSensorReadingEventMsgEnableEnum(event_message_enable))
+            except ValueError:
+                return self._reply(pkt, ctx, None, _PLATFORM_CC_EVENT_GENERATION_NOT_SUPPORTED)
+
+        state_effecter.operational_states = operational_states
+        state_effecter.event_message_enables = event_enables
+        return self._reply(pkt, ctx, None, CompletionCodes.SUCCESS)
+
+    def _set_state_effecter_states(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 3:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        effecter_id, composite_count = struct.unpack_from("<HB", data)
+        expected_size = 3 + (int(composite_count) * 2)
+        if len(data) < expected_size:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        state_effecter = self._state_effecter(ctx, effecter_id)
+        if state_effecter is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_EFFECTER_ID)
+        if composite_count != state_effecter.composite_count:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+
+        requests: list[tuple[int, int]] = []
+        offset = 3
+        for _ in range(composite_count):
+            set_request, effecter_state = struct.unpack_from("<BB", data, offset)
+            offset += 2
+            if set_request not in (0, 1):
+                return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+            requests.append((set_request, effecter_state))
+
+        if not state_effecter.set_states(requests):
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+        return self._reply(pkt, ctx, None, CompletionCodes.SUCCESS)
+
+    def _get_state_effecter_states(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 2:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        (effecter_id,) = struct.unpack_from("<H", data)
+        state_effecter = self._state_effecter(ctx, effecter_id)
+        if state_effecter is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_EFFECTER_ID)
+
+        payload = bytes([state_effecter.composite_count & 0xFF]) + b"".join(
+            struct.pack("<BBB", int(operational_state), pending_state, present_state)
+            for operational_state, pending_state, present_state in state_effecter.states()
+        )
         return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
 
     def _get_pdr_repository_info(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
@@ -1179,6 +1552,24 @@ class PldmSensorBehavior(Behavior):
         if sensor.sensor_id not in handles:
             repository.add_record(NumericSensorPdr.from_sensor(sensor))
 
+    def _state_sensor(self, ctx: EndpointContext, sensor_id: int) -> StateSensorSimulation | None:
+        sensor = self._state(ctx)["sensors"].get(int(sensor_id))
+        if sensor is None:
+            return None
+        return sensor.state_sensor
+
+    def _numeric_effecter(self, ctx: EndpointContext, effecter_id: int) -> EffecterDefinition | None:
+        effecter = self._state(ctx)["effecters"].get(int(effecter_id))
+        if effecter is None or effecter.state_effecter is not None:
+            return None
+        return effecter
+
+    def _state_effecter(self, ctx: EndpointContext, effecter_id: int) -> StateEffecterSimulation | None:
+        effecter = self._state(ctx)["effecters"].get(int(effecter_id))
+        if effecter is None:
+            return None
+        return effecter.state_effecter
+
     def _event_loop(self, ctx: EndpointContext) -> None:
         while not self._shutdown.is_set():
             self._event_ready.wait(timeout=0.1)
@@ -1244,6 +1635,7 @@ class PldmSensorBehavior(Behavior):
             state.update(
                 {
                     "sensors": _clone_sensors(self.profile.sensors),
+                    "effecters": _clone_effecters(self.profile.effecters),
                     "pdr_repository": _clone_repository(self.profile.pdr_repository),
                     "pdr_transfers": {},
                     "next_pdr_transfer_handle": 1,
@@ -1334,6 +1726,23 @@ def _coerce_sensors(sensors: dict[int, SensorDefinition | dict[str, Any] | Readi
     return coerced
 
 
+def _coerce_effecters(
+    effecters: dict[int, EffecterDefinition | dict[str, Any] | ReadingValue],
+) -> dict[int, EffecterDefinition]:
+    coerced: dict[int, EffecterDefinition] = {}
+    for effecter_id, effecter in effecters.items():
+        key = int(effecter_id)
+        if isinstance(effecter, EffecterDefinition):
+            coerced[key] = effecter
+        elif isinstance(effecter, dict):
+            data = dict(effecter)
+            data.setdefault("effecter_id", key)
+            coerced[key] = EffecterDefinition(**data)
+        else:
+            coerced[key] = EffecterDefinition(effecter_id=key, pending_value=effecter, present_value=effecter)
+    return coerced
+
+
 def _load_pdrs_from(path: str) -> tuple[PdrRepository, dict[int, SensorDefinition]]:
     model_path = Path(path)
     try:
@@ -1396,16 +1805,39 @@ def _load_pdr_records(pdrs: list[Any], model_path: Path) -> list[PdrRecord]:
             if pdr_type not in _KNOWN_JSON_PDR_TYPES and "data" not in item:
                 msg = f"unknown pdr_type {pdr_type} requires opaque 'data'"
                 raise ValueError(msg)
-            records.append(pdr_from_dict(dict(item)))
+            record = _decode_structured_json_data_pdr(item, pdr_type)
+            records.append(record if record is not None else pdr_from_dict(dict(item)))
         except (KeyError, TypeError, ValueError) as exc:
             msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} has invalid pdrs[{index}]: {exc}"
             raise ValueError(msg) from exc
     return records
 
 
+def _decode_structured_json_data_pdr(item: Mapping[str, Any], pdr_type: int) -> PdrRecord | None:
+    if "data" not in item or pdr_type not in _STRUCTURED_JSON_DATA_PDR_TYPES:
+        return None
+    body = bytes.fromhex(str(item["data"]))
+    header = _PDR_COMMON_HEADER.pack(
+        int(item.get("record_handle", 0)) & 0xFFFFFFFF,
+        int(item.get("header_version", _PDR_HEADER_VERSION)) & 0xFF,
+        pdr_type & 0xFF,
+        int(item.get("record_change_number", 0)) & 0xFFFF,
+        len(body) & 0xFFFF,
+    )
+    try:
+        return decode_pdr(header + body)
+    except ValueError:
+        return None
+
+
 def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
 
+
+_STRUCTURED_JSON_DATA_PDR_TYPES = {
+    PDR_TYPE_NUMERIC_EFFECTER,
+    PDR_TYPE_STATE_EFFECTER,
+}
 
 _KNOWN_JSON_PDR_TYPES = {
     -1,
@@ -1413,6 +1845,9 @@ _KNOWN_JSON_PDR_TYPES = {
     PDR_TYPE_NUMERIC_SENSOR,
     PDR_TYPE_STATE_SENSOR,
     PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+    PDR_TYPE_NUMERIC_EFFECTER,
+    PDR_TYPE_STATE_EFFECTER,
+    PDR_TYPE_EFFECTER_AUXILIARY_NAMES,
     PDR_TYPE_ENTITY_AUXILIARY_NAMES,
 }
 
@@ -1437,8 +1872,30 @@ def _clone_sensors(sensors: dict[int, SensorDefinition]) -> dict[int, SensorDefi
             warning_low=sensor.warning_low,
             critical_high=sensor.critical_high,
             critical_low=sensor.critical_low,
+            state_sensor=_clone_state_simulation(sensor.state_sensor),
         )
         for sensor_id, sensor in sensors.items()
+    }
+
+
+def _clone_effecters(effecters: dict[int, EffecterDefinition]) -> dict[int, EffecterDefinition]:
+    return {
+        effecter_id: EffecterDefinition(
+            effecter_id=effecter.effecter_id,
+            data_size=effecter.data_size,
+            operational_state=effecter.operational_state,
+            event_message_enable=effecter.event_message_enable,
+            pending_value=effecter.pending_value,
+            present_value=effecter.present_value,
+            entity_type=effecter.entity_type,
+            entity_instance=effecter.entity_instance,
+            container_id=effecter.container_id,
+            base_unit=effecter.base_unit,
+            min_settable=effecter.min_settable,
+            max_settable=effecter.max_settable,
+            state_effecter=_clone_state_effecter_simulation(effecter.state_effecter),
+        )
+        for effecter_id, effecter in effecters.items()
     }
 
 
@@ -1455,6 +1912,31 @@ def _clone_simulation(simulation: SensorSimulation | None) -> SensorSimulation |
         critical_high=simulation.critical_high,
         critical_low=simulation.critical_low,
         direction=simulation.direction,
+    )
+
+
+def _clone_state_simulation(simulation: StateSensorSimulation | None) -> StateSensorSimulation | None:
+    if simulation is None:
+        return None
+    return StateSensorSimulation(
+        possible_states={state_set: list(states) for state_set, states in simulation.possible_states.items()},
+        operational_states=list(simulation.operational_states),
+        event_message_enables=list(simulation.event_message_enables),
+        present_states=list(simulation.present_states),
+        previous_states=list(simulation.previous_states),
+        event_states=list(simulation.event_states),
+    )
+
+
+def _clone_state_effecter_simulation(simulation: StateEffecterSimulation | None) -> StateEffecterSimulation | None:
+    if simulation is None:
+        return None
+    return StateEffecterSimulation(
+        possible_states={state_set: list(states) for state_set, states in simulation.possible_states.items()},
+        operational_states=list(simulation.operational_states),
+        event_message_enables=list(simulation.event_message_enables),
+        pending_states=list(simulation.pending_states),
+        present_states=list(simulation.present_states),
     )
 
 
@@ -1492,11 +1974,324 @@ def _reading_field(data_size: GetSensorReadingDataSizeEnum, reading: ReadingValu
     return field_name, value & ((1 << bits) - 1)
 
 
-def _derive_pdr_repository(sensors: dict[int, SensorDefinition]) -> PdrRepository:
+def _derive_pdr_repository(
+    sensors: dict[int, SensorDefinition],
+    effecters: dict[int, EffecterDefinition] | None = None,
+) -> PdrRepository:
     repository = PdrRepository()
     for sensor_id in sorted(sensors):
         repository.add_record(NumericSensorPdr.from_sensor(sensors[sensor_id]))
+    for effecter_id in sorted(effecters or {}):
+        effecter = effecters[effecter_id]
+        if effecter.state_effecter is None:
+            repository.add_record(_numeric_effecter_pdr_from_effecter(effecter, 0x10000 + effecter_id))
+        else:
+            repository.add_record(_state_effecter_pdr_from_effecter(effecter, 0x10000 + effecter_id))
     return repository
+
+
+def _numeric_effecter_pdr_from_effecter(effecter: EffecterDefinition, record_handle: int) -> NumericEffecterPdr:
+    return NumericEffecterPdr(
+        record_handle=record_handle,
+        effecter_id=effecter.effecter_id,
+        effecter_data_size=effecter.data_size,
+        entity_type=effecter.entity_type,
+        entity_instance=effecter.entity_instance,
+        container_id=effecter.container_id,
+        base_unit=effecter.base_unit,
+        max_settable=effecter.max_settable if effecter.max_settable is not None else _max_for_data_size(effecter.data_size),
+        min_settable=effecter.min_settable if effecter.min_settable is not None else _min_for_data_size(effecter.data_size),
+    )
+
+
+def _state_effecter_pdr_from_effecter(effecter: EffecterDefinition, record_handle: int) -> StateEffecterPdr:
+    state_effecter = effecter.state_effecter or StateEffecterSimulation()
+    return StateEffecterPdr(
+        record_handle=record_handle,
+        effecter_id=effecter.effecter_id,
+        entity_type=effecter.entity_type,
+        entity_instance=effecter.entity_instance,
+        container_id=effecter.container_id,
+        possible_states=state_effecter.possible_states,
+    )
+
+
+def _synthesized_sensors_from_pdrs(
+    repository: PdrRepository,
+    existing_sensors: dict[int, SensorDefinition],
+) -> dict[int, SensorDefinition]:
+    sensors: dict[int, SensorDefinition] = {}
+    for record in _sensor_pdr_records(repository):
+        sensor_id = int(record.sensor_id)
+        if sensor_id in existing_sensors:
+            if isinstance(record, StateSensorPdr) and existing_sensors[sensor_id].state_sensor is None:
+                existing_sensors[sensor_id].state_sensor = StateSensorSimulation(possible_states=record.possible_states)
+            continue
+        if sensor_id in sensors:
+            continue
+        if isinstance(record, NumericSensorPdr):
+            sensors[sensor_id] = _sensor_from_numeric_pdr(record)
+        elif isinstance(record, StateSensorPdr):
+            sensors[sensor_id] = _sensor_from_state_pdr(record)
+    return sensors
+
+
+def _synthesized_effecters_from_pdrs(
+    repository: PdrRepository,
+    existing_effecters: dict[int, EffecterDefinition],
+) -> dict[int, EffecterDefinition]:
+    effecters: dict[int, EffecterDefinition] = {}
+    for record in _effecter_pdr_records(repository):
+        effecter_id = int(record.effecter_id)
+        if effecter_id in existing_effecters or effecter_id in effecters:
+            continue
+        if isinstance(record, NumericEffecterPdr):
+            effecters[effecter_id] = _effecter_from_numeric_pdr(record)
+        elif isinstance(record, StateEffecterPdr):
+            effecters[effecter_id] = _effecter_from_state_pdr(record)
+    return effecters
+
+
+def _sensor_pdr_records(repository: PdrRepository) -> Iterable[NumericSensorPdr | StateSensorPdr]:
+    for record in repository.records:
+        decoded = _decode_repository_record(record)
+        if isinstance(decoded, (NumericSensorPdr, StateSensorPdr)):
+            yield decoded
+        elif _is_state_sensor_pdr_like(decoded):
+            yield _state_sensor_pdr_from_like(decoded)
+        elif _is_opaque_state_sensor_pdr(decoded):
+            yield _state_sensor_pdr_from_opaque(decoded)
+
+
+def _effecter_pdr_records(repository: PdrRepository) -> Iterable[NumericEffecterPdr | StateEffecterPdr]:
+    for record in repository.records:
+        decoded = _decode_repository_record(record)
+        if isinstance(decoded, (NumericEffecterPdr, StateEffecterPdr)):
+            yield decoded
+
+
+def _decode_repository_record(record: PdrRecord) -> PdrRecord:
+    if isinstance(record, (NumericSensorPdr, StateSensorPdr, NumericEffecterPdr, StateEffecterPdr)):
+        return record
+    if isinstance(record, (bytes, bytearray)):
+        return decode_pdr(bytes(record))
+    return record
+
+
+def _is_state_sensor_pdr_like(record: PdrRecord) -> bool:
+    return all(hasattr(record, attr) for attr in ("record_handle", "sensor_id", "possible_states"))
+
+
+def _is_opaque_state_sensor_pdr(record: PdrRecord) -> bool:
+    header = getattr(record, "header", None)
+    return getattr(header, "pdr_type", None) == _PDR_TYPE_STATE_SENSOR and hasattr(record, "data")
+
+
+def _state_sensor_pdr_from_like(record: PdrRecord) -> StateSensorPdr:
+    return StateSensorPdr(
+        record_handle=getattr(record, "record_handle"),
+        record_change_number=getattr(record, "record_change_number", 0),
+        terminus_handle=getattr(record, "terminus_handle", 0),
+        sensor_id=getattr(record, "sensor_id"),
+        entity_type=getattr(record, "entity_type", 0),
+        entity_instance=getattr(record, "entity_instance", 1),
+        container_id=getattr(record, "container_id", 0),
+        sensor_init=getattr(record, "sensor_init", 0),
+        sensor_auxiliary_names_pdr=getattr(record, "sensor_auxiliary_names_pdr", 0),
+        possible_states=getattr(record, "possible_states"),
+        trailing_data=getattr(record, "trailing_data", b""),
+    )
+
+
+def _state_sensor_pdr_from_opaque(record: PdrRecord) -> StateSensorPdr:
+    body = bytes(getattr(record, "data"))
+    if len(body) < 13:
+        msg = "State Sensor PDR body is truncated"
+        raise ValueError(msg)
+    (
+        terminus_handle,
+        sensor_id,
+        entity_type,
+        entity_instance,
+        container_id,
+        sensor_init,
+        sensor_auxiliary_names_pdr,
+        possible_states_count,
+    ) = struct.unpack_from("<HHHHHBBB", body)
+    offset = struct.calcsize("<HHHHHBBB")
+    possible_states: dict[int, list[int]] = {}
+    for _ in range(possible_states_count):
+        if offset + 3 > len(body):
+            break
+        state_set_id, possible_states_size = struct.unpack_from("<HB", body, offset)
+        offset += 3
+        remaining = len(body) - offset
+        possible_states_bytes = min(remaining, possible_states_size)
+        if possible_states_size > remaining:
+            possible_states_bytes = min(remaining, (possible_states_size + 7) // 8)
+        possible_states[state_set_id] = _states_from_bitfield(body[offset : offset + possible_states_bytes])
+        offset += possible_states_bytes
+    return StateSensorPdr(
+        record_handle=getattr(record.header, "record_handle"),
+        record_change_number=getattr(record.header, "record_change_number", 0),
+        terminus_handle=terminus_handle,
+        sensor_id=sensor_id,
+        entity_type=entity_type,
+        entity_instance=entity_instance,
+        container_id=container_id,
+        sensor_init=sensor_init,
+        sensor_auxiliary_names_pdr=sensor_auxiliary_names_pdr,
+        possible_states=possible_states,
+        trailing_data=body[offset:],
+    )
+
+
+def _sensor_from_numeric_pdr(record: NumericSensorPdr) -> SensorDefinition:
+    return SensorDefinition(
+        sensor_id=record.sensor_id,
+        reading=_starting_reading_from_numeric_pdr(record),
+        data_size=record.data_size,
+        entity_type=record.entity_type,
+        entity_instance=record.entity_instance,
+        container_id=record.container_id,
+        base_unit=record.base_unit,
+        warning_high=_range_field(record, _RANGE_FIELD_WARNING_HIGH, "warning_high"),
+        warning_low=_range_field(record, _RANGE_FIELD_WARNING_LOW, "warning_low"),
+        critical_high=_range_field(record, _RANGE_FIELD_CRITICAL_HIGH, "critical_high"),
+        critical_low=_range_field(record, _RANGE_FIELD_CRITICAL_LOW, "critical_low"),
+    )
+
+
+def _sensor_from_state_pdr(record: StateSensorPdr) -> SensorDefinition:
+    return SensorDefinition(
+        sensor_id=record.sensor_id,
+        entity_type=record.entity_type,
+        entity_instance=record.entity_instance,
+        container_id=record.container_id,
+        state_sensor=StateSensorSimulation(possible_states=record.possible_states),
+    )
+
+
+def _effecter_from_numeric_pdr(record: NumericEffecterPdr) -> EffecterDefinition:
+    starting_value = _starting_value_from_numeric_effecter_pdr(record)
+    return EffecterDefinition(
+        effecter_id=record.effecter_id,
+        data_size=record.effecter_data_size,
+        pending_value=starting_value,
+        present_value=starting_value,
+        entity_type=record.entity_type,
+        entity_instance=record.entity_instance,
+        container_id=record.container_id,
+        base_unit=record.base_unit,
+        min_settable=record.min_settable,
+        max_settable=record.max_settable,
+    )
+
+
+def _effecter_from_state_pdr(record: StateEffecterPdr) -> EffecterDefinition:
+    return EffecterDefinition(
+        effecter_id=record.effecter_id,
+        entity_type=record.entity_type,
+        entity_instance=record.entity_instance,
+        container_id=record.container_id,
+        state_effecter=StateEffecterSimulation(possible_states=record.possible_states),
+    )
+
+
+def _range_field(record: NumericSensorPdr, bit: int, field_name: str) -> ReadingValue | None:
+    if not int(record.range_field_support) & (1 << bit):
+        return None
+    return getattr(record, field_name)
+
+
+def _starting_reading_from_numeric_pdr(record: NumericSensorPdr) -> ReadingValue:
+    candidates: list[ReadingValue] = []
+    nominal = _range_field(record, _RANGE_FIELD_NOMINAL_VALUE, "nominal_value")
+    if nominal is not None:
+        candidates.append(nominal)
+    normal_min = _range_field(record, _RANGE_FIELD_NORMAL_MIN, "normal_min")
+    normal_max = _range_field(record, _RANGE_FIELD_NORMAL_MAX, "normal_max")
+    if normal_min is not None and normal_max is not None:
+        candidates.append((normal_min + normal_max) / 2)
+    candidates.extend(value for value in (normal_min, normal_max) if value is not None)
+    min_readable, max_readable = _numeric_readable_bounds(record)
+    candidates.append((min_readable + max_readable) / 2)
+    candidates.extend((min_readable, max_readable, 0))
+
+    lower, upper = _normalized_bounds(min_readable, max_readable)
+    for candidate in candidates:
+        if lower <= float(candidate) <= upper:
+            return _coerce_reading_for_data_size(record.data_size, candidate)
+    return _coerce_reading_for_data_size(record.data_size, min(max(candidates[0], lower), upper))
+
+
+def _starting_value_from_numeric_effecter_pdr(record: NumericEffecterPdr) -> ReadingValue:
+    candidates: list[ReadingValue] = []
+    if int(record.range_field_support) & (1 << _RANGE_FIELD_NOMINAL_VALUE):
+        candidates.append(record.nominal_value)
+    if int(record.range_field_support) & (1 << _RANGE_FIELD_NORMAL_MIN) and int(record.range_field_support) & (
+        1 << _RANGE_FIELD_NORMAL_MAX
+    ):
+        candidates.append((record.normal_min + record.normal_max) / 2)
+    min_settable, max_settable = _numeric_settable_bounds(record)
+    candidates.extend((min_settable, max_settable, 0))
+
+    lower, upper = _normalized_bounds(min_settable, max_settable)
+    for candidate in candidates:
+        if lower <= float(candidate) <= upper:
+            return _coerce_reading_for_data_size(record.effecter_data_size, candidate)
+    return _coerce_reading_for_data_size(record.effecter_data_size, min(max(candidates[0], lower), upper))
+
+
+def _numeric_readable_bounds(record: NumericSensorPdr) -> tuple[ReadingValue, ReadingValue]:
+    min_readable = record.min_readable if record.min_readable is not None else _min_for_data_size(record.data_size)
+    max_readable = record.max_readable if record.max_readable is not None else _max_for_data_size(record.data_size)
+    return min_readable, max_readable
+
+
+def _numeric_settable_bounds(record: NumericEffecterPdr) -> tuple[ReadingValue, ReadingValue]:
+    return record.min_settable, record.max_settable
+
+
+def _normalized_bounds(minimum: ReadingValue, maximum: ReadingValue) -> tuple[float, float]:
+    lower = float(minimum)
+    upper = float(maximum)
+    return (lower, upper) if lower <= upper else (upper, lower)
+
+
+def _coerce_reading_for_data_size(data_size: GetSensorReadingDataSizeEnum, value: ReadingValue) -> ReadingValue:
+    coerced = int(round(float(value)))
+    lower = _min_for_data_size(data_size)
+    upper = _max_for_data_size(data_size)
+    return min(max(coerced, lower), upper)
+
+
+def _warn_sensor_pdr_mismatches(sensors: dict[int, SensorDefinition], repository: PdrRepository) -> None:
+    pdr_sensor_ids = {int(record.sensor_id) for record in _sensor_pdr_records(repository)}
+    sensor_ids = set(sensors)
+    missing_definitions = sorted(pdr_sensor_ids - sensor_ids)
+    missing_pdrs = sorted(sensor_ids - pdr_sensor_ids)
+    if not missing_definitions and not missing_pdrs:
+        return
+    logger.warning(
+        "PLDM sensor/PDR mismatch: PDR sensor(s) without definitions: %s; sensor definition(s) without PDRs: %s",
+        missing_definitions,
+        missing_pdrs,
+    )
+
+
+def _warn_effecter_pdr_mismatches(effecters: dict[int, EffecterDefinition], repository: PdrRepository) -> None:
+    pdr_effecter_ids = {int(record.effecter_id) for record in _effecter_pdr_records(repository)}
+    effecter_ids = set(effecters)
+    missing_definitions = sorted(pdr_effecter_ids - effecter_ids)
+    missing_pdrs = sorted(effecter_ids - pdr_effecter_ids)
+    if not missing_definitions and not missing_pdrs:
+        return
+    logger.warning(
+        "PLDM effecter/PDR mismatch: PDR effecter(s) without definitions: %s; effecter definition(s) without PDRs: %s",
+        missing_definitions,
+        missing_pdrs,
+    )
 
 
 def _clone_repository(repository: PdrRepository | list[PdrRecord] | None) -> PdrRepository:
@@ -1579,6 +2374,18 @@ def _encode_sensor_value(data_size: GetSensorReadingDataSizeEnum | int, value: R
     return struct.pack(formats[data_size], int(value))
 
 
+def _decode_numeric_value(data_size: GetSensorReadingDataSizeEnum, data: bytes, offset: int = 0) -> ReadingValue:
+    formats = {
+        GetSensorReadingDataSizeEnum.UINT8: "<B",
+        GetSensorReadingDataSizeEnum.SINT8: "<b",
+        GetSensorReadingDataSizeEnum.UINT16: "<H",
+        GetSensorReadingDataSizeEnum.SINT16: "<h",
+        GetSensorReadingDataSizeEnum.UINT32: "<I",
+        GetSensorReadingDataSizeEnum.SINT32: "<i",
+    }
+    return struct.unpack_from(formats[data_size], data, offset)[0]
+
+
 def _max_for_data_size(data_size: GetSensorReadingDataSizeEnum) -> int:
     return {
         GetSensorReadingDataSizeEnum.UINT8: 0xFF,
@@ -1607,6 +2414,35 @@ def _state_bitfield(states: Iterable[int]) -> bytes:
     return _bitfield_bytes(values, size)
 
 
+def _states_from_bitfield(bitfield: bytes) -> list[int]:
+    states: list[int] = []
+    for byte_index, value in enumerate(bitfield):
+        for bit_index in range(8):
+            if value & (1 << bit_index):
+                states.append((byte_index * 8) + bit_index)
+    return states
+
+
+def _state_list(values: Iterable[Any], count: int, default: Any) -> list[Any]:
+    items = list(values)
+    defaults = list(default) if isinstance(default, list) else [default] * count
+    while len(defaults) < count:
+        defaults.append(defaults[-1] if defaults else 0)
+    items.extend(defaults[len(items) : count])
+    return items[:count]
+
+
+def _next_state_value(states: Iterable[int], present: int) -> int:
+    values = list(states)
+    if not values:
+        return 0
+    try:
+        index = values.index(int(present))
+    except ValueError:
+        return values[0]
+    return values[(index + 1) % len(values)]
+
+
 def _int8(value: int) -> int:
     value = int(value)
     if not -128 <= value <= 127:
@@ -1622,6 +2458,25 @@ def _pldm_payload_bytes(pldm: PldmHdrPacket) -> bytes:
     if payload is None:
         return b""
     return bytes(payload)
+
+
+def _coerce_uuid(value: uuid.UUID | str | bytes | None) -> uuid.UUID | None:
+    if value is None or isinstance(value, uuid.UUID):
+        return value
+    if isinstance(value, bytes):
+        if not value:
+            return None
+        return uuid.UUID(bytes=bytes(value))
+    return uuid.UUID(str(value))
+
+
+def _terminus_uid_bytes(ctx: EndpointContext, configured_uid: uuid.UUID | None) -> bytes:
+    if configured_uid is not None:
+        return configured_uid.bytes
+    endpoint_uuid = _coerce_uuid(getattr(ctx, "endpoint_uuid", None))
+    if endpoint_uuid is None:
+        return b"\x00" * 16
+    return endpoint_uuid.bytes
 
 
 def _slice_count(request_count: int, remaining: int, fallback: int) -> int:
