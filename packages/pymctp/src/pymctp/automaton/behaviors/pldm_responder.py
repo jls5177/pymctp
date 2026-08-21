@@ -1200,8 +1200,15 @@ def _pldm_version_crc32(version_bytes: bytes) -> bytes:
 
 
 def _encode_pldm_version(version: str | int) -> bytes:
+    """Encode a PLDM ``ver32`` field.
+
+    DSP0240 transmits the four BCD-encoded bytes in ``major, minor, update,
+    alpha`` order, so version 1.1.0 is ``F1 F1 F0 00`` on the wire - confirmed
+    against a real PLDM terminus, whose base/platform/FRU/OEM versions all
+    decode this way and whose CRC-32 covers the bytes in that order.
+    """
     if isinstance(version, int):
-        return int(version).to_bytes(4, "little")
+        return int(version).to_bytes(4, "big")
 
     numeric, _, alpha = version.partition("-")
     parts = [int(part) for part in numeric.split(".")]
@@ -1209,10 +1216,14 @@ def _encode_pldm_version(version: str | int) -> bytes:
         parts.append(0)
     major, minor, update = parts[:3]
     alpha_byte = ord(alpha[0]) if alpha else 0
-    encoded = (_bcd_with_final_marker(major) << 24) | (_bcd_with_final_marker(minor) << 16) | (
-        _bcd_with_final_marker(update) << 8
-    ) | alpha_byte
-    return encoded.to_bytes(4, "little")
+    return bytes(
+        (
+            _bcd_with_final_marker(major),
+            _bcd_with_final_marker(minor),
+            _bcd_with_final_marker(update),
+            alpha_byte,
+        )
+    )
 
 
 def _bcd_with_final_marker(value: int) -> int:

@@ -279,8 +279,40 @@ def test_get_pldm_version_returns_single_part_version_bytes() -> None:
     assert pldm.completion_code == CompletionCodes.SUCCESS
     assert payload.NextDataTransferHandle == 0
     assert payload.TransferFlag == GetPLDMVersionTransferFlag.START_AND_END
-    # DSP0240: version data, then a CRC-32 over it.
-    assert bytes(payload.payload) == b"\x00\xf0\xf0\xf1" + binascii.crc32(b"\x00\xf0\xf0\xf1").to_bytes(4, "little")
+    # Byte-for-byte what a real terminus answers for 1.0.0: the ver32 field in
+    # major/minor/update/alpha order, then a CRC-32 over it.
+    assert bytes(payload.payload) == bytes.fromhex("f1f0f000") + bytes.fromhex("b33ce6be")
+
+
+@pytest.mark.parametrize(
+    ("version", "blob"),
+    [
+        # Captured from a real PLDM terminus: ver32 followed by its CRC-32.
+        ("1.1.0", "f1f1f000845624bf"),  # DSP0240 base
+        ("1.3.0", "f1f3f000ea82a0bc"),  # DSP0248 platform monitoring
+        ("1.0.1", "f1f0f100f20dfda7"),  # DSP0257 FRU
+        ("1.0.0", "f1f0f000b33ce6be"),  # OEM
+    ],
+)
+def test_get_pldm_version_matches_real_hardware_byte_for_byte(version: str, blob: str) -> None:
+    """The ver32 field is transmitted major, minor, update, alpha.
+
+    Encoding it the other way round produced ``00 F0 F0 F1`` for 1.0.0, whose
+    leading byte is not even a valid BCD version component.
+    """
+    behavior = PldmBaseBehavior(versions={PldmTypeCodes.CONTROL: [version]})
+    pkt = _base_request(
+        PldmControlCmdCodes.GetPLDMVersion,
+        GetPLDMVersionPacket(
+            DataTransferHandle=0,
+            TransferOperationFlag=GetPLDMVersionOperation.GET_FIRST_PART,
+            PLDMType=PldmTypeCodes.CONTROL,
+        ),
+    )
+
+    pldm = _single_pldm(_get_reply(behavior, pkt, _ctx()))
+
+    assert bytes(pldm.getlayer(GetPLDMVersionPacket).payload) == bytes.fromhex(blob)
 
 
 def test_get_pldm_version_appends_a_crc32_over_every_version() -> None:
