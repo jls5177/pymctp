@@ -271,3 +271,49 @@ class TestQemuI3CStreamEnableEvents:
             assert sock.dynamic_addr == 0x0B
         finally:
             sock.close()
+
+    def test_truncated_inbound_frame_is_reported_as_a_bad_pec(self, fake_qemu, caplog):
+        """A frame cut short in transit must be called out as a transport fault.
+
+        Without the check the truncated tail parses as a short-but-plausible
+        request and the endpoint answers ERROR_INVALID_LENGTH, which reads like
+        a protocol disagreement rather than the corruption it actually is.
+
+        The bytes below are a real capture: a 22-byte PLDM GetPDR request that
+        arrived as 16 bytes, cut off mid-payload.
+        """
+        sock = QemuI3CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i3c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            fake_qemu.send_frame(I3CStreamMsgType.CCC_NOTIFY, bytes([0x07, 0x09]))  # ENTDAA -> addr 0x09
+            assert sock.recv() is None
+            assert sock.dynamic_addr == 0x09
+
+            truncated = bytes.fromhex("01260fc80182025100000000 00000000")
+            fake_qemu.send_frame(I3CStreamMsgType.DATA, truncated)
+            with caplog.at_level("ERROR"):
+                sock.recv()
+
+            assert "bad PEC" in caplog.text
+            assert "truncated" in caplog.text
+        finally:
+            sock.close()
+
+    def test_intact_inbound_frame_passes_the_pec_check(self, fake_qemu, caplog):
+        sock = QemuI3CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i3c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            fake_qemu.send_frame(I3CStreamMsgType.CCC_NOTIFY, bytes([0x07, 0x09]))
+            assert sock.recv() is None
+
+            # Same capture, intact: GetPDRRepositoryInfo with its real PEC.
+            fake_qemu.send_frame(I3CStreamMsgType.DATA, bytes.fromhex("01260fc80181025034"))
+            with caplog.at_level("ERROR"):
+                packet = sock.recv()
+
+            assert "bad PEC" not in caplog.text
+            assert packet is not None
+        finally:
+            sock.close()

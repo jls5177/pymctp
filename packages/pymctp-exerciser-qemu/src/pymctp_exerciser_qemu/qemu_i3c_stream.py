@@ -32,6 +32,7 @@ import struct
 import time
 from enum import IntEnum
 
+import crc8
 from scapy.compat import raw
 from scapy.data import MTU
 from scapy.packet import Packet
@@ -318,6 +319,32 @@ class QemuI3CStreamSocket(SuperSocket):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _check_rx_pec(self, payload: bytes) -> bool:
+        """Verify the PEC of an inbound private write, warning when it fails.
+
+        A bad PEC means the frame was corrupted or cut short in transit.  Left
+        unchecked the truncated bytes are parsed as a valid-looking but short
+        request, and the endpoint answers ERROR_INVALID_LENGTH -- which reads
+        like a protocol disagreement rather than the transport fault it is.
+        """
+        if not self.dynamic_addr:
+            return True
+        crc = crc8.crc8()
+        crc.update(bytes([self.dynamic_addr << 1]) + payload[:-1])
+        expected = crc.digest()[0]
+        if expected == payload[-1]:
+            return True
+        logger.error(
+            "%s: bad PEC on a %d-byte inbound frame (got 0x%02X, expected 0x%02X); "
+            "the frame was corrupted or truncated in transit, so the request below is incomplete: %s",
+            self.id_str,
+            len(payload),
+            payload[-1],
+            expected,
+            payload.hex(" "),
+        )
+        return False
+
     def _dispatch(self, msg_type: int, payload: bytes) -> Packet | None:
         """Dispatch a single decoded ``(msg_type, payload)`` frame."""
         if msg_type == I3CStreamMsgType.DATA:
@@ -325,6 +352,7 @@ class QemuI3CStreamSocket(SuperSocket):
             if len(payload) < 5:
                 logger.warning("%s: DATA frame too short (%d bytes)", self.id_str, len(payload))
                 return None
+            self._check_rx_pec(payload)
             # Strip the trailing PEC byte before parsing MCTP
             mctp_bytes = I3CTransportPacket.strip_pec(payload)
             pkt = TransportHdrPacket(mctp_bytes)
