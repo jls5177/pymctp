@@ -14,9 +14,14 @@ from typing import Any
 
 from pymctp.layers.mctp.pldm.pdr import (
     EffecterAuxiliaryNamesEntry,
+    EffecterAuxiliaryNamesPdr,
+    PDR_TYPE_EFFECTER_AUXILIARY_NAMES,
+    PDR_TYPE_SENSOR_AUXILIARY_NAMES,
     PdrNameString,
     SensorAuxiliaryNamesEntry,
+    SensorAuxiliaryNamesPdr,
     encode_pdr,
+    pdr_from_dict,
     pdr_to_dict,
 )
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import GetSensorReadingDataSizeEnum
@@ -41,6 +46,7 @@ _SENSOR_ID_FIELDS = {"sensor_id", "effecter_id"}
 _NUMERIC_FORMAT_FIELDS = {"data_size", "range_field_format"}
 _IGNORED_ITEM_FIELDS = {"name", "sensor_id", "effecter_id"}
 _PRESET_SENSOR_CLASSES = (TemperatureSensor, PowerSensor, VoltageSensor, CurrentSensor, CounterSensor)
+_AUXILIARY_NAME_PDR_TYPES = {PDR_TYPE_SENSOR_AUXILIARY_NAMES, PDR_TYPE_EFFECTER_AUXILIARY_NAMES}
 
 
 @dataclass(frozen=True)
@@ -60,6 +66,7 @@ def emit_python_module(artifact: Mapping[str, Any]) -> PythonEmission:
     if artifact_data.get("repository_info") is None:
         artifact_data["repository_info"] = {}
     terminus = Terminus.from_artifact(artifact_data)
+    _apply_auxiliary_padding_policy(terminus, artifact_data)
     rendered_items = [_render_item(item) for item in terminus.items]
     imports = _imports_for_rendered_items(rendered_items)
     code = "\n".join(
@@ -147,6 +154,7 @@ def _render_terminus(terminus: Terminus, items: list[_RenderedItem]) -> str:
         "reported_repository_size",
         "reported_largest_record_size",
         "data_transfer_handle_timeout",
+        "auxiliary_record_size",
     ):
         value = getattr(terminus, field_name)
         if value != getattr(Terminus(eid=terminus.eid, tid=terminus.tid), field_name):
@@ -285,8 +293,74 @@ def _item_records_match(left: Any, right: Any) -> bool:
 def _encoded_item_records(item: Any) -> list[bytes]:
     records = [encode_pdr(item.pdr(0))]
     if item.emit_auxiliary_names:
-        records.append(encode_pdr(item.auxiliary_pdr(1)))
+        records.append(encode_pdr(_pad_auxiliary_pdr(item.auxiliary_pdr(1), item.auxiliary_record_size)))
     return records
+
+
+def _apply_auxiliary_padding_policy(terminus: Terminus, artifact: Mapping[str, Any]) -> None:
+    source_records = _auxiliary_source_records(artifact)
+    items = [
+        item
+        for item in terminus.items
+        if not isinstance(item, VerbatimRecord) and item.emit_auxiliary_names and hasattr(item, "auxiliary_trailing_data")
+    ]
+    if len(source_records) != len(items):
+        return
+
+    if not any(_is_nonempty_zero_padding(_source_trailing_data(record)) for record in source_records):
+        return
+
+    record_sizes = [_encoded_artifact_record_size(record) for record in source_records]
+    if len(set(record_sizes)) == 1:
+        terminus.auxiliary_record_size = record_sizes[0]
+        for item in items:
+            if _is_zero_padding(item.auxiliary_trailing_data):
+                item.auxiliary_trailing_data = b""
+        return
+
+    for item, record_size in zip(items, record_sizes, strict=True):
+        if _is_nonempty_zero_padding(item.auxiliary_trailing_data):
+            item.auxiliary_record_size = record_size
+            item.auxiliary_trailing_data = b""
+
+
+def _auxiliary_source_records(artifact: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    pdrs = artifact.get("pdrs", [])
+    if not isinstance(pdrs, list):
+        return []
+    return [
+        pdr
+        for pdr in pdrs
+        if isinstance(pdr, Mapping) and int(pdr.get("pdr_type", -999)) in _AUXILIARY_NAME_PDR_TYPES and "data" not in pdr
+    ]
+
+
+def _encoded_artifact_record_size(record: Mapping[str, Any]) -> int:
+    return len(encode_pdr(pdr_from_dict(dict(record))))
+
+
+def _source_trailing_data(record: Mapping[str, Any]) -> bytes:
+    return bytes.fromhex(str(record.get("trailing_data", "")))
+
+
+def _is_nonempty_zero_padding(data: bytes) -> bool:
+    return bool(data) and not any(data)
+
+
+def _is_zero_padding(data: bytes) -> bool:
+    return not data or not any(data)
+
+
+def _pad_auxiliary_pdr(
+    record: SensorAuxiliaryNamesPdr | EffecterAuxiliaryNamesPdr,
+    record_size: int | None,
+) -> SensorAuxiliaryNamesPdr | EffecterAuxiliaryNamesPdr:
+    if not record_size:
+        return record
+    current_size = len(encode_pdr(record))
+    if current_size <= record_size:
+        record.trailing_data += b"\x00" * (record_size - current_size)
+    return record
 
 
 def _values_equal_for_emit(left: Any, right: Any, *, field_name: str = "") -> bool:

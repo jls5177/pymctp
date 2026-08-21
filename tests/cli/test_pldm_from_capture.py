@@ -25,6 +25,8 @@ from pymctp.layers.mctp.pldm.pdr import (
     PDR_TYPE_NUMERIC_SENSOR,
     PDR_TYPE_SENSOR_AUXILIARY_NAMES,
     PdrHeader,
+    decode_pdr,
+    pdr_to_dict,
 )
 from pymctp.layers.mctp.pldm.pdr import PdrNameString, SensorAuxiliaryNamesEntry, SensorAuxiliaryNamesPdr
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
@@ -291,6 +293,15 @@ def _python_emit_terminus() -> Terminus:
     )
 
 
+def _fixed_auxiliary_size_terminus() -> Terminus:
+    return Terminus(
+        eid=TERMINUS_EID,
+        tid=1,
+        auxiliary_record_size=83,
+        items=[TemperatureSensor(name="TEMP_SENSOR", sensor_id=0x1001, warning_high=85)],
+    )
+
+
 def _load_artifact(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -306,6 +317,25 @@ def _load_terminus_module(path: Path):
 
 def _built_records(terminus: Terminus) -> list[bytes]:
     return terminus.build().pdr_repository.encoded_records()
+
+
+def _auxiliary_record_sizes(records: list[bytes]) -> list[int]:
+    return [
+        len(record)
+        for record in records
+        if PdrHeader.from_bytes(record).pdr_type == PDR_TYPE_SENSOR_AUXILIARY_NAMES
+    ]
+
+
+def _auxiliary_names(records: list[bytes]) -> list[str]:
+    names = []
+    for record in records:
+        if PdrHeader.from_bytes(record).pdr_type != PDR_TYPE_SENSOR_AUXILIARY_NAMES:
+            continue
+        decoded = pdr_to_dict(decode_pdr(record))
+        for group in decoded.get("sensors", []) or decoded.get("effecters", []):
+            names.extend(entry["name"] for entry in group.get("names", []))
+    return names
 
 
 def test_end_to_end_writes_artifact_with_expected_schema(runner: CliRunner, tmp_path: Path) -> None:
@@ -562,6 +592,143 @@ def test_emit_python_uses_presets_and_omits_default_values(runner: CliRunner, tm
     assert "data_size=" not in generated
     assert "range_field_format=" not in generated
     assert "unit_modifier=" not in generated
+
+
+def test_emit_python_uses_auxiliary_padding_policy_for_fixed_size_names(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_fixed_auxiliary_size_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "both",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    generated = (output_dir / f"pldm_terminus_{TERMINUS_EID}.py").read_text(encoding="utf-8")
+    assert "auxiliary_record_size=83" in generated
+    assert "auxiliary_trailing_data=" not in generated
+    json_terminus = Terminus.from_artifact(_load_artifact(output_dir / f"pldm-terminus-{TERMINUS_EID}.json"))
+    python_terminus = _load_terminus_module(output_dir / f"pldm_terminus_{TERMINUS_EID}.py").terminus
+    assert _built_records(python_terminus) == _built_records(json_terminus)
+
+
+def test_auxiliary_padding_policy_survives_renames(runner: CliRunner, tmp_path: Path) -> None:
+    """Renaming is the expected manual edit, so generated padding must resize itself."""
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_fixed_auxiliary_size_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "python",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    terminus = _load_terminus_module(output_dir / f"pldm_terminus_{TERMINUS_EID}.py").terminus
+    item = terminus["TEMP_SENSOR"]
+    item.name = "T"
+    assert _auxiliary_record_sizes(_built_records(terminus)) == [83]
+    item.name = "RENAMED_TEMPERATURE_SENSOR"
+    assert _auxiliary_record_sizes(_built_records(terminus)) == [83]
+
+
+def test_auxiliary_record_size_is_a_floor_not_a_ceiling(runner: CliRunner, tmp_path: Path) -> None:
+    """A name too long for the captured padding must grow the record, not fail.
+
+    Devices commonly emit auxiliary-name records at one fixed size, and matching
+    it keeps an unedited model byte-identical to its capture. But nothing in
+    DSP0248 requires it - every PDR carries its own dataLength - so refusing a
+    longer name would block the edit the model exists to make easy.
+    """
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_fixed_auxiliary_size_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "python",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    terminus = _load_terminus_module(output_dir / f"pldm_terminus_{TERMINUS_EID}.py").terminus
+    long_name = "A_MUCH_LONGER_SENSOR_NAME_THAN_THE_ORIGINAL_PADDING_ALLOWS"
+    terminus["TEMP_SENSOR"].name = long_name
+
+    (size,) = set(_auxiliary_record_sizes(_built_records(terminus)))
+    assert size > 83, "the record has to grow to hold the longer name"
+
+    names = _auxiliary_names(_built_records(terminus))
+    assert long_name in names
+
+
+def test_emit_python_preserves_nonzero_auxiliary_trailing_data(runner: CliRunner, tmp_path: Path) -> None:
+    """Non-padding trailing bytes are device data, not formatting noise."""
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    terminus = Terminus(
+        eid=TERMINUS_EID,
+        tid=1,
+        items=[
+            TemperatureSensor(
+                name="NONZERO_TRAILING_SENSOR",
+                sensor_id=0x1001,
+                auxiliary_trailing_data=b"\x00\x01",
+            )
+        ],
+    )
+    _write_capture(capture, _capture_packets_from_records(_built_records(terminus)))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "both",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    generated = (output_dir / f"pldm_terminus_{TERMINUS_EID}.py").read_text(encoding="utf-8")
+    assert 'auxiliary_trailing_data=bytes.fromhex("0001")' in generated
+    json_terminus = Terminus.from_artifact(_load_artifact(output_dir / f"pldm-terminus-{TERMINUS_EID}.json"))
+    python_terminus = _load_terminus_module(output_dir / f"pldm_terminus_{TERMINUS_EID}.py").terminus
+    assert _built_records(python_terminus) == _built_records(json_terminus)
 
 
 def test_emit_both_writes_both_files_and_default_stays_json_only(runner: CliRunner, tmp_path: Path) -> None:

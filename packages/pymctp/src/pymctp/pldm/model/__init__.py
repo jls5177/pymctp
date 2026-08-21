@@ -704,13 +704,20 @@ def _pad_auxiliary_pdr(
     record: SensorAuxiliaryNamesPdr | EffecterAuxiliaryNamesPdr,
     record_size: int | None,
 ) -> SensorAuxiliaryNamesPdr | EffecterAuxiliaryNamesPdr:
+    """Pad an auxiliary-names record up to *record_size*.
+
+    The size is a floor, not a ceiling. Devices commonly emit these records at
+    one fixed size, and matching it keeps an unedited model byte-identical to
+    the capture -- but nothing in DSP0248 requires it, since every PDR carries
+    its own ``dataLength``. Renaming an item to something longer than the
+    original padding therefore grows the record rather than failing, which is
+    the whole point of being able to edit a name.
+    """
     if not record_size:
         return record
-    current_size = len(encode_pdr(record))
-    if current_size > record_size:
-        msg = f"Auxiliary names PDR is {current_size} bytes; cannot pad to {record_size}"
-        raise ValueError(msg)
-    record.trailing_data += b"\x00" * (record_size - current_size)
+    padding = record_size - len(encode_pdr(record))
+    if padding > 0:
+        record.trailing_data += b"\x00" * padding
     return record
 
 
