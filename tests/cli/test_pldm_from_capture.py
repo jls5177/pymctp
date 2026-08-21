@@ -4,8 +4,12 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import shutil
 import struct
+import subprocess
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -17,7 +21,11 @@ from scapy.packet import Raw
 from pymctp.automaton.behaviors.pldm_responder import NumericSensorPdr, SensorSimulation
 from pymctp.cli.main import cli
 from pymctp.layers.mctp.pldm import PldmHdr
-from pymctp.layers.mctp.pldm.pdr import PDR_TYPE_NUMERIC_SENSOR, PDR_TYPE_SENSOR_AUXILIARY_NAMES
+from pymctp.layers.mctp.pldm.pdr import (
+    PDR_TYPE_NUMERIC_SENSOR,
+    PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+    PdrHeader,
+)
 from pymctp.layers.mctp.pldm.pdr import PdrNameString, SensorAuxiliaryNamesEntry, SensorAuxiliaryNamesPdr
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
     GetSensorReadingDataSizeEnum,
@@ -26,6 +34,7 @@ from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
 from pymctp.layers.mctp.pldm.types import CompletionCodes, PldmControlCmdCodes, PldmTypeCodes
 from pymctp.layers.mctp.transport import TransportHdr
 from pymctp.layers.mctp.types import MsgTypes
+from pymctp.pldm.model import TemperatureSensor, Terminus
 
 
 REQUESTER_EID = 0x20
@@ -251,8 +260,52 @@ def _synthetic_packets() -> list[object]:
     ]
 
 
+def _capture_packets_from_records(records: list[bytes], *, eid: int = TERMINUS_EID, tid: int = 1) -> list[object]:
+    largest = max((len(record) for record in records), default=0)
+    packets = [
+        *_get_tid_exchange(tid=tid, eid=eid),
+        *_repository_info_exchange(
+            record_count=len(records),
+            repository_size=sum(len(record) for record in records),
+            largest_record_size=largest,
+            eid=eid,
+        ),
+    ]
+    for index, record in enumerate(records, start=3):
+        packets.extend(
+            _get_pdr_exchange(
+                record,
+                record_handle=PdrHeader.from_bytes(record).record_handle,
+                instance_id=index,
+                eid=eid,
+            )
+        )
+    return packets
+
+
+def _python_emit_terminus() -> Terminus:
+    return Terminus(
+        eid=TERMINUS_EID,
+        tid=1,
+        items=[TemperatureSensor(name="TEMP_SENSOR", sensor_id=0x1001, warning_high=85)],
+    )
+
+
 def _load_artifact(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_terminus_module(path: Path):
+    spec = importlib.util.spec_from_file_location(f"generated_{path.stem}", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _built_records(terminus: Terminus) -> list[bytes]:
+    return terminus.build().pdr_repository.encoded_records()
 
 
 def test_end_to_end_writes_artifact_with_expected_schema(runner: CliRunner, tmp_path: Path) -> None:
@@ -426,3 +479,227 @@ def test_artifact_round_trips_through_json_unchanged(runner: CliRunner, tmp_path
     assert result.exit_code == 0, result.output
     artifact = _load_artifact(output_dir / f"pldm-terminus-{TERMINUS_EID}.json")
     assert json.loads(json.dumps(artifact)) == artifact
+
+
+def test_emit_python_writes_importable_module_with_terminus(runner: CliRunner, tmp_path: Path) -> None:
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_python_emit_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "python",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    module_path = output_dir / f"pldm_terminus_{TERMINUS_EID}.py"
+    assert module_path.exists()
+    assert not (output_dir / f"pldm-terminus-{TERMINUS_EID}.json").exists()
+    module = _load_terminus_module(module_path)
+    assert isinstance(module.terminus, Terminus)
+
+
+def test_emit_python_builds_byte_identical_records_to_json_model(runner: CliRunner, tmp_path: Path) -> None:
+    """Python output must be a safe editable replacement for the JSON artifact."""
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_python_emit_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "both",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    json_terminus = Terminus.from_artifact(_load_artifact(output_dir / f"pldm-terminus-{TERMINUS_EID}.json"))
+    python_terminus = _load_terminus_module(output_dir / f"pldm_terminus_{TERMINUS_EID}.py").terminus
+    assert _built_records(python_terminus) == _built_records(json_terminus)
+
+
+def test_emit_python_uses_presets_and_omits_default_values(runner: CliRunner, tmp_path: Path) -> None:
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_python_emit_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "python",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    generated = (output_dir / f"pldm_terminus_{TERMINUS_EID}.py").read_text(encoding="utf-8")
+    assert "TemperatureSensor(" in generated
+    assert "sensor_id=0x1001" in generated
+    assert "warning_high=85" in generated
+    assert "base_unit=" not in generated
+    assert "data_size=" not in generated
+    assert "range_field_format=" not in generated
+    assert "unit_modifier=" not in generated
+
+
+def test_emit_both_writes_both_files_and_default_stays_json_only(runner: CliRunner, tmp_path: Path) -> None:
+    capture = tmp_path / "model.tcpdump.log"
+    default_dir = tmp_path / "default"
+    both_dir = tmp_path / "both"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_python_emit_terminus())))
+
+    default_result = runner.invoke(
+        cli,
+        ["pldm-from-capture", str(capture), "--output", str(default_dir), "--date", "2026-01-02"],
+    )
+    both_result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(both_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "both",
+        ],
+    )
+
+    assert default_result.exit_code == 0, default_result.output
+    assert (default_dir / f"pldm-terminus-{TERMINUS_EID}.json").exists()
+    assert not (default_dir / f"pldm_terminus_{TERMINUS_EID}.py").exists()
+    assert both_result.exit_code == 0, both_result.output
+    assert (both_dir / f"pldm-terminus-{TERMINUS_EID}.json").exists()
+    assert (both_dir / f"pldm_terminus_{TERMINUS_EID}.py").exists()
+
+
+def test_generated_python_passes_ruff(runner: CliRunner, tmp_path: Path) -> None:
+    """Generated modules should be clean enough for users to commit without hand-formatting."""
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_python_emit_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "python",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    ruff = shutil.which("ruff")
+    command = [ruff, "check", str(output_dir / f"pldm_terminus_{TERMINUS_EID}.py")] if ruff else [
+        sys.executable,
+        "-m",
+        "ruff",
+        "check",
+        str(output_dir / f"pldm_terminus_{TERMINUS_EID}.py"),
+    ]
+    completed = subprocess.run(command, cwd=Path(__file__).parents[2], capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_emit_python_verbatim_sensor_round_trips(runner: CliRunner, tmp_path: Path) -> None:
+    """Lossy sensor records must be preserved instead of forced into the readable high-level model."""
+    capture = tmp_path / "verbatim.tcpdump.log"
+    output_dir = tmp_path / "out"
+    record = TemperatureSensor(name="FALLBACK_SENSOR", sensor_id=0x1001).pdr(0)
+    record.record_change_number = 7
+    _write_capture(capture, _capture_packets_from_records([record.to_bytes()]))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "both",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    generated = (output_dir / f"pldm_terminus_{TERMINUS_EID}.py").read_text(encoding="utf-8")
+    assert "VerbatimRecord(" in generated
+    assert "# Verbatim: high-level model would not round-trip byte-for-byte." in generated
+    json_terminus = Terminus.from_artifact(_load_artifact(output_dir / f"pldm-terminus-{TERMINUS_EID}.json"))
+    python_terminus = _load_terminus_module(output_dir / f"pldm_terminus_{TERMINUS_EID}.py").terminus
+    assert _built_records(python_terminus) == _built_records(json_terminus)
+
+
+def test_emit_python_existing_output_file_requires_force(runner: CliRunner, tmp_path: Path) -> None:
+    capture = tmp_path / "model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    module_path = output_dir / f"pldm_terminus_{TERMINUS_EID}.py"
+    module_path.write_text("do not replace", encoding="utf-8")
+    _write_capture(capture, _capture_packets_from_records(_built_records(_python_emit_terminus())))
+
+    refused = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "python",
+        ],
+    )
+
+    assert refused.exit_code != 0
+    assert "refusing to overwrite" in refused.output
+    assert module_path.read_text(encoding="utf-8") == "do not replace"
+
+    overwritten = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "python",
+            "--force",
+        ],
+    )
+
+    assert overwritten.exit_code == 0, overwritten.output
+    assert isinstance(_load_terminus_module(module_path).terminus, Terminus)

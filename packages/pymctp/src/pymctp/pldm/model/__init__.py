@@ -124,6 +124,7 @@ class NumericSensor(_Cloneable):
     auxiliary_name_bytes: bytes | None = None
     auxiliary_entries: list[SensorAuxiliaryNamesEntry] | None = None
     auxiliary_trailing_data: bytes = b""
+    auxiliary_record_size: int | None = None
 
     def __post_init__(self) -> None:
         self.sensor_id = int(self.sensor_id)
@@ -133,6 +134,7 @@ class NumericSensor(_Cloneable):
         elif int(self.range_field_format) in {0, 1, 2, 3, 4, 5}:
             self.range_field_format = GetSensorReadingDataSizeEnum(self.range_field_format)
         self.auxiliary_trailing_data = bytes(self.auxiliary_trailing_data)
+        self.auxiliary_record_size = None if self.auxiliary_record_size is None else int(self.auxiliary_record_size)
 
     def pdr(self, record_handle: int) -> NumericSensorPdr:
         record = NumericSensorPdr(
@@ -268,6 +270,7 @@ class StateSensor(_Cloneable):
     auxiliary_name_bytes: bytes | None = None
     auxiliary_entries: list[SensorAuxiliaryNamesEntry] | None = None
     auxiliary_trailing_data: bytes = b""
+    auxiliary_record_size: int | None = None
 
     def __post_init__(self) -> None:
         self.sensor_id = int(self.sensor_id)
@@ -275,6 +278,8 @@ class StateSensor(_Cloneable):
         self.possible_state_sizes = {int(key): int(value) for key, value in self.possible_state_sizes.items()}
         self.trailing_data = bytes(self.trailing_data)
         self.auxiliary_trailing_data = bytes(self.auxiliary_trailing_data)
+        self.auxiliary_record_size = None if self.auxiliary_record_size is None else int(self.auxiliary_record_size)
+        self.auxiliary_record_size = None if self.auxiliary_record_size is None else int(self.auxiliary_record_size)
 
     def pdr(self, record_handle: int) -> Any:
         if self.possible_state_sizes:
@@ -376,6 +381,7 @@ class NumericEffecter(_Cloneable):
     auxiliary_name_bytes: bytes | None = None
     auxiliary_entries: list[EffecterAuxiliaryNamesEntry] | None = None
     auxiliary_trailing_data: bytes = b""
+    auxiliary_record_size: int | None = None
 
     def __post_init__(self) -> None:
         self.effecter_id = int(self.effecter_id)
@@ -383,6 +389,7 @@ class NumericEffecter(_Cloneable):
         if self.range_field_format is not None and int(self.range_field_format) in {0, 1, 2, 3, 4, 5}:
             self.range_field_format = GetSensorReadingDataSizeEnum(self.range_field_format)
         self.auxiliary_trailing_data = bytes(self.auxiliary_trailing_data)
+        self.auxiliary_record_size = None if self.auxiliary_record_size is None else int(self.auxiliary_record_size)
 
     def pdr(self, record_handle: int) -> NumericEffecterPdr:
         return NumericEffecterPdr(
@@ -472,6 +479,7 @@ class StateEffecter(_Cloneable):
     auxiliary_name_bytes: bytes | None = None
     auxiliary_entries: list[EffecterAuxiliaryNamesEntry] | None = None
     auxiliary_trailing_data: bytes = b""
+    auxiliary_record_size: int | None = None
 
     def __post_init__(self) -> None:
         self.effecter_id = int(self.effecter_id)
@@ -567,11 +575,13 @@ class Terminus:
     reported_repository_size: int | None = None
     reported_largest_record_size: int | None = None
     data_transfer_handle_timeout: int = 0
+    auxiliary_record_size: int | None = None
     verbatim_fallbacks: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.eid = int(self.eid)
         self.tid = int(self.tid)
+        self.auxiliary_record_size = None if self.auxiliary_record_size is None else int(self.auxiliary_record_size)
         self._reindex()
 
     def add(self, item: TerminusItem | bytes | bytearray) -> TerminusItem:
@@ -604,7 +614,8 @@ class Terminus:
             records.append(item.pdr(next_handle))
             next_handle += 1
             if item.emit_auxiliary_names:
-                records.append(item.auxiliary_pdr(next_handle))
+                record_size = item.auxiliary_record_size if item.auxiliary_record_size is not None else self.auxiliary_record_size
+                records.append(_pad_auxiliary_pdr(item.auxiliary_pdr(next_handle), record_size))
                 next_handle += 1
             if isinstance(item, (NumericSensor, StateSensor)):
                 sensors[item.sensor_id] = item.definition()
@@ -687,6 +698,20 @@ def _artifact_data(artifact: str | Path | Mapping[str, Any]) -> Mapping[str, Any
 
 def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
+
+
+def _pad_auxiliary_pdr(
+    record: SensorAuxiliaryNamesPdr | EffecterAuxiliaryNamesPdr,
+    record_size: int | None,
+) -> SensorAuxiliaryNamesPdr | EffecterAuxiliaryNamesPdr:
+    if not record_size:
+        return record
+    current_size = len(encode_pdr(record))
+    if current_size > record_size:
+        msg = f"Auxiliary names PDR is {current_size} bytes; cannot pad to {record_size}"
+        raise ValueError(msg)
+    record.trailing_data += b"\x00" * (record_size - current_size)
+    return record
 
 
 def _model_item_from_artifact_record(item: Mapping[str, Any], next_item: Mapping[str, Any] | None) -> TerminusItem | None:

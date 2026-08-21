@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Build editable PLDM terminus JSON models from packet captures."""
+"""Build editable PLDM terminus models from packet captures."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from pymctp.layers.mctp.pldm.pdr import (
     pdr_to_dict,
 )
 from pymctp.pldm.capture import TerminusCapture, extract_pldm, read_capture
+from pymctp.pldm.model.emitter import emit_python_module
 
 
 _REPOSITORY_INFO_KEYS = (
@@ -72,12 +73,19 @@ _THRESHOLD_BITS = {"warning_high": 0x01, "warning_low": 0x02, "critical_high": 0
     "output_dir",
     required=True,
     type=click.Path(file_okay=False, dir_okay=True, path_type=pathlib.Path),
-    help="Directory that receives pldm-terminus-<eid>.json artifacts.",
+    help="Directory that receives generated terminus artifacts.",
 )
 @click.option("--eid", "eids", multiple=True, type=click.IntRange(0, 255), help="Restrict output to one EID.")
 @click.option("--timezone", default="UTC", show_default=True, help="Timezone for text-capture timestamps.")
 @click.option("--date", default=None, help="Date for text captures without dates (YYYY-MM-DD).")
-@click.option("--force", is_flag=True, help="Overwrite existing JSON artifacts.")
+@click.option("--force", is_flag=True, help="Overwrite existing artifacts.")
+@click.option(
+    "--emit",
+    type=click.Choice(("json", "python", "both")),
+    default="json",
+    show_default=True,
+    help="Artifact format to write.",
+)
 def pldm_from_capture(
     capture: pathlib.Path,
     output_dir: pathlib.Path,
@@ -85,8 +93,9 @@ def pldm_from_capture(
     timezone: str,
     date: str | None,
     force: bool,
+    emit: str,
 ) -> None:
-    """Convert a PLDM packet CAPTURE into editable terminus JSON artifacts."""
+    """Convert a PLDM packet CAPTURE into editable terminus artifacts."""
     if date is not None:
         try:
             datetime.strptime(date, "%Y-%m-%d")
@@ -104,8 +113,8 @@ def pldm_from_capture(
         raise click.ClickException(f"no PLDM terminus found for requested EID(s): {requested}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    targets = {eid: output_dir / f"pldm-terminus-{eid}.json" for eid in selected}
-    existing = [path for path in targets.values() if path.exists()]
+    targets = {eid: _targets(output_dir, eid, emit) for eid in selected}
+    existing = [path for paths in targets.values() for path in paths if path.exists()]
     if existing and not force:
         names = ", ".join(str(path) for path in existing)
         raise click.ClickException(f"refusing to overwrite existing artifact(s): {names}; pass --force to replace")
@@ -113,8 +122,25 @@ def pldm_from_capture(
     for eid, terminus in selected.items():
         decoded_pdrs = _decoded_pdrs(terminus.pdr_records)
         artifact = _artifact(capture.name, terminus, decoded_pdrs)
-        targets[eid].write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
-        _print_summary(terminus, decoded_pdrs, targets[eid])
+        written_paths: list[pathlib.Path] = []
+        json_path = output_dir / f"pldm-terminus-{eid}.json"
+        python_path = output_dir / f"pldm_terminus_{eid}.py"
+        if emit in {"json", "both"}:
+            json_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+            written_paths.append(json_path)
+        if emit in {"python", "both"}:
+            python_path.write_text(emit_python_module(artifact).code, encoding="utf-8")
+            written_paths.append(python_path)
+        _print_summary(terminus, decoded_pdrs, written_paths)
+
+
+def _targets(output_dir: pathlib.Path, eid: int, emit: str) -> list[pathlib.Path]:
+    targets = []
+    if emit in {"json", "both"}:
+        targets.append(output_dir / f"pldm-terminus-{eid}.json")
+    if emit in {"python", "both"}:
+        targets.append(output_dir / f"pldm_terminus_{eid}.py")
+    return targets
 
 
 def _decoded_pdrs(raw_records: Iterable[bytes]) -> list[tuple[Any, dict[str, Any]]]:
@@ -246,13 +272,18 @@ def _json_number(value: Any) -> Any:
 def _print_summary(
     terminus: TerminusCapture,
     decoded_pdrs: list[tuple[Any, dict[str, Any]]],
-    output_path: pathlib.Path,
+    output_paths: list[pathlib.Path],
 ) -> None:
     opaque_count = sum(isinstance(record, (OpaquePdr, RawPdr)) for record, _ in decoded_pdrs)
     structured_count = len(decoded_pdrs) - opaque_count
 
     click.echo(f"Terminus EID {terminus.eid} (TID {_format_tid(terminus.tid)})")
-    click.echo(f"  Output: {output_path}")
+    if len(output_paths) == 1:
+        click.echo(f"  Output: {output_paths[0]}")
+    else:
+        click.echo("  Outputs:")
+        for output_path in output_paths:
+            click.echo(f"    {output_path}")
     if terminus.repository_info is None:
         click.echo(f"  Repository: not observed; recovered {len(decoded_pdrs)} PDR record(s)")
     else:
