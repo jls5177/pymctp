@@ -48,6 +48,22 @@ logger = logging.getLogger(__name__)
 # Wire protocol version sent/checked in HELLO frames: major=1, minor=0.
 PROTO_VERSION = 0x00010000
 
+#: Smallest Max Read Length an MCTP-over-I3C target must support.  The Linux
+#: ``mctp-i3c`` driver calls this "the minimum MTU of 69 bytes": a baseline
+#: 64-byte MCTP payload plus the 4-byte MCTP header plus the trailing PEC.
+#: Note the driver's own ``MCTP_I3C_MINMTU`` is ``64 + 4 == 68`` and it reads
+#: exactly ``MRL`` bytes, so a full 69-byte frame does not survive a controller
+#: that settled on 68 -- see :data:`MCTP_I3C_MAX_PAYLOAD`.
+MCTP_I3C_MIN_MRL = 69
+
+#: Largest MCTP payload that fits a frame the Linux driver can read when the
+#: controller settled on MRL=68: ``68 - 4 (MCTP header) - 1 (message type)
+#: - 1 (PEC) == 62``.  A target that emits a longer frame gets its private
+#: read truncated, the PEC check then fails and the packet is dropped
+#: silently -- visible only as ``rx_crc_errors`` (which lands in the "frame"
+#: column of ``/proc/net/dev``) and a requester timeout.
+MCTP_I3C_MAX_PAYLOAD = 62
+
 # I3C ENEC/DISEC event-enable byte bits (see MIPI I3C ENEC/DISEC CCC).
 I3C_EVENT_ENINT = 0x01  # target IBI (in-band interrupt) enable
 I3C_EVENT_ENCR = 0x02  # controller-role request enable
@@ -214,6 +230,7 @@ class QemuI3CStreamSocket(SuperSocket):
         ``mctp-i3c`` driver.
         """
         sx = raw(I3CTransport(load=x, addr=self.dynamic_addr))
+        self._warn_if_over_mrl(len(sx))
         with contextlib.suppress(AttributeError):
             x.sent_time = time.time()
 
@@ -344,6 +361,27 @@ class QemuI3CStreamSocket(SuperSocket):
 
         logger.warning("%s: unknown frame type 0x%02X (%d payload bytes)", self.id_str, msg_type, len(payload))
         return None
+
+    def _warn_if_over_mrl(self, frame_len: int) -> None:
+        """Warn when a frame cannot be read whole by the controller.
+
+        A private read transfers at most MRL bytes.  Anything longer is
+        truncated mid-frame, so the PEC lands outside the data the controller
+        received and the Linux ``mctp-i3c`` driver drops the packet as a CRC
+        error.  The requester just sees a timeout, which makes this very hard
+        to spot without the counter -- so say it out loud.
+        """
+        mrl = self.mrl
+        if mrl and frame_len > mrl:
+            logger.error(
+                "%s: frame of %d bytes exceeds the negotiated MRL of %d; the controller "
+                "will truncate the read and drop the packet on the PEC check. "
+                "Lower the endpoint's mtu_size to at most %d.",
+                self.id_str,
+                frame_len,
+                mrl,
+                max(1, mrl - 6),
+            )
 
     def _send_raw(self, msg_type: int, body: bytes = b"") -> int:
         """Encode and transmit a frame to the QEMU peer over the TCP stream."""
