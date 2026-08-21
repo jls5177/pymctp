@@ -377,3 +377,56 @@ def _sensor_behavior_from_config(config: dict[str, Any]) -> PldmSensorBehavior:
     sensor = behaviors[-1]
     assert isinstance(sensor, PldmSensorBehavior)
     return sensor
+
+
+def test_in_memory_spec_explains_where_a_relative_path_was_looked_for(tmp_path: Path, monkeypatch) -> None:
+    """A spec built in memory has no directory to anchor relative paths to.
+
+    Nothing records where such a spec "came from", so a relative path can only
+    be resolved against the current directory — which is rarely where the user
+    put the file. The error has to say that outright, otherwise it reads as if
+    the file is missing when it is simply being looked for somewhere else.
+    """
+    monkeypatch.chdir(tmp_path)
+    spec = MachineSpec(
+        name="in-memory",
+        eids=EidMap({"dev": 1}),
+        devices=[
+            DeviceSpec(
+                name="dev",
+                transport={"type": "topology-fake"},
+                roles=["pldm-sensor"],
+                role_options={"pldm-sensor": {"pdrs_from": "model.json"}},
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        spec.device("dev").to_endpoint_config(spec, spec.eids)
+
+    message = str(excinfo.value)
+    assert str(tmp_path / "model.json") in message, "must show the absolute path actually tried"
+    assert "built in memory" in message
+    assert "absolute path" in message, "must say how to fix it"
+
+
+def test_absolute_pdrs_from_is_unaffected_by_the_working_directory(tmp_path: Path, monkeypatch) -> None:
+    artifact = tmp_path / "model.json"
+    _write_artifact(artifact, [])
+    monkeypatch.chdir(tmp_path.parent)
+
+    spec = MachineSpec(
+        name="in-memory",
+        eids=EidMap({"dev": 1}),
+        devices=[
+            DeviceSpec(
+                name="dev",
+                transport={"type": "topology-fake"},
+                roles=["pldm-sensor"],
+                role_options={"pldm-sensor": {"pdrs_from": str(artifact)}},
+            )
+        ],
+    )
+
+    config = spec.device("dev").to_endpoint_config(spec, spec.eids)
+    assert config["role_options"]["pldm-sensor"]["pdrs_from"] == str(artifact)

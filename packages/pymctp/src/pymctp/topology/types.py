@@ -276,8 +276,22 @@ def _resolve_role_option_paths(value: Any, base_dir: Path | None, device_name: s
         return value
 
     path = Path(value)
-    resolved = path if path.is_absolute() or base_dir is None else Path(base_dir) / path
+    if path.is_absolute():
+        resolved = path
+    elif base_dir is not None:
+        resolved = Path(base_dir) / path
+    else:
+        resolved = Path.cwd() / path
+
     if not resolved.exists():
-        msg = f"Device {device_name!r} role option {option_name!r} path {resolved} does not exist"
+        msg = f"Device {device_name!r} role option {option_name!r} file not found: {resolved}"
+        if base_dir is None and not path.is_absolute():
+            # Nothing declared where the spec came from, so a relative path has
+            # no anchor other than wherever the process happens to be running.
+            msg += (
+                f". The relative path {value!r} was resolved against the current directory because this "
+                "machine spec was built in memory rather than loaded from a file. Pass an absolute path, "
+                "or load the spec with load_machine_spec() so paths resolve against the spec's directory."
+            )
         raise ValueError(msg)
     return str(resolved)
