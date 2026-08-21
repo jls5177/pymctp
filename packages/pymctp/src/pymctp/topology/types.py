@@ -10,6 +10,7 @@ import dataclasses
 import logging
 from copy import deepcopy
 from dataclasses import field
+from pathlib import Path
 from typing import Any
 
 from mashumaro import DataClassDictMixin
@@ -113,7 +114,11 @@ class DeviceSpec(DataClassDictMixin):
             "config": config,
             "thread_kwargs": thread_kwargs,
             "role": list(self.roles),
-            "role_options": deepcopy(self.role_options),
+            "role_options": _resolve_role_option_paths(
+                deepcopy(self.role_options),
+                getattr(machine, "_source_dir", None),
+                self.name,
+            ),
             "name": self.name,
             "downstream_endpoints": downstream_endpoints,
         }
@@ -257,3 +262,22 @@ class MachineSpec(DataClassDictMixin):
                 transport_type,
                 sorted(registry),
             )
+
+
+def _resolve_role_option_paths(value: Any, base_dir: Path | None, device_name: str, option_name: str = "") -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _resolve_role_option_paths(item, base_dir, device_name, str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_resolve_role_option_paths(item, base_dir, device_name, option_name) for item in value]
+    if not option_name.endswith("_from") or not isinstance(value, str) or not value:
+        return value
+
+    path = Path(value)
+    resolved = path if path.is_absolute() or base_dir is None else Path(base_dir) / path
+    if not resolved.exists():
+        msg = f"Device {device_name!r} role option {option_name!r} path {resolved} does not exist"
+        raise ValueError(msg)
+    return str(resolved)

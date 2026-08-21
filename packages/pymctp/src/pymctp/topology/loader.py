@@ -17,8 +17,12 @@ from pymctp.topology.types import EidMap, MachineSpec
 def load_machine_spec(path_or_str: str | Path) -> MachineSpec:
     """Load a machine spec from a JSON/YAML file path or serialized string."""
 
+    source_dir = _source_dir_for(path_or_str)
     data = _load_mapping(path_or_str)
-    return MachineSpec.from_dict(data)
+    spec = MachineSpec.from_dict(data)
+    if source_dir is not None:
+        setattr(spec, "_source_dir", source_dir)
+    return spec
 
 
 def dump_machine_spec(spec: MachineSpec, path: str | Path | None = None) -> str | None:
@@ -65,7 +69,18 @@ def apply_overrides(spec: MachineSpec, overrides: Mapping[str, Any] | Sequence[s
     data = spec.to_dict()
     for key, value in _flatten_overrides(overrides).items():
         _apply_override(data, key.split("."), value)
-    return MachineSpec.from_dict(data)
+    updated = MachineSpec.from_dict(data)
+    source_dir = getattr(spec, "_source_dir", None)
+    if source_dir is not None:
+        setattr(updated, "_source_dir", source_dir)
+    return updated
+
+
+def _source_dir_for(path_or_str: str | Path) -> Path | None:
+    if isinstance(path_or_str, Path):
+        return path_or_str.resolve().parent
+    possible_path = Path(path_or_str)
+    return possible_path.resolve().parent if possible_path.exists() else None
 
 
 def _load_mapping(path_or_str: str | Path) -> dict[str, Any]:
