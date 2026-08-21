@@ -106,13 +106,22 @@ class VdPciHdrPacket(Packet):
         return self.payload.answers(other.payload)
 
     def is_request(self, check_payload: bool = True) -> bool:
+        # The MCTP TO (tag owner) bit is authoritative whenever the transport
+        # header is present: it is set on requests and clear on responses.
+        #
+        # Checking the VDPCI ``rq`` bit alone is not safe, because vendor
+        # protocols disagree about it. Microsoft's VDM leaves ``rq`` SET on its
+        # responses, so an ``rq``-based test classified a response as a request
+        # and the endpoint dutifully answered it with an empty reply. The
+        # Cerberus Utility does the opposite, leaving ``rq`` CLEAR on requests.
+        # Only the TO bit is consistent across both.
+        transport = self.underlayer
+        if transport is not None and isinstance(transport, ICanVerifyIfRequest):
+            return bool(transport.is_request(check_payload=False))
         return any(
             [
                 self.rq == RqBit.REQUEST.value,
                 self.payload and isinstance(self.payload, ICanVerifyIfRequest) and self.payload.is_request(),
-                self.underlayer
-                and isinstance(self.underlayer, ICanVerifyIfRequest)
-                and self.underlayer.is_request(check_payload=False),
             ]
         )
 
