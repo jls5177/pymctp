@@ -166,6 +166,13 @@ cli.add_command(
         short_help="Inspect, validate, and run machine topologies.",
     )
 )
+cli.add_command(
+    _LazyCommand(
+        "pldm-from-capture",
+        "pymctp.cli.pldm_from_capture:pldm_from_capture",
+        short_help="Build editable PLDM terminus JSON models from packet captures.",
+    )
+)
 
 
 def main():
