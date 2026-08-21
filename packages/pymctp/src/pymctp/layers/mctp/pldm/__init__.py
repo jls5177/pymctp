@@ -30,3 +30,25 @@ from .type_2_platform_monitoring import (
     PollForPlatformEventMsgPacket,
     GetSensorReadingPacket,
 )
+
+from .pdr import (
+    PDR_HEADER_LEN,
+    PDR_TYPE_ENTITY_AUXILIARY_NAMES,
+    PDR_TYPE_NUMERIC_SENSOR,
+    PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+    PDR_TYPE_STATE_SENSOR,
+    PDR_TYPE_TERMINUS_LOCATOR,
+    EntityAuxiliaryNamesPdr,
+    OpaquePdr,
+    PdrHeader,
+    PdrNameString,
+    RawPdr,
+    SensorAuxiliaryNamesEntry,
+    SensorAuxiliaryNamesPdr,
+    TerminusLocatorPdr,
+    decode_pdr,
+    encode_pdr,
+    pdr_from_dict,
+    pdr_to_dict,
+    split_pdr_records,
+)

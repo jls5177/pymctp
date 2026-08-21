@@ -7,17 +7,28 @@
 from __future__ import annotations
 
 import binascii
+import json
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, fields
 from enum import IntEnum
 import logging
+from pathlib import Path
 import struct
 import threading
 from typing import TYPE_CHECKING, Any
 
 from scapy.packet import Packet, Raw
 
+from ...layers.mctp.pldm.pdr import (
+    PDR_TYPE_ENTITY_AUXILIARY_NAMES,
+    PDR_TYPE_NUMERIC_SENSOR,
+    PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+    PDR_TYPE_STATE_SENSOR,
+    PDR_TYPE_TERMINUS_LOCATOR,
+    encode_pdr,
+    pdr_from_dict,
+)
 from ...layers.mctp.pldm.pldm import PldmHdr, PldmHdrPacket
 from ...layers.mctp.pldm.type1_base import (
     GetPLDMCommandsPacket,
@@ -56,6 +67,7 @@ logger = logging.getLogger(__name__)
 
 ReadingValue = float | int
 ReadingSource = ReadingValue | Callable[[], ReadingValue]
+PdrRecord = Any
 
 _PDR_HEADER_VERSION = 1
 _PDR_TYPE_NUMERIC_SENSOR = 2
@@ -445,7 +457,7 @@ class NumericSensorPdr:
     update_interval: float = 0.0
     max_readable: ReadingValue | None = None
     min_readable: ReadingValue | None = None
-    range_field_format: GetSensorReadingDataSizeEnum | None = None
+    range_field_format: GetSensorReadingDataSizeEnum | int | None = None
     range_field_support: int = 0
     nominal_value: ReadingValue = 0
     normal_max: ReadingValue = 0
@@ -464,7 +476,7 @@ class NumericSensorPdr:
         if self.range_field_format is None:
             self.range_field_format = self.data_size
         else:
-            self.range_field_format = GetSensorReadingDataSizeEnum(self.range_field_format)
+            self.range_field_format = _numeric_range_format(self.range_field_format)
         self.supported_thresholds = self.supported_thresholds or _threshold_support_bits(
             self.warning_high,
             self.warning_low,
@@ -573,11 +585,13 @@ class StateSensorPdr:
     container_id: int = 0
     sensor_init: int = 0
     sensor_auxiliary_names_pdr: int = 0
+    trailing_data: bytes = b""
 
     def __post_init__(self) -> None:
         self.record_handle = int(self.record_handle)
         self.sensor_id = int(self.sensor_id)
         self.possible_states = {int(state_set): [int(state) for state in states] for state_set, states in self.possible_states.items()}
+        self.trailing_data = bytes(self.trailing_data)
 
     def to_bytes(self) -> bytes:
         """Encode this PDR to wire bytes."""
@@ -600,6 +614,7 @@ class StateSensorPdr:
                 len(self.possible_states) & 0xFF,
             )
             + possible
+            + self.trailing_data
         )
         return _pdr_header(self.record_handle, _PDR_TYPE_STATE_SENSOR, self.record_change_number, len(body)) + body
 
@@ -608,20 +623,34 @@ class StateSensorPdr:
 class PdrRepository:
     """In-memory PLDM PDR repository."""
 
-    records: list[NumericSensorPdr | StateSensorPdr | bytes] = field(default_factory=list)
+    records: list[PdrRecord] = field(default_factory=list)
     record_change_number: int = 0
     repository_state: int = 0
+    reported_record_count: int | None = None
+    reported_repository_size: int | None = None
+    reported_largest_record_size: int | None = None
+    data_transfer_handle_timeout: int = 0
 
     def __post_init__(self) -> None:
         self.records = list(self.records)
+        self.record_change_number = int(self.record_change_number)
+        self.repository_state = int(self.repository_state)
+        self.reported_record_count = None if self.reported_record_count is None else int(self.reported_record_count)
+        self.reported_repository_size = (
+            None if self.reported_repository_size is None else int(self.reported_repository_size)
+        )
+        self.reported_largest_record_size = (
+            None if self.reported_largest_record_size is None else int(self.reported_largest_record_size)
+        )
+        self.data_transfer_handle_timeout = int(self.data_transfer_handle_timeout)
 
-    def add_record(self, record: NumericSensorPdr | StateSensorPdr | bytes) -> None:
+    def add_record(self, record: PdrRecord) -> None:
         """Append a PDR record."""
         self.records.append(record)
 
     def encoded_records(self) -> list[bytes]:
         """Return records encoded as PDR wire bytes."""
-        return [record if isinstance(record, bytes) else record.to_bytes() for record in self.records]
+        return [encode_pdr(record) for record in self.records]
 
     def get_record(self, record_handle: int) -> bytes | None:
         """Return the requested record, treating handle zero as the first record."""
@@ -649,14 +678,20 @@ class PdrRepository:
 
     @property
     def record_count(self) -> int:
+        if self.reported_record_count is not None:
+            return self.reported_record_count
         return len(self.records)
 
     @property
     def repository_size(self) -> int:
+        if self.reported_repository_size is not None:
+            return self.reported_repository_size
         return sum(len(record) for record in self.encoded_records())
 
     @property
     def largest_record_size(self) -> int:
+        if self.reported_largest_record_size is not None:
+            return self.reported_largest_record_size
         return max((len(record) for record in self.encoded_records()), default=0)
 
 
@@ -674,7 +709,8 @@ class PldmSensorProfile:
     """PLDM Type 2 sensors served by ``PldmSensorBehavior``."""
 
     sensors: dict[int, SensorDefinition] = field(default_factory=dict)
-    pdr_repository: PdrRepository | list[NumericSensorPdr | StateSensorPdr | bytes] | None = None
+    pdr_repository: PdrRepository | list[PdrRecord] | None = None
+    pdrs_from: str | None = None
     emit_events: bool = False
     event_buffer_size: int = 256
     event_poll_chunk_size: int = 256
@@ -682,9 +718,15 @@ class PldmSensorProfile:
     event_timeout_s: float = 0.5
 
     def __post_init__(self) -> None:
-        self.sensors = _coerce_sensors(self.sensors)
+        configured_sensors = _coerce_sensors(self.sensors)
+        loaded_repository: PdrRepository | None = None
+        loaded_sensors: dict[int, SensorDefinition] = {}
+        if self.pdrs_from:
+            loaded_repository, loaded_sensors = _load_pdrs_from(self.pdrs_from)
+        loaded_sensors.update(configured_sensors)
+        self.sensors = loaded_sensors
         if self.pdr_repository is None:
-            self.pdr_repository = _derive_pdr_repository(self.sensors)
+            self.pdr_repository = loaded_repository if loaded_repository is not None else _derive_pdr_repository(self.sensors)
         elif isinstance(self.pdr_repository, PdrRepository):
             pass
         else:
@@ -712,6 +754,8 @@ class PldmSensorBehavior(Behavior):
             data["sensors"] = sensors
             if "pdr_repository" not in overrides:
                 data["pdr_repository"] = None
+        if overrides.get("pdrs_from") is not None and "pdr_repository" not in overrides:
+            data["pdr_repository"] = None
         if overrides:
             profile_fields = {item.name for item in fields(PldmSensorProfile)}
             unknown = sorted(set(overrides) - profile_fields)
@@ -923,7 +967,7 @@ class PldmSensorBehavior(Behavior):
                 repository.record_count,
                 repository.repository_size,
                 repository.largest_record_size,
-                0,
+                repository.data_transfer_handle_timeout,
             )
         )
         return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
@@ -1290,6 +1334,89 @@ def _coerce_sensors(sensors: dict[int, SensorDefinition | dict[str, Any] | Readi
     return coerced
 
 
+def _load_pdrs_from(path: str) -> tuple[PdrRepository, dict[int, SensorDefinition]]:
+    model_path = Path(path)
+    try:
+        text = model_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        msg = f"PLDM sensor profile option 'pdrs_from' file not found: {model_path}"
+        raise ValueError(msg) from exc
+    except OSError as exc:
+        msg = f"PLDM sensor profile option 'pdrs_from' could not read {model_path}: {exc}"
+        raise ValueError(msg) from exc
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} contains malformed JSON: {exc.msg}"
+        raise ValueError(msg) from exc
+
+    if not isinstance(data, Mapping):
+        msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} must contain a JSON object"
+        raise ValueError(msg)
+
+    pdrs = data.get("pdrs", [])
+    if not isinstance(pdrs, list):
+        msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} field 'pdrs' must be a list"
+        raise ValueError(msg)
+
+    repository = PdrRepository(records=_load_pdr_records(pdrs, model_path))
+    repository_info = data.get("repository_info")
+    if repository_info is not None:
+        if not isinstance(repository_info, Mapping):
+            msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} field 'repository_info' must be an object"
+            raise ValueError(msg)
+        repository.repository_state = int(repository_info.get("repository_state", repository.repository_state))
+        repository.reported_record_count = _optional_int(repository_info.get("record_count"))
+        repository.reported_repository_size = _optional_int(repository_info.get("repository_size"))
+        repository.reported_largest_record_size = _optional_int(repository_info.get("largest_record_size"))
+        repository.data_transfer_handle_timeout = int(
+            repository_info.get("data_transfer_handle_timeout", repository.data_transfer_handle_timeout)
+        )
+
+    sensors = data.get("sensors", {})
+    if not isinstance(sensors, Mapping):
+        msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} field 'sensors' must be an object"
+        raise ValueError(msg)
+    try:
+        return repository, _coerce_sensors(dict(sensors))
+    except (TypeError, ValueError) as exc:
+        msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} has invalid sensors: {exc}"
+        raise ValueError(msg) from exc
+
+
+def _load_pdr_records(pdrs: list[Any], model_path: Path) -> list[PdrRecord]:
+    records: list[PdrRecord] = []
+    for index, item in enumerate(pdrs):
+        if not isinstance(item, Mapping):
+            msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} has invalid pdrs[{index}]: expected object"
+            raise ValueError(msg)
+        try:
+            pdr_type = int(item["pdr_type"])
+            if pdr_type not in _KNOWN_JSON_PDR_TYPES and "data" not in item:
+                msg = f"unknown pdr_type {pdr_type} requires opaque 'data'"
+                raise ValueError(msg)
+            records.append(pdr_from_dict(dict(item)))
+        except (KeyError, TypeError, ValueError) as exc:
+            msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} has invalid pdrs[{index}]: {exc}"
+            raise ValueError(msg) from exc
+    return records
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+_KNOWN_JSON_PDR_TYPES = {
+    -1,
+    PDR_TYPE_TERMINUS_LOCATOR,
+    PDR_TYPE_NUMERIC_SENSOR,
+    PDR_TYPE_STATE_SENSOR,
+    PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+    PDR_TYPE_ENTITY_AUXILIARY_NAMES,
+}
+
+
 def _clone_sensors(sensors: dict[int, SensorDefinition]) -> dict[int, SensorDefinition]:
     return {
         sensor_id: SensorDefinition(
@@ -1372,14 +1499,21 @@ def _derive_pdr_repository(sensors: dict[int, SensorDefinition]) -> PdrRepositor
     return repository
 
 
-def _clone_repository(repository: PdrRepository | list[NumericSensorPdr | StateSensorPdr | bytes] | None) -> PdrRepository:
+def _clone_repository(repository: PdrRepository | list[PdrRecord] | None) -> PdrRepository:
     if repository is None:
         return PdrRepository()
     if not isinstance(repository, PdrRepository):
         return PdrRepository(list(repository))
-    cloned = PdrRepository(record_change_number=repository.record_change_number, repository_state=repository.repository_state)
+    cloned = PdrRepository(
+        record_change_number=repository.record_change_number,
+        repository_state=repository.repository_state,
+        reported_record_count=repository.reported_record_count,
+        reported_repository_size=repository.reported_repository_size,
+        reported_largest_record_size=repository.reported_largest_record_size,
+        data_transfer_handle_timeout=repository.data_transfer_handle_timeout,
+    )
     for record in repository.records:
-        cloned.add_record(record if isinstance(record, bytes) else record.to_bytes())
+        cloned.add_record(encode_pdr(record))
     return cloned
 
 
@@ -1407,7 +1541,15 @@ def _threshold_support_bits(*thresholds: ReadingValue | None) -> int:
     return bits
 
 
-def _sensor_value_size(data_size: GetSensorReadingDataSizeEnum) -> int:
+def _numeric_range_format(data_size: GetSensorReadingDataSizeEnum | int) -> GetSensorReadingDataSizeEnum | int:
+    value = int(data_size)
+    if value in (6, 7):
+        return value
+    return GetSensorReadingDataSizeEnum(value)
+
+
+def _sensor_value_size(data_size: GetSensorReadingDataSizeEnum | int) -> int:
+    data_size = _numeric_range_format(data_size)
     return {
         GetSensorReadingDataSizeEnum.UINT8: 1,
         GetSensorReadingDataSizeEnum.SINT8: 1,
@@ -1415,11 +1557,13 @@ def _sensor_value_size(data_size: GetSensorReadingDataSizeEnum) -> int:
         GetSensorReadingDataSizeEnum.SINT16: 2,
         GetSensorReadingDataSizeEnum.UINT32: 4,
         GetSensorReadingDataSizeEnum.SINT32: 4,
+        6: 4,
+        7: 8,
     }[data_size]
 
 
-def _encode_sensor_value(data_size: GetSensorReadingDataSizeEnum, value: ReadingValue) -> bytes:
-    value = int(value)
+def _encode_sensor_value(data_size: GetSensorReadingDataSizeEnum | int, value: ReadingValue) -> bytes:
+    data_size = _numeric_range_format(data_size)
     formats = {
         GetSensorReadingDataSizeEnum.UINT8: "<B",
         GetSensorReadingDataSizeEnum.SINT8: "<b",
@@ -1427,8 +1571,12 @@ def _encode_sensor_value(data_size: GetSensorReadingDataSizeEnum, value: Reading
         GetSensorReadingDataSizeEnum.SINT16: "<h",
         GetSensorReadingDataSizeEnum.UINT32: "<I",
         GetSensorReadingDataSizeEnum.SINT32: "<i",
+        6: "<f",
+        7: "<d",
     }
-    return struct.pack(formats[data_size], value)
+    if data_size in (6, 7):
+        return struct.pack(formats[data_size], float(value))
+    return struct.pack(formats[data_size], int(value))
 
 
 def _max_for_data_size(data_size: GetSensorReadingDataSizeEnum) -> int:
