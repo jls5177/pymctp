@@ -209,6 +209,136 @@ def test_sensor_auxiliary_names_pdr_exposes_readable_names_and_preserves_padding
     assert pdr_to_dict(decoded)["sensors"][0]["names"][0]["name"] == "SOC_TMP_MAX"
 
 
+def test_sensor_auxiliary_names_dict_editing_readable_name_updates_wire_bytes() -> None:
+    """The editable name field must win over stale name_data left by pdr_to_dict."""
+
+    data = pdr_to_dict(decode_pdr(_SENSOR_AUX_NAMES_RECORD))
+    data["sensors"][0]["names"][0]["name"] = "RENAMED_SENSOR"
+
+    decoded = decode_pdr(encode_pdr(pdr_from_dict(data)))
+
+    assert isinstance(decoded, SensorAuxiliaryNamesPdr)
+    assert decoded.sensors[0].names[0].name == "RENAMED_SENSOR"
+
+
+def test_sensor_auxiliary_names_dict_editing_readable_language_tag_updates_wire_bytes() -> None:
+    """The editable language_tag field must win over stale language_tag_data left by pdr_to_dict."""
+
+    data = pdr_to_dict(decode_pdr(_SENSOR_AUX_NAMES_RECORD))
+    data["sensors"][0]["names"][0]["language_tag"] = "de"
+
+    decoded = decode_pdr(encode_pdr(pdr_from_dict(data)))
+
+    assert isinstance(decoded, SensorAuxiliaryNamesPdr)
+    assert decoded.sensors[0].names[0].language_tag == "de"
+
+
+def test_auxiliary_names_dict_readable_fields_win_when_hex_disagrees() -> None:
+    """Keeping hex fallbacks must not silently discard a user's readable-field edit."""
+
+    data = pdr_to_dict(decode_pdr(_EFFECTER_AUX_NAMES_RECORD))
+    data["effecters"][0]["names"][0]["language_tag"] = "fr"
+    data["effecters"][0]["names"][0]["name"] = "PUMP"
+
+    decoded = decode_pdr(encode_pdr(pdr_from_dict(data)))
+
+    assert isinstance(decoded, EffecterAuxiliaryNamesPdr)
+    assert decoded.effecters[0].names[0].language_tag == "fr"
+    assert decoded.effecters[0].names[0].name == "PUMP"
+
+
+def test_auxiliary_names_decoded_from_bytes_reencode_identically_with_raw_name_fallback() -> None:
+    """Unedited captured records must preserve original bytes, including unusual UTF-16 byte order."""
+
+    name_bytes = "FALLBACK_SENSOR".encode("utf-16-le")
+    body = (
+        (1).to_bytes(2, "little")
+        + (2).to_bytes(2, "little")
+        + b"\x01\x01"
+        + b"en\x00"
+        + name_bytes
+        + b"\x00\x00"
+    )
+    raw = PdrHeader(0x51, 1, PDR_TYPE_SENSOR_AUXILIARY_NAMES, 0, len(body)).to_bytes() + body
+
+    decoded = decode_pdr(raw)
+
+    assert isinstance(decoded, SensorAuxiliaryNamesPdr)
+    assert decoded.sensors[0].names[0].name == "FALLBACK_SENSOR"
+    assert encode_pdr(decoded) == raw
+
+
+def test_auxiliary_names_accepts_unterminated_final_name_without_adding_terminator() -> None:
+    """Some devices omit the final name terminator; decoding it must not make re-encoding lossy."""
+
+    name_bytes = "END_RECORD_SENSOR".encode("utf-16-be")
+    body = (1).to_bytes(2, "little") + (2).to_bytes(2, "little") + b"\x01\x01en\x00" + name_bytes
+    raw = PdrHeader(0x54, 1, PDR_TYPE_SENSOR_AUXILIARY_NAMES, 0, len(body)).to_bytes() + body
+
+    decoded = decode_pdr(raw)
+    json_decoded = _json_round_trip(decoded)
+
+    assert isinstance(decoded, SensorAuxiliaryNamesPdr)
+    assert decoded.sensors[0].names[0].name == "END_RECORD_SENSOR"
+    assert encode_pdr(decoded) == raw
+    assert encode_pdr(json_decoded) == raw
+
+
+def test_auxiliary_names_rejects_unterminated_name_before_more_fields() -> None:
+    """A missing terminator is only safe at the end of the record, not before another counted field."""
+
+    body = (
+        (1).to_bytes(2, "little")
+        + (2).to_bytes(2, "little")
+        + b"\x02"
+        + b"\x01en\x00"
+        + "MID_RECORD_SENSOR".encode("utf-16-be")
+        + b"\x00"
+    )
+    raw = PdrHeader(0x55, 1, PDR_TYPE_SENSOR_AUXILIARY_NAMES, 0, len(body)).to_bytes() + body
+
+    decoded = decode_pdr(raw)
+
+    assert isinstance(decoded, OpaquePdr)
+    assert encode_pdr(decoded) == raw
+
+
+def test_auxiliary_names_non_ascii_name_survives_dict_round_trip() -> None:
+    """Editable names may contain non-ASCII characters and still encode losslessly as UTF-16BE."""
+
+    record = SensorAuxiliaryNamesPdr(
+        record_handle=0x52,
+        pldm_terminus_handle=1,
+        sensor_id=2,
+        sensors=[SensorAuxiliaryNamesEntry([PdrNameString(language_tag="en", name="Sensor_Δ")])],
+    )
+
+    decoded = _json_round_trip(record)
+
+    assert pdr_to_dict(decoded)["sensors"][0]["names"][0]["name"] == "Sensor_Δ"
+
+
+def test_auxiliary_names_unreadable_hex_only_name_is_preserved_exactly() -> None:
+    """Fallback hex data is still needed when no readable name can represent the raw bytes."""
+
+    body = (1).to_bytes(2, "little") + (2).to_bytes(2, "little") + b"\x01\x01en\x00\xd8\x00\x00\x00"
+    expected = PdrHeader(0x53, 1, PDR_TYPE_SENSOR_AUXILIARY_NAMES, 0, len(body)).to_bytes() + body
+    data = {
+        "pdr_type": PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+        "record_handle": 0x53,
+        "pldm_terminus_handle": 1,
+        "sensor_id": 2,
+        "sensors": [{"names": [{"language_tag": "en", "name_data": "d800"}]}],
+    }
+
+    raw = encode_pdr(pdr_from_dict(data))
+    decoded = decode_pdr(raw)
+
+    assert raw == expected
+    assert isinstance(decoded, OpaquePdr)
+    assert encode_pdr(decoded) == expected
+
+
 def test_numeric_effecter_pdr_decodes_and_reencodes_identically() -> None:
     # Representative DSP0248 numeric effecter PDR, real32 range fields.
     record = NumericEffecterPdr(

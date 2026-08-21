@@ -122,11 +122,18 @@ class PdrNameString:
     name: str
     language_tag_bytes: bytes | None = None
     name_bytes: bytes | None = None
+    _preserve_language_tag_bytes: bool = field(default=False, repr=False, compare=False, kw_only=True)
+    _preserve_name_bytes: bool = field(default=False, repr=False, compare=False, kw_only=True)
+    _name_terminated: bool = field(default=True, repr=False, compare=False, kw_only=True)
 
     def to_bytes(self) -> bytes:
-        language_tag = self.language_tag_bytes if self.language_tag_bytes is not None else self.language_tag.encode("ascii")
-        name = self.name_bytes if self.name_bytes is not None else self.name.encode("utf-16-be")
-        return language_tag + b"\x00" + name + b"\x00\x00"
+        language_tag = _language_tag_bytes_for_encode(
+            self.language_tag,
+            self.language_tag_bytes,
+            self._preserve_language_tag_bytes,
+        )
+        name = _name_bytes_for_encode(self.name, self.name_bytes, self._preserve_name_bytes)
+        return language_tag + b"\x00" + name + (b"\x00\x00" if self._name_terminated else b"")
 
 
 @dataclass
@@ -1034,15 +1041,16 @@ def _decode_sensor_auxiliary_names_pdr(header: PdrHeader, body: bytes) -> Sensor
     terminus_handle, sensor_id, sensor_count = _SENSOR_AUX_NAMES_FIXED.unpack_from(body)
     offset = _SENSOR_AUX_NAMES_FIXED.size
     sensors: list[SensorAuxiliaryNamesEntry] = []
-    for _ in range(sensor_count):
+    for sensor_index in range(sensor_count):
         if offset >= len(body):
             msg = "Sensor Auxiliary Names PDR name-string count is truncated"
             raise ValueError(msg)
         name_string_count = body[offset]
         offset += 1
         names: list[PdrNameString] = []
-        for _ in range(name_string_count):
-            name, offset = _read_name_string(body, offset)
+        for name_index in range(name_string_count):
+            is_final_name = sensor_index == sensor_count - 1 and name_index == name_string_count - 1
+            name, offset = _read_name_string(body, offset, allow_unterminated_at_end=is_final_name)
             names.append(name)
         sensors.append(SensorAuxiliaryNamesEntry(names))
     return SensorAuxiliaryNamesPdr(
@@ -1063,15 +1071,16 @@ def _decode_effecter_auxiliary_names_pdr(header: PdrHeader, body: bytes) -> Effe
     terminus_handle, effecter_id, effecter_count = _EFFECTER_AUX_NAMES_FIXED.unpack_from(body)
     offset = _EFFECTER_AUX_NAMES_FIXED.size
     effecters: list[EffecterAuxiliaryNamesEntry] = []
-    for _ in range(effecter_count):
+    for effecter_index in range(effecter_count):
         if offset >= len(body):
             msg = "Effecter Auxiliary Names PDR name-string count is truncated"
             raise ValueError(msg)
         name_string_count = body[offset]
         offset += 1
         names: list[PdrNameString] = []
-        for _ in range(name_string_count):
-            name, offset = _read_name_string(body, offset)
+        for name_index in range(name_string_count):
+            is_final_name = effecter_index == effecter_count - 1 and name_index == name_string_count - 1
+            name, offset = _read_name_string(body, offset, allow_unterminated_at_end=is_final_name)
             names.append(name)
         effecters.append(EffecterAuxiliaryNamesEntry(names))
     return EffecterAuxiliaryNamesPdr(
@@ -1094,8 +1103,8 @@ def _decode_entity_auxiliary_names_pdr(header: PdrHeader, body: bytes) -> Entity
     )
     offset = _ENTITY_AUX_NAMES_FIXED.size
     names: list[PdrNameString] = []
-    for _ in range(name_string_count):
-        name, offset = _read_name_string(body, offset)
+    for name_index in range(name_string_count):
+        name, offset = _read_name_string(body, offset, allow_unterminated_at_end=name_index == name_string_count - 1)
         names.append(name)
     return EntityAuxiliaryNamesPdr(
         record_handle=header.record_handle,
@@ -1110,15 +1119,20 @@ def _decode_entity_auxiliary_names_pdr(header: PdrHeader, body: bytes) -> Entity
     )
 
 
-def _read_name_string(body: bytes, offset: int) -> tuple[PdrNameString, int]:
+def _read_name_string(body: bytes, offset: int, *, allow_unterminated_at_end: bool = False) -> tuple[PdrNameString, int]:
     language_tag_bytes, offset = _read_ascii_c_string(body, offset)
-    name_bytes, offset = _read_utf16be_c_string(body, offset)
+    name_bytes, offset, name_terminated = _read_utf16be_c_string(
+        body,
+        offset,
+        allow_unterminated_at_end=allow_unterminated_at_end,
+    )
     return (
         PdrNameString(
             language_tag=language_tag_bytes.decode("ascii"),
             name=_decode_utf16_name(name_bytes),
             language_tag_bytes=language_tag_bytes,
             name_bytes=name_bytes,
+            _name_terminated=name_terminated,
         ),
         offset,
     )
@@ -1132,10 +1146,17 @@ def _read_ascii_c_string(body: bytes, offset: int) -> tuple[bytes, int]:
     return body[offset:end], end + 1
 
 
-def _read_utf16be_c_string(body: bytes, offset: int) -> tuple[bytes, int]:
+def _read_utf16be_c_string(
+    body: bytes,
+    offset: int,
+    *,
+    allow_unterminated_at_end: bool = False,
+) -> tuple[bytes, int, bool]:
     for index in range(offset, len(body) - 1, 2):
         if body[index : index + 2] == b"\x00\x00":
-            return body[offset:index], index + 2
+            return body[offset:index], index + 2, True
+    if allow_unterminated_at_end and (len(body) - offset) % 2 == 0:
+        return body[offset:], len(body), False
     msg = "UTF-16BE name is missing its null terminator"
     raise ValueError(msg)
 
@@ -1294,16 +1315,84 @@ def _name_to_dict(name: PdrNameString) -> dict[str, Any]:
         data["language_tag_data"] = name.language_tag_bytes.hex()
     if name.name_bytes is not None:
         data["name_data"] = name.name_bytes.hex()
+    if not name._name_terminated:
+        data["name_terminated"] = False
     return data
 
 
 def _name_from_dict(data: dict[str, Any]) -> PdrNameString:
+    language_tag_bytes = bytes.fromhex(data["language_tag_data"]) if "language_tag_data" in data else None
+    name_bytes = bytes.fromhex(data["name_data"]) if "name_data" in data else None
+    language_tag = data.get("language_tag")
+    name = data.get("name")
+    preserve_language_tag_bytes = False
+    preserve_name_bytes = False
+
+    if language_tag is None:
+        if language_tag_bytes is None:
+            raise KeyError("language_tag")
+        language_tag = _decode_ascii_or_empty(language_tag_bytes)
+        preserve_language_tag_bytes = True
+    elif language_tag_bytes is not None and not _language_tag_bytes_match(str(language_tag), language_tag_bytes):
+        language_tag_bytes = None
+
+    if name is None:
+        if name_bytes is None:
+            raise KeyError("name")
+        name = _decode_utf16_name_or_empty(name_bytes)
+        preserve_name_bytes = True
+    elif name_bytes is not None and not _name_bytes_match(str(name), name_bytes):
+        name_bytes = None
+
     return PdrNameString(
-        language_tag=data["language_tag"],
-        name=data["name"],
-        language_tag_bytes=bytes.fromhex(data["language_tag_data"]) if "language_tag_data" in data else None,
-        name_bytes=bytes.fromhex(data["name_data"]) if "name_data" in data else None,
+        language_tag=str(language_tag),
+        name=str(name),
+        language_tag_bytes=language_tag_bytes,
+        name_bytes=name_bytes,
+        _preserve_language_tag_bytes=preserve_language_tag_bytes,
+        _preserve_name_bytes=preserve_name_bytes,
+        _name_terminated=bool(data.get("name_terminated", True)),
     )
+
+
+def _language_tag_bytes_for_encode(language_tag: str, original: bytes | None, preserve_original: bool = False) -> bytes:
+    if original is not None and (preserve_original or _language_tag_bytes_match(language_tag, original)):
+        return original
+    return language_tag.encode("ascii")
+
+
+def _name_bytes_for_encode(name: str, original: bytes | None, preserve_original: bool = False) -> bytes:
+    if original is not None and (preserve_original or _name_bytes_match(name, original)):
+        return original
+    return name.encode("utf-16-be")
+
+
+def _language_tag_bytes_match(language_tag: str, data: bytes) -> bool:
+    try:
+        return data.decode("ascii") == language_tag
+    except UnicodeDecodeError:
+        return False
+
+
+def _name_bytes_match(name: str, data: bytes) -> bool:
+    try:
+        return _decode_utf16_name(data) == name
+    except UnicodeDecodeError:
+        return False
+
+
+def _decode_ascii_or_empty(data: bytes) -> str:
+    try:
+        return data.decode("ascii")
+    except UnicodeDecodeError:
+        return ""
+
+
+def _decode_utf16_name_or_empty(data: bytes) -> str:
+    try:
+        return _decode_utf16_name(data)
+    except UnicodeDecodeError:
+        return ""
 
 
 def _sensor_aux_entry_to_dict(entry: SensorAuxiliaryNamesEntry) -> dict[str, Any]:
