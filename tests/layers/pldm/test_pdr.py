@@ -12,17 +12,24 @@ import logging
 from pymctp.automaton.behaviors.pldm_responder import NumericSensorPdr, StateSensorPdr
 from pymctp.layers.mctp.pldm.pdr import (
     PDR_HEADER_LEN,
+    PDR_TYPE_EFFECTER_AUXILIARY_NAMES,
     PDR_TYPE_ENTITY_AUXILIARY_NAMES,
+    PDR_TYPE_NUMERIC_EFFECTER,
     PDR_TYPE_NUMERIC_SENSOR,
     PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+    PDR_TYPE_STATE_EFFECTER,
     PDR_TYPE_STATE_SENSOR,
     PDR_TYPE_TERMINUS_LOCATOR,
+    EffecterAuxiliaryNamesEntry,
+    EffecterAuxiliaryNamesPdr,
     EntityAuxiliaryNamesPdr,
+    NumericEffecterPdr,
     OpaquePdr,
     PdrHeader,
     PdrNameString,
     SensorAuxiliaryNamesEntry,
     SensorAuxiliaryNamesPdr,
+    StateEffecterPdr,
     TerminusLocatorPdr,
     decode_pdr,
     encode_pdr,
@@ -47,6 +54,8 @@ _NUMERIC_SENSOR_UINT32_RANGE_RECORD = bytes.fromhex(
 )
 _STATE_SENSOR_COMPACT_RECORD = bytes.fromhex("0d0000000104000011000000010043000000000000010102000108")
 _STATE_SENSOR_PADDED_RECORD = bytes.fromhex("1300000001040000130000000600870000000000000001080002010200")
+_STATE_SENSOR_BIT_COUNT_RECORD = bytes.fromhex("44000000010400001100000044440000000000000000010e00030e")
+_EFFECTER_AUX_NAMES_RECORD = bytes.fromhex("33000000010d00001100000001100101656e0000460041004e0000")
 
 
 def _json_round_trip(record):
@@ -156,6 +165,15 @@ def test_representative_state_sensor_pdrs_are_structured_with_variable_bitfields
     assert encode_pdr(padded) == _STATE_SENSOR_PADDED_RECORD
 
 
+def test_representative_state_sensor_pdr_round_trips_possible_states_size_as_bit_count() -> None:
+    decoded = decode_pdr(_STATE_SENSOR_BIT_COUNT_RECORD)
+
+    assert not isinstance(decoded, OpaquePdr)
+    assert pdr_to_dict(decoded)["sensor_id"] == 0x4444
+    assert pdr_to_dict(decoded)["possible_states"] == {"14": [1, 2, 3]}
+    assert encode_pdr(decoded) == _STATE_SENSOR_BIT_COUNT_RECORD
+
+
 def test_terminus_locator_pdr_decodes_mctp_eid() -> None:
     record = TerminusLocatorPdr(
         record_handle=0x31,
@@ -189,6 +207,140 @@ def test_sensor_auxiliary_names_pdr_exposes_readable_names_and_preserves_padding
     assert len(decoded.trailing_data) == 40
     assert encode_pdr(decoded) == _SENSOR_AUX_NAMES_RECORD
     assert pdr_to_dict(decoded)["sensors"][0]["names"][0]["name"] == "SOC_TMP_MAX"
+
+
+def test_numeric_effecter_pdr_decodes_and_reencodes_identically() -> None:
+    # Representative DSP0248 numeric effecter PDR, real32 range fields.
+    record = NumericEffecterPdr(
+        record_handle=0x31,
+        record_change_number=0x22,
+        terminus_handle=0x44,
+        effecter_id=0x1234,
+        entity_type=0x55,
+        entity_instance=0x66,
+        container_id=0x77,
+        effecter_semantic_id=0x88,
+        effecter_init=1,
+        effecter_auxiliary_names_pdr=1,
+        base_unit=18,
+        unit_modifier=-1,
+        rate_unit=2,
+        base_oem_unit_handle=3,
+        aux_unit=4,
+        aux_unit_modifier=-2,
+        aux_rate_unit=5,
+        aux_oem_unit_handle=6,
+        is_linear=1,
+        effecter_data_size=GetSensorReadingDataSizeEnum.SINT16,
+        resolution=0.5,
+        offset=-1.0,
+        accuracy=10,
+        plus_tolerance=2,
+        minus_tolerance=3,
+        state_transition_interval=1.25,
+        transition_interval=2.5,
+        max_settable=250,
+        min_settable=-40,
+        range_field_format=6,
+        nominal_value=125.0,
+        normal_max=200.0,
+        normal_min=50.0,
+        rated_max=225.0,
+        rated_min=25.0,
+    )
+    raw = record.to_bytes()
+
+    decoded = decode_pdr(raw)
+
+    assert isinstance(decoded, NumericEffecterPdr)
+    assert decoded.record_handle == 0x31
+    assert decoded.effecter_id == 0x1234
+    assert decoded.effecter_data_size == GetSensorReadingDataSizeEnum.SINT16
+    assert decoded.range_field_format == 6
+    assert decoded.rated_max == 225.0
+    assert encode_pdr(decoded) == raw
+
+
+def test_numeric_effecter_pdr_supports_variable_width_fields() -> None:
+    # Representative DSP0248 numeric effecter PDR, uint32 effecter and sint16 range fields.
+    raw = NumericEffecterPdr(
+        record_handle=0x32,
+        effecter_id=0x5678,
+        effecter_data_size=GetSensorReadingDataSizeEnum.UINT32,
+        max_settable=100000,
+        min_settable=1000,
+        range_field_format=GetSensorReadingDataSizeEnum.SINT16,
+        nominal_value=500,
+        normal_max=900,
+        normal_min=100,
+        rated_max=950,
+        rated_min=50,
+    ).to_bytes()
+
+    decoded = decode_pdr(raw)
+
+    assert isinstance(decoded, NumericEffecterPdr)
+    assert decoded.effecter_data_size == GetSensorReadingDataSizeEnum.UINT32
+    assert decoded.max_settable == 100000
+    assert decoded.range_field_format == GetSensorReadingDataSizeEnum.SINT16
+    assert decoded.rated_min == 50
+    assert encode_pdr(decoded) == raw
+
+
+def test_state_effecter_pdr_decodes_and_reencodes_identically() -> None:
+    record = StateEffecterPdr(
+        record_handle=0x41,
+        terminus_handle=0x22,
+        effecter_id=0x3456,
+        entity_type=0x33,
+        entity_instance=0x44,
+        container_id=0x55,
+        effecter_semantic_id=0x66,
+        effecter_init=2,
+        effecter_description_pdr=1,
+        possible_states={7: [1, 3, 9], 9: []},
+        possible_state_sizes={7: 2, 9: 0},
+    )
+    raw = record.to_bytes()
+
+    decoded = decode_pdr(raw)
+
+    assert isinstance(decoded, StateEffecterPdr)
+    assert decoded.record_handle == 0x41
+    assert decoded.effecter_id == 0x3456
+    assert decoded.effecter_semantic_id == 0x66
+    assert decoded.possible_states == {7: [1, 3, 9], 9: []}
+    assert decoded.possible_state_sizes == {7: 2, 9: 0}
+    assert encode_pdr(decoded) == raw
+
+
+def test_state_effecter_pdr_supports_multiple_composite_effecters() -> None:
+    raw = StateEffecterPdr(
+        record_handle=0x42,
+        effecter_id=0x789A,
+        possible_states={2: [0, 8], 3: [2], 4: [15]},
+        possible_state_sizes={2: 2, 3: 1, 4: 2},
+        trailing_data=b"\x00",
+    ).to_bytes()
+
+    decoded = decode_pdr(raw)
+
+    assert isinstance(decoded, StateEffecterPdr)
+    assert decoded.possible_states == {2: [0, 8], 3: [2], 4: [15]}
+    assert decoded.trailing_data == b"\x00"
+    assert encode_pdr(decoded) == raw
+
+
+def test_effecter_auxiliary_names_pdr_exposes_readable_names() -> None:
+    decoded = decode_pdr(_EFFECTER_AUX_NAMES_RECORD)
+
+    assert isinstance(decoded, EffecterAuxiliaryNamesPdr)
+    assert decoded.record_handle == 0x33
+    assert decoded.effecter_id == 0x1001
+    assert decoded.effecters[0].names[0].language_tag == "en"
+    assert decoded.effecters[0].names[0].name == "FAN"
+    assert encode_pdr(decoded) == _EFFECTER_AUX_NAMES_RECORD
+    assert pdr_to_dict(decoded)["effecters"][0]["names"][0]["name"] == "FAN"
 
 
 def test_entity_auxiliary_names_pdr_uses_utf16be_names() -> None:
@@ -242,12 +394,34 @@ def test_malformed_modelled_pdr_falls_back_to_opaque_and_logs(caplog) -> None:
     assert "Failed to decode PDR type 2" in caplog.text
 
 
+def test_malformed_effecter_pdrs_fall_back_to_opaque_and_log(caplog) -> None:
+    """A lossy or truncated modelled decode must never escape the round-trip guard."""
+
+    records = [
+        PdrHeader(0xA1, 1, PDR_TYPE_NUMERIC_EFFECTER, 0, 4).to_bytes() + b"tiny",
+        PdrHeader(0xA2, 1, PDR_TYPE_STATE_EFFECTER, 0, 4).to_bytes() + b"tiny",
+        PdrHeader(0xA3, 1, PDR_TYPE_EFFECTER_AUXILIARY_NAMES, 0, 4).to_bytes() + b"tiny",
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="pymctp.layers.mctp.pldm.pdr"):
+        decoded = [decode_pdr(raw) for raw in records]
+
+    assert all(isinstance(record, OpaquePdr) for record in decoded)
+    assert [encode_pdr(record) for record in decoded] == records
+    assert "Failed to decode PDR type 9" in caplog.text
+    assert "Failed to decode PDR type 11" in caplog.text
+    assert "Failed to decode PDR type 13" in caplog.text
+
+
 def test_pdr_to_dict_and_from_dict_round_trip_through_json_for_every_type() -> None:
     records = [
         TerminusLocatorPdr(1, 2, 1, 3, 4, 0, b"\x05"),
         NumericSensorPdr(2, 3, data_size=GetSensorReadingDataSizeEnum.UINT16),
         StateSensorPdr(4, 5, possible_states={1: [0, 8]}),
         decode_pdr(_SENSOR_AUX_NAMES_RECORD),
+        NumericEffecterPdr(5, 6, effecter_data_size=GetSensorReadingDataSizeEnum.SINT16, max_settable=10),
+        StateEffecterPdr(6, 7, possible_states={1: [0, 8]}, possible_state_sizes={1: 2}),
+        decode_pdr(_EFFECTER_AUX_NAMES_RECORD),
         EntityAuxiliaryNamesPdr(6, 7, 8, 9, 1, [PdrNameString("en", "ENTITY")]),
         OpaquePdr(PdrHeader(7, 1, 0xEE, 8, 2), b"xy"),
     ]
@@ -280,11 +454,24 @@ def test_pdr_from_dict_dispatches_on_pdr_type() -> None:
             "sensors": [{"names": [{"language_tag": "en", "name": "SENSOR"}]}],
         }
     )
+    effecter = pdr_from_dict(
+        {
+            "pdr_type": PDR_TYPE_EFFECTER_AUXILIARY_NAMES,
+            "record_handle": 15,
+            "pldm_terminus_handle": 16,
+            "effecter_id": 17,
+            "effecters": [{"names": [{"language_tag": "en", "name": "EFFECTER"}]}],
+        }
+    )
 
     assert isinstance(entity, EntityAuxiliaryNamesPdr)
     assert isinstance(sensor, SensorAuxiliaryNamesPdr)
+    assert isinstance(effecter, EffecterAuxiliaryNamesPdr)
     assert pdr_to_dict(entity)["pdr_type"] == PDR_TYPE_ENTITY_AUXILIARY_NAMES
     assert pdr_to_dict(sensor)["pdr_type"] == PDR_TYPE_SENSOR_AUXILIARY_NAMES
+    assert pdr_to_dict(effecter)["pdr_type"] == PDR_TYPE_EFFECTER_AUXILIARY_NAMES
     assert pdr_to_dict(NumericSensorPdr(8, 9))["pdr_type"] == PDR_TYPE_NUMERIC_SENSOR
     assert pdr_to_dict(StateSensorPdr(10, 11))["pdr_type"] == PDR_TYPE_STATE_SENSOR
+    assert pdr_to_dict(NumericEffecterPdr(12, 13))["pdr_type"] == PDR_TYPE_NUMERIC_EFFECTER
+    assert pdr_to_dict(StateEffecterPdr(14, 15))["pdr_type"] == PDR_TYPE_STATE_EFFECTER
     assert pdr_to_dict(TerminusLocatorPdr(12, 13, 1, 14, 15, 0, b"\x10"))["pdr_type"] == PDR_TYPE_TERMINUS_LOCATOR

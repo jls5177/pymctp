@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from enum import IntEnum
 import logging
 import struct
@@ -22,14 +22,20 @@ PDR_TYPE_TERMINUS_LOCATOR = 1
 PDR_TYPE_NUMERIC_SENSOR = 2
 PDR_TYPE_STATE_SENSOR = 4
 PDR_TYPE_SENSOR_AUXILIARY_NAMES = 6
+PDR_TYPE_NUMERIC_EFFECTER = 9
+PDR_TYPE_STATE_EFFECTER = 11
+PDR_TYPE_EFFECTER_AUXILIARY_NAMES = 13
 PDR_TYPE_ENTITY_AUXILIARY_NAMES = 16
 
 _PDR_HEADER = struct.Struct("<IBBHH")
 _PDR_HEADER_VERSION = 1
 _NUMERIC_SENSOR_FIXED = struct.Struct("<HHHHHBBBbBBBBbBBBBffHBB")
+_NUMERIC_EFFECTER_FIXED = struct.Struct("<HHHHHHBBBbBBBbBBBBffHBBff")
 _STATE_SENSOR_FIXED = struct.Struct("<HHHHHBBB")
+_STATE_EFFECTER_FIXED = struct.Struct("<HHHHHHBBB")
 _TERMINUS_LOCATOR_FIXED = struct.Struct("<HBBHBB")
 _SENSOR_AUX_NAMES_FIXED = struct.Struct("<HHB")
+_EFFECTER_AUX_NAMES_FIXED = struct.Struct("<HHB")
 _ENTITY_AUX_NAMES_FIXED = struct.Struct("<HHHBB")
 
 
@@ -155,6 +161,269 @@ class SensorAuxiliaryNamesPdr:
             self.record_handle,
             self.header_version,
             PDR_TYPE_SENSOR_AUXILIARY_NAMES,
+            self.record_change_number,
+            len(body),
+        )
+        return header.to_bytes() + body
+
+
+@dataclass
+class _StateSensorPdrWithSizes:
+    record_handle: int
+    sensor_id: int
+    possible_states: dict[int, list[int]]
+    possible_state_sizes: dict[int, int]
+    record_change_number: int = 0
+    header_version: int = _PDR_HEADER_VERSION
+    terminus_handle: int = 0
+    entity_type: int = 0
+    entity_instance: int = 1
+    container_id: int = 0
+    sensor_init: int = 0
+    sensor_auxiliary_names_pdr: int = 0
+    trailing_data: bytes = b""
+
+    def __post_init__(self) -> None:
+        self.possible_states = {int(state_set): [int(state) for state in states] for state_set, states in self.possible_states.items()}
+        self.possible_state_sizes = {int(state_set): int(size) for state_set, size in self.possible_state_sizes.items()}
+        self.trailing_data = bytes(self.trailing_data)
+
+    def to_bytes(self) -> bytes:
+        possible = b"".join(
+            struct.pack("<HB", state_set, self.possible_state_sizes.get(state_set, len(bitfield))) + bitfield
+            for state_set, bitfield in (
+                (
+                    state_set,
+                    _state_bitfield(states, _state_bitfield_size(self.possible_state_sizes.get(state_set))),
+                )
+                for state_set, states in self.possible_states.items()
+            )
+        )
+        body = (
+            _STATE_SENSOR_FIXED.pack(
+                self.terminus_handle,
+                self.sensor_id,
+                self.entity_type,
+                self.entity_instance,
+                self.container_id,
+                self.sensor_init & 0xFF,
+                self.sensor_auxiliary_names_pdr & 0xFF,
+                len(self.possible_states) & 0xFF,
+            )
+            + possible
+            + self.trailing_data
+        )
+        header = PdrHeader(
+            self.record_handle,
+            self.header_version,
+            PDR_TYPE_STATE_SENSOR,
+            self.record_change_number,
+            len(body),
+        )
+        return header.to_bytes() + body
+
+
+@dataclass
+class NumericEffecterPdr:
+    record_handle: int
+    effecter_id: int
+    effecter_data_size: GetSensorReadingDataSizeEnum | int = GetSensorReadingDataSizeEnum.UINT8
+    record_change_number: int = 0
+    header_version: int = _PDR_HEADER_VERSION
+    terminus_handle: int = 0
+    entity_type: int = 0
+    entity_instance: int = 1
+    container_id: int = 0
+    effecter_semantic_id: int = 0
+    effecter_init: int = 0
+    effecter_auxiliary_names_pdr: int = 0
+    base_unit: int = 0
+    unit_modifier: int = 0
+    rate_unit: int = 0
+    base_oem_unit_handle: int = 0
+    aux_unit: int = 0
+    aux_unit_modifier: int = 0
+    aux_rate_unit: int = 0
+    aux_oem_unit_handle: int = 0
+    is_linear: int = 1
+    resolution: float = 1.0
+    offset: float = 0.0
+    accuracy: int = 0
+    plus_tolerance: int = 0
+    minus_tolerance: int = 0
+    state_transition_interval: float = 0.0
+    transition_interval: float = 0.0
+    max_settable: float | int = 0
+    min_settable: float | int = 0
+    range_field_format: GetSensorReadingDataSizeEnum | int | None = None
+    range_field_support: int = 0
+    nominal_value: float | int = 0
+    normal_max: float | int = 0
+    normal_min: float | int = 0
+    rated_max: float | int = 0
+    rated_min: float | int = 0
+
+    def __post_init__(self) -> None:
+        self.record_handle = int(self.record_handle)
+        self.effecter_id = int(self.effecter_id)
+        self.effecter_data_size = _numeric_range_format(self.effecter_data_size)
+        if self.range_field_format is None:
+            self.range_field_format = self.effecter_data_size
+        else:
+            self.range_field_format = _numeric_range_format(self.range_field_format)
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> NumericEffecterPdr:
+        header, body = _pdr_header_and_body(raw, PDR_TYPE_NUMERIC_EFFECTER)
+        return _decode_numeric_effecter_pdr(header, body)
+
+    def to_bytes(self) -> bytes:
+        fixed = _NUMERIC_EFFECTER_FIXED.pack(
+            self.terminus_handle & 0xFFFF,
+            self.effecter_id & 0xFFFF,
+            self.entity_type & 0xFFFF,
+            self.entity_instance & 0xFFFF,
+            self.container_id & 0xFFFF,
+            self.effecter_semantic_id & 0xFFFF,
+            self.effecter_init & 0xFF,
+            self.effecter_auxiliary_names_pdr & 0xFF,
+            self.base_unit & 0xFF,
+            _int8(self.unit_modifier),
+            self.rate_unit & 0xFF,
+            self.base_oem_unit_handle & 0xFF,
+            self.aux_unit & 0xFF,
+            _int8(self.aux_unit_modifier),
+            self.aux_rate_unit & 0xFF,
+            self.aux_oem_unit_handle & 0xFF,
+            self.is_linear & 0xFF,
+            int(self.effecter_data_size),
+            float(self.resolution),
+            float(self.offset),
+            self.accuracy & 0xFFFF,
+            self.plus_tolerance & 0xFF,
+            self.minus_tolerance & 0xFF,
+            float(self.state_transition_interval),
+            float(self.transition_interval),
+        )
+        body = (
+            fixed
+            + _encode_sensor_value(self.effecter_data_size, self.max_settable)
+            + _encode_sensor_value(self.effecter_data_size, self.min_settable)
+            + bytes([int(self.range_field_format or self.effecter_data_size), self.range_field_support & 0xFF])
+            + b"".join(
+                _encode_sensor_value(self.range_field_format or self.effecter_data_size, value)
+                for value in (self.nominal_value, self.normal_max, self.normal_min, self.rated_max, self.rated_min)
+            )
+        )
+        header = PdrHeader(
+            self.record_handle,
+            self.header_version,
+            PDR_TYPE_NUMERIC_EFFECTER,
+            self.record_change_number,
+            len(body),
+        )
+        return header.to_bytes() + body
+
+
+@dataclass
+class StateEffecterPdr:
+    record_handle: int
+    effecter_id: int
+    possible_states: dict[int, list[int]] = field(default_factory=lambda: {0: [1]})
+    record_change_number: int = 0
+    header_version: int = _PDR_HEADER_VERSION
+    terminus_handle: int = 0
+    entity_type: int = 0
+    entity_instance: int = 1
+    container_id: int = 0
+    effecter_semantic_id: int = 0
+    effecter_init: int = 0
+    effecter_description_pdr: int = 0
+    possible_state_sizes: dict[int, int] = field(default_factory=dict)
+    trailing_data: bytes = b""
+
+    def __post_init__(self) -> None:
+        self.record_handle = int(self.record_handle)
+        self.effecter_id = int(self.effecter_id)
+        self.possible_states = {int(state_set): [int(state) for state in states] for state_set, states in self.possible_states.items()}
+        self.possible_state_sizes = {int(state_set): int(size) for state_set, size in self.possible_state_sizes.items()}
+        self.trailing_data = bytes(self.trailing_data)
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> StateEffecterPdr:
+        header, body = _pdr_header_and_body(raw, PDR_TYPE_STATE_EFFECTER)
+        return _decode_state_effecter_pdr(header, body)
+
+    def to_bytes(self) -> bytes:
+        possible = b"".join(
+            struct.pack("<HB", state_set, len(bitfield)) + bitfield
+            for state_set, bitfield in (
+                (state_set, _state_bitfield(states, self.possible_state_sizes.get(state_set)))
+                for state_set, states in self.possible_states.items()
+            )
+        )
+        body = (
+            _STATE_EFFECTER_FIXED.pack(
+                self.terminus_handle & 0xFFFF,
+                self.effecter_id & 0xFFFF,
+                self.entity_type & 0xFFFF,
+                self.entity_instance & 0xFFFF,
+                self.container_id & 0xFFFF,
+                self.effecter_semantic_id & 0xFFFF,
+                self.effecter_init & 0xFF,
+                self.effecter_description_pdr & 0xFF,
+                len(self.possible_states) & 0xFF,
+            )
+            + possible
+            + self.trailing_data
+        )
+        header = PdrHeader(
+            self.record_handle,
+            self.header_version,
+            PDR_TYPE_STATE_EFFECTER,
+            self.record_change_number,
+            len(body),
+        )
+        return header.to_bytes() + body
+
+
+@dataclass
+class EffecterAuxiliaryNamesEntry:
+    names: list[PdrNameString]
+
+    def to_bytes(self) -> bytes:
+        return bytes([len(self.names) & 0xFF]) + b"".join(name.to_bytes() for name in self.names)
+
+
+@dataclass
+class EffecterAuxiliaryNamesPdr:
+    record_handle: int
+    pldm_terminus_handle: int
+    effecter_id: int
+    effecters: list[EffecterAuxiliaryNamesEntry]
+    record_change_number: int = 0
+    header_version: int = _PDR_HEADER_VERSION
+    trailing_data: bytes = b""
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> EffecterAuxiliaryNamesPdr:
+        header, body = _pdr_header_and_body(raw, PDR_TYPE_EFFECTER_AUXILIARY_NAMES)
+        return _decode_effecter_auxiliary_names_pdr(header, body)
+
+    def to_bytes(self) -> bytes:
+        body = (
+            _EFFECTER_AUX_NAMES_FIXED.pack(
+                self.pldm_terminus_handle & 0xFFFF,
+                self.effecter_id & 0xFFFF,
+                len(self.effecters) & 0xFF,
+            )
+            + b"".join(effecter.to_bytes() for effecter in self.effecters)
+            + bytes(self.trailing_data)
+        )
+        header = PdrHeader(
+            self.record_handle,
+            self.header_version,
+            PDR_TYPE_EFFECTER_AUXILIARY_NAMES,
             self.record_change_number,
             len(body),
         )
@@ -291,6 +560,30 @@ def pdr_to_dict(record: Any) -> dict[str, Any]:
             "names": [_name_to_dict(name) for name in record.names],
             "trailing_data": record.trailing_data.hex(),
         }
+    if isinstance(record, NumericEffecterPdr):
+        data = _dataclass_to_dict(record)
+        data["pdr_type"] = PDR_TYPE_NUMERIC_EFFECTER
+        return data
+    if isinstance(record, StateEffecterPdr):
+        data = _dataclass_to_dict(record)
+        data["pdr_type"] = PDR_TYPE_STATE_EFFECTER
+        return data
+    if isinstance(record, EffecterAuxiliaryNamesPdr):
+        return {
+            "pdr_type": PDR_TYPE_EFFECTER_AUXILIARY_NAMES,
+            "record_handle": record.record_handle,
+            "header_version": record.header_version,
+            "record_change_number": record.record_change_number,
+            "pldm_terminus_handle": record.pldm_terminus_handle,
+            "effecter_id": record.effecter_id,
+            "effecter_count": len(record.effecters),
+            "effecters": [_effecter_aux_entry_to_dict(effecter) for effecter in record.effecters],
+            "trailing_data": record.trailing_data.hex(),
+        }
+    if isinstance(record, _StateSensorPdrWithSizes):
+        data = _dataclass_to_dict(record)
+        data["pdr_type"] = PDR_TYPE_STATE_SENSOR
+        return data
 
     numeric_cls, state_cls = _sensor_pdr_classes()
     if isinstance(record, numeric_cls):
@@ -332,8 +625,15 @@ def pdr_from_dict(data: dict[str, Any]) -> Any:
             record.supported_thresholds = int(data["supported_thresholds"])
         return record
     if pdr_type == PDR_TYPE_STATE_SENSOR:
-        _, state_cls = _sensor_pdr_classes()
-        kwargs = _constructor_kwargs(state_cls, data)
+        if "possible_state_sizes" in data:
+            kwargs = _constructor_kwargs(_StateSensorPdrWithSizes, data)
+            kwargs["possible_state_sizes"] = {
+                int(key): value for key, value in kwargs.get("possible_state_sizes", {}).items()
+            }
+            state_cls = _StateSensorPdrWithSizes
+        else:
+            _, state_cls = _sensor_pdr_classes()
+            kwargs = _constructor_kwargs(state_cls, data)
         kwargs["possible_states"] = {int(key): value for key, value in kwargs["possible_states"].items()}
         if isinstance(kwargs.get("trailing_data"), str):
             kwargs["trailing_data"] = bytes.fromhex(kwargs["trailing_data"])
@@ -346,6 +646,25 @@ def pdr_from_dict(data: dict[str, Any]) -> Any:
             pldm_terminus_handle=int(data["pldm_terminus_handle"]),
             sensor_id=int(data["sensor_id"]),
             sensors=[_sensor_aux_entry_from_dict(sensor) for sensor in data["sensors"]],
+            trailing_data=bytes.fromhex(data.get("trailing_data", "")),
+        )
+    if pdr_type == PDR_TYPE_NUMERIC_EFFECTER:
+        return NumericEffecterPdr(**_constructor_kwargs(NumericEffecterPdr, data))
+    if pdr_type == PDR_TYPE_STATE_EFFECTER:
+        kwargs = _constructor_kwargs(StateEffecterPdr, data)
+        kwargs["possible_states"] = {int(key): value for key, value in kwargs["possible_states"].items()}
+        kwargs["possible_state_sizes"] = {int(key): value for key, value in kwargs.get("possible_state_sizes", {}).items()}
+        if isinstance(kwargs.get("trailing_data"), str):
+            kwargs["trailing_data"] = bytes.fromhex(kwargs["trailing_data"])
+        return StateEffecterPdr(**kwargs)
+    if pdr_type == PDR_TYPE_EFFECTER_AUXILIARY_NAMES:
+        return EffecterAuxiliaryNamesPdr(
+            record_handle=int(data["record_handle"]),
+            header_version=int(data.get("header_version", _PDR_HEADER_VERSION)),
+            record_change_number=int(data.get("record_change_number", 0)),
+            pldm_terminus_handle=int(data["pldm_terminus_handle"]),
+            effecter_id=int(data["effecter_id"]),
+            effecters=[_effecter_aux_entry_from_dict(effecter) for effecter in data["effecters"]],
             trailing_data=bytes.fromhex(data.get("trailing_data", "")),
         )
     if pdr_type == PDR_TYPE_ENTITY_AUXILIARY_NAMES:
@@ -504,6 +823,95 @@ def _decode_numeric_sensor_pdr(header: PdrHeader, body: bytes) -> Any:
     return record
 
 
+def _decode_numeric_effecter_pdr(header: PdrHeader, body: bytes) -> NumericEffecterPdr:
+    if len(body) < _NUMERIC_EFFECTER_FIXED.size:
+        msg = "Numeric Effecter PDR body is truncated"
+        raise ValueError(msg)
+    (
+        terminus_handle,
+        effecter_id,
+        entity_type,
+        entity_instance,
+        container_id,
+        effecter_semantic_id,
+        effecter_init,
+        effecter_auxiliary_names_pdr,
+        base_unit,
+        unit_modifier,
+        rate_unit,
+        base_oem_unit_handle,
+        aux_unit,
+        aux_unit_modifier,
+        aux_rate_unit,
+        aux_oem_unit_handle,
+        is_linear,
+        effecter_data_size_value,
+        resolution,
+        offset_value,
+        accuracy,
+        plus_tolerance,
+        minus_tolerance,
+        state_transition_interval,
+        transition_interval,
+    ) = _NUMERIC_EFFECTER_FIXED.unpack_from(body)
+    effecter_data_size = _numeric_range_format(effecter_data_size_value)
+    offset = _NUMERIC_EFFECTER_FIXED.size
+    max_settable, offset = _decode_sensor_value(effecter_data_size, body, offset)
+    min_settable, offset = _decode_sensor_value(effecter_data_size, body, offset)
+    if offset + 2 > len(body):
+        msg = "Numeric Effecter PDR range-field metadata is truncated"
+        raise ValueError(msg)
+    range_field_format = _numeric_range_format(body[offset])
+    range_field_support = body[offset + 1]
+    offset += 2
+    range_values: list[float | int] = []
+    for _ in range(5):
+        value, offset = _decode_sensor_value(range_field_format, body, offset)
+        range_values.append(value)
+    if offset != len(body):
+        msg = "Numeric Effecter PDR has trailing bytes not produced by NumericEffecterPdr.to_bytes()"
+        raise ValueError(msg)
+    return NumericEffecterPdr(
+        record_handle=header.record_handle,
+        header_version=header.header_version,
+        record_change_number=header.record_change_number,
+        terminus_handle=terminus_handle,
+        effecter_id=effecter_id,
+        entity_type=entity_type,
+        entity_instance=entity_instance,
+        container_id=container_id,
+        effecter_semantic_id=effecter_semantic_id,
+        effecter_init=effecter_init,
+        effecter_auxiliary_names_pdr=effecter_auxiliary_names_pdr,
+        base_unit=base_unit,
+        unit_modifier=unit_modifier,
+        rate_unit=rate_unit,
+        base_oem_unit_handle=base_oem_unit_handle,
+        aux_unit=aux_unit,
+        aux_unit_modifier=aux_unit_modifier,
+        aux_rate_unit=aux_rate_unit,
+        aux_oem_unit_handle=aux_oem_unit_handle,
+        is_linear=is_linear,
+        effecter_data_size=effecter_data_size,
+        resolution=resolution,
+        offset=offset_value,
+        accuracy=accuracy,
+        plus_tolerance=plus_tolerance,
+        minus_tolerance=minus_tolerance,
+        state_transition_interval=state_transition_interval,
+        transition_interval=transition_interval,
+        max_settable=max_settable,
+        min_settable=min_settable,
+        range_field_format=range_field_format,
+        range_field_support=range_field_support,
+        nominal_value=range_values[0],
+        normal_max=range_values[1],
+        normal_min=range_values[2],
+        rated_max=range_values[3],
+        rated_min=range_values[4],
+    )
+
+
 def _decode_state_sensor_pdr(header: PdrHeader, body: bytes) -> Any:
     if len(body) < _STATE_SENSOR_FIXED.size:
         msg = "State Sensor PDR body is truncated"
@@ -520,6 +928,8 @@ def _decode_state_sensor_pdr(header: PdrHeader, body: bytes) -> Any:
     ) = _STATE_SENSOR_FIXED.unpack_from(body)
     offset = _STATE_SENSOR_FIXED.size
     possible_states: dict[int, list[int]] = {}
+    possible_state_sizes: dict[int, int] = {}
+    preserves_declared_sizes = False
     for _ in range(possible_states_count):
         if offset + 3 > len(body):
             msg = "State Sensor PDR possible-states header is truncated"
@@ -528,10 +938,30 @@ def _decode_state_sensor_pdr(header: PdrHeader, body: bytes) -> Any:
         offset += 3
         end = offset + possible_states_size
         if end > len(body):
-            msg = "State Sensor PDR possible-states bitfield is truncated"
-            raise ValueError(msg)
+            end = offset + _state_bitfield_size(possible_states_size)
+            if end > len(body):
+                msg = "State Sensor PDR possible-states bitfield is truncated"
+                raise ValueError(msg)
+            possible_state_sizes[state_set_id] = possible_states_size
+            preserves_declared_sizes = True
         possible_states[state_set_id] = _states_from_bitfield(body[offset:end])
         offset = end
+    if preserves_declared_sizes:
+        return _StateSensorPdrWithSizes(
+            record_handle=header.record_handle,
+            header_version=header.header_version,
+            record_change_number=header.record_change_number,
+            terminus_handle=terminus_handle,
+            sensor_id=sensor_id,
+            entity_type=entity_type,
+            entity_instance=entity_instance,
+            container_id=container_id,
+            sensor_init=sensor_init,
+            sensor_auxiliary_names_pdr=sensor_auxiliary_names_pdr,
+            possible_states=possible_states,
+            possible_state_sizes=possible_state_sizes,
+            trailing_data=body[offset:],
+        )
     _, state_cls = _sensor_pdr_classes()
     return state_cls(
         record_handle=header.record_handle,
@@ -544,6 +974,55 @@ def _decode_state_sensor_pdr(header: PdrHeader, body: bytes) -> Any:
         sensor_init=sensor_init,
         sensor_auxiliary_names_pdr=sensor_auxiliary_names_pdr,
         possible_states=possible_states,
+        trailing_data=body[offset:],
+    )
+
+
+def _decode_state_effecter_pdr(header: PdrHeader, body: bytes) -> StateEffecterPdr:
+    if len(body) < _STATE_EFFECTER_FIXED.size:
+        msg = "State Effecter PDR body is truncated"
+        raise ValueError(msg)
+    (
+        terminus_handle,
+        effecter_id,
+        entity_type,
+        entity_instance,
+        container_id,
+        effecter_semantic_id,
+        effecter_init,
+        effecter_description_pdr,
+        composite_effecter_count,
+    ) = _STATE_EFFECTER_FIXED.unpack_from(body)
+    offset = _STATE_EFFECTER_FIXED.size
+    possible_states: dict[int, list[int]] = {}
+    possible_state_sizes: dict[int, int] = {}
+    for _ in range(composite_effecter_count):
+        if offset + 3 > len(body):
+            msg = "State Effecter PDR possible-states header is truncated"
+            raise ValueError(msg)
+        state_set_id, possible_states_size = struct.unpack_from("<HB", body, offset)
+        offset += 3
+        end = offset + possible_states_size
+        if end > len(body):
+            msg = "State Effecter PDR possible-states bitfield is truncated"
+            raise ValueError(msg)
+        possible_states[state_set_id] = _states_from_bitfield(body[offset:end])
+        possible_state_sizes[state_set_id] = possible_states_size
+        offset = end
+    return StateEffecterPdr(
+        record_handle=header.record_handle,
+        header_version=header.header_version,
+        record_change_number=header.record_change_number,
+        terminus_handle=terminus_handle,
+        effecter_id=effecter_id,
+        entity_type=entity_type,
+        entity_instance=entity_instance,
+        container_id=container_id,
+        effecter_semantic_id=effecter_semantic_id,
+        effecter_init=effecter_init,
+        effecter_description_pdr=effecter_description_pdr,
+        possible_states=possible_states,
+        possible_state_sizes=possible_state_sizes,
         trailing_data=body[offset:],
     )
 
@@ -573,6 +1052,35 @@ def _decode_sensor_auxiliary_names_pdr(header: PdrHeader, body: bytes) -> Sensor
         pldm_terminus_handle=terminus_handle,
         sensor_id=sensor_id,
         sensors=sensors,
+        trailing_data=body[offset:],
+    )
+
+
+def _decode_effecter_auxiliary_names_pdr(header: PdrHeader, body: bytes) -> EffecterAuxiliaryNamesPdr:
+    if len(body) < _EFFECTER_AUX_NAMES_FIXED.size:
+        msg = "Effecter Auxiliary Names PDR body is truncated"
+        raise ValueError(msg)
+    terminus_handle, effecter_id, effecter_count = _EFFECTER_AUX_NAMES_FIXED.unpack_from(body)
+    offset = _EFFECTER_AUX_NAMES_FIXED.size
+    effecters: list[EffecterAuxiliaryNamesEntry] = []
+    for _ in range(effecter_count):
+        if offset >= len(body):
+            msg = "Effecter Auxiliary Names PDR name-string count is truncated"
+            raise ValueError(msg)
+        name_string_count = body[offset]
+        offset += 1
+        names: list[PdrNameString] = []
+        for _ in range(name_string_count):
+            name, offset = _read_name_string(body, offset)
+            names.append(name)
+        effecters.append(EffecterAuxiliaryNamesEntry(names))
+    return EffecterAuxiliaryNamesPdr(
+        record_handle=header.record_handle,
+        header_version=header.header_version,
+        record_change_number=header.record_change_number,
+        pldm_terminus_handle=terminus_handle,
+        effecter_id=effecter_id,
+        effecters=effecters,
         trailing_data=body[offset:],
     )
 
@@ -644,6 +1152,18 @@ def _printable_ascii_score(value: str) -> int:
     return sum(0x20 <= ord(char) <= 0x7E for char in value)
 
 
+def _pdr_header_and_body(raw: bytes, expected_type: int) -> tuple[PdrHeader, bytes]:
+    header = PdrHeader.from_bytes(raw)
+    body = bytes(raw[PDR_HEADER_LEN:])
+    if header.pdr_type != expected_type:
+        msg = f"Expected PDR type {expected_type}, got {header.pdr_type}"
+        raise ValueError(msg)
+    if len(body) != header.data_length:
+        msg = f"PDR type {expected_type} length mismatch"
+        raise ValueError(msg)
+    return header, body
+
+
 def _decode_sensor_value(data_size: GetSensorReadingDataSizeEnum | int, body: bytes, offset: int) -> tuple[float | int, int]:
     data_size = _numeric_range_format(data_size)
     formats = {
@@ -662,6 +1182,23 @@ def _decode_sensor_value(data_size: GetSensorReadingDataSizeEnum | int, body: by
         msg = f"Sensor value at offset {offset} is truncated"
         raise ValueError(msg)
     return struct.unpack_from(fmt, body, offset)[0], offset + size
+
+
+def _encode_sensor_value(data_size: GetSensorReadingDataSizeEnum | int, value: float | int) -> bytes:
+    data_size = _numeric_range_format(data_size)
+    formats = {
+        GetSensorReadingDataSizeEnum.UINT8: "<B",
+        GetSensorReadingDataSizeEnum.SINT8: "<b",
+        GetSensorReadingDataSizeEnum.UINT16: "<H",
+        GetSensorReadingDataSizeEnum.SINT16: "<h",
+        GetSensorReadingDataSizeEnum.UINT32: "<I",
+        GetSensorReadingDataSizeEnum.SINT32: "<i",
+        6: "<f",
+        7: "<d",
+    }
+    if data_size in (6, 7):
+        return struct.pack(formats[data_size], float(value))
+    return struct.pack(formats[data_size], int(value))
 
 
 def _sensor_value_size(data_size: GetSensorReadingDataSizeEnum | int) -> int:
@@ -692,6 +1229,39 @@ def _states_from_bitfield(bitfield: bytes) -> list[int]:
             if value & (1 << bit_index):
                 states.append((byte_index * 8) + bit_index)
     return states
+
+
+def _state_bitfield(states: list[int], size: int | None = None) -> bytes:
+    max_state = max(states, default=-1)
+    length = max((max_state // 8) + 1 if max_state >= 0 else 0, size or 0)
+    bitfield = bytearray(length)
+    for state in states:
+        if state < 0:
+            msg = f"State values must be non-negative, got {state}"
+            raise ValueError(msg)
+        index = state // 8
+        if index >= len(bitfield):
+            bitfield.extend(bytes(index + 1 - len(bitfield)))
+        bitfield[index] |= 1 << (state % 8)
+    return bytes(bitfield)
+
+
+def _state_bitfield_size(possible_states_size: int | None) -> int | None:
+    if possible_states_size is None:
+        return None
+    possible_states_size = int(possible_states_size)
+    if possible_states_size <= 0:
+        return 0
+    return (possible_states_size + 7) // 8
+
+
+def _int8(value: int) -> int:
+    value = int(value)
+    if value > 127:
+        return value - 256
+    if value < -128:
+        return ((value + 128) % 256) - 128
+    return value
 
 
 def _sensor_pdr_classes() -> tuple[type[Any], type[Any]]:
@@ -744,6 +1314,14 @@ def _sensor_aux_entry_from_dict(data: dict[str, Any]) -> SensorAuxiliaryNamesEnt
     return SensorAuxiliaryNamesEntry(names=[_name_from_dict(name) for name in data["names"]])
 
 
+def _effecter_aux_entry_to_dict(entry: EffecterAuxiliaryNamesEntry) -> dict[str, Any]:
+    return {"name_string_count": len(entry.names), "names": [_name_to_dict(name) for name in entry.names]}
+
+
+def _effecter_aux_entry_from_dict(data: dict[str, Any]) -> EffecterAuxiliaryNamesEntry:
+    return EffecterAuxiliaryNamesEntry(names=[_name_from_dict(name) for name in data["names"]])
+
+
 def _constructor_kwargs(cls: type[Any], data: dict[str, Any]) -> dict[str, Any]:
     field_names = {field.name for field in fields(cls)}
     return {name: value for name, value in data.items() if name in field_names}
@@ -766,23 +1344,33 @@ _MODELLED_DECODERS = {
     PDR_TYPE_NUMERIC_SENSOR: _decode_numeric_sensor_pdr,
     PDR_TYPE_STATE_SENSOR: _decode_state_sensor_pdr,
     PDR_TYPE_SENSOR_AUXILIARY_NAMES: _decode_sensor_auxiliary_names_pdr,
+    PDR_TYPE_NUMERIC_EFFECTER: _decode_numeric_effecter_pdr,
+    PDR_TYPE_STATE_EFFECTER: _decode_state_effecter_pdr,
+    PDR_TYPE_EFFECTER_AUXILIARY_NAMES: _decode_effecter_auxiliary_names_pdr,
     PDR_TYPE_ENTITY_AUXILIARY_NAMES: _decode_entity_auxiliary_names_pdr,
 }
 
 __all__ = [
     "PDR_HEADER_LEN",
+    "PDR_TYPE_EFFECTER_AUXILIARY_NAMES",
     "PDR_TYPE_ENTITY_AUXILIARY_NAMES",
+    "PDR_TYPE_NUMERIC_EFFECTER",
     "PDR_TYPE_NUMERIC_SENSOR",
     "PDR_TYPE_SENSOR_AUXILIARY_NAMES",
+    "PDR_TYPE_STATE_EFFECTER",
     "PDR_TYPE_STATE_SENSOR",
     "PDR_TYPE_TERMINUS_LOCATOR",
+    "EffecterAuxiliaryNamesEntry",
+    "EffecterAuxiliaryNamesPdr",
     "EntityAuxiliaryNamesPdr",
+    "NumericEffecterPdr",
     "OpaquePdr",
     "PdrHeader",
     "PdrNameString",
     "RawPdr",
     "SensorAuxiliaryNamesEntry",
     "SensorAuxiliaryNamesPdr",
+    "StateEffecterPdr",
     "TerminusLocatorPdr",
     "decode_pdr",
     "encode_pdr",
