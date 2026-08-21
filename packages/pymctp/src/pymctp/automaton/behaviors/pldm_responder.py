@@ -115,10 +115,12 @@ class PldmBaseProfile:
     supported_types: list[int] = field(
         default_factory=lambda: [int(PldmTypeCodes.CONTROL), int(PldmTypeCodes.PLATFORM_MONITORING)]
     )
+    #: Spec revisions a real terminus reports, taken from a hardware capture:
+    #: DSP0240 (base) 1.1.0 and DSP0248 (platform monitoring) 1.3.0.
     versions: dict[int, list[str]] = field(
         default_factory=lambda: {
-            int(PldmTypeCodes.CONTROL): ["1.0.0"],
-            int(PldmTypeCodes.PLATFORM_MONITORING): ["1.0.0"],
+            int(PldmTypeCodes.CONTROL): ["1.1.0"],
+            int(PldmTypeCodes.PLATFORM_MONITORING): ["1.3.0"],
         }
     )
     commands: dict[int, list[int]] = field(
