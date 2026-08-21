@@ -266,6 +266,11 @@ class PldmBaseBehavior(Behavior):
             TransferFlag=GetPLDMVersionTransferFlag.START_AND_END,
         )
         version_bytes = b"".join(_encode_pldm_version(version) for version in state["versions"][pldm_type])
+        # DSP0240: the final transfer carries a CRC-32 over the accumulated
+        # version data. Requesters reject a response without it - openbmc's
+        # pldmd logs "Version response length is less than expected" for
+        # anything under 8 bytes and then verifies the checksum.
+        version_bytes += _pldm_version_crc32(version_bytes)
         return self._reply(pkt, ctx, payload / version_bytes, CompletionCodes.SUCCESS)
 
     def _reply(
@@ -1182,6 +1187,16 @@ def _bitfield_bytes(values: list[int], length: int) -> bytes:
         if 0 <= int(value) < length * 8:
             data[int(value) // 8] |= 1 << (int(value) % 8)
     return bytes(data)
+
+
+def _pldm_version_crc32(version_bytes: bytes) -> bytes:
+    """CRC-32 over GetPLDMVersion version data, little endian.
+
+    DSP0240 requires the final version-data transfer to end with a checksum.
+    libpldm's ``crc32`` is the standard reflected CRC-32 (polynomial
+    0xEDB88320), which is what :func:`binascii.crc32` computes.
+    """
+    return binascii.crc32(version_bytes).to_bytes(4, "little")
 
 
 def _encode_pldm_version(version: str | int) -> bytes:

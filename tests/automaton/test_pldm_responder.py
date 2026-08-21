@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import binascii
 import struct
 import time
 
@@ -278,7 +279,37 @@ def test_get_pldm_version_returns_single_part_version_bytes() -> None:
     assert pldm.completion_code == CompletionCodes.SUCCESS
     assert payload.NextDataTransferHandle == 0
     assert payload.TransferFlag == GetPLDMVersionTransferFlag.START_AND_END
-    assert bytes(payload.payload) == b"\x00\xf0\xf0\xf1"
+    # DSP0240: version data, then a CRC-32 over it.
+    assert bytes(payload.payload) == b"\x00\xf0\xf0\xf1" + binascii.crc32(b"\x00\xf0\xf0\xf1").to_bytes(4, "little")
+
+
+def test_get_pldm_version_appends_a_crc32_over_every_version() -> None:
+    """openbmc's pldmd rejects a version response that omits the checksum.
+
+    ``intel-pldmd`` (``src/base.cpp``) requires at least 8 bytes of version
+    data ("Version response length is less than expected"), requires the
+    remainder after stripping the trailing CRC to be a multiple of 4, and then
+    verifies that CRC over the version bytes.
+    """
+    versions = ["1.0.0", "1.1.0"]
+    behavior = PldmBaseBehavior(versions={PldmTypeCodes.CONTROL: versions})
+    pkt = _base_request(
+        PldmControlCmdCodes.GetPLDMVersion,
+        GetPLDMVersionPacket(
+            DataTransferHandle=0,
+            TransferOperationFlag=GetPLDMVersionOperation.GET_FIRST_PART,
+            PLDMType=PldmTypeCodes.CONTROL,
+        ),
+    )
+
+    pldm = _single_pldm(_get_reply(behavior, pkt, _ctx()))
+    version_data = bytes(pldm.getlayer(GetPLDMVersionPacket).payload)
+
+    assert len(version_data) >= 8
+    version_bytes, crc = version_data[:-4], version_data[-4:]
+    assert len(version_bytes) == 4 * len(versions)
+    assert len(version_bytes) % 4 == 0
+    assert int.from_bytes(crc, "little") == binascii.crc32(version_bytes)
 
 
 @pytest.mark.parametrize(
