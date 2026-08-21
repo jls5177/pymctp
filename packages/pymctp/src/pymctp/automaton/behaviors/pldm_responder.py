@@ -66,6 +66,9 @@ _PLATFORM_CC_INVALID_DATA_TRANSFER_HANDLE = 0x80
 _PLATFORM_CC_INVALID_TRANSFER_OPERATION_FLAG = 0x81
 _PLATFORM_CC_INVALID_RECORD_HANDLE = 0x82
 _PLATFORM_CC_INVALID_RECORD_CHANGE_NUMBER = 0x83
+#: DSP0248 SetNumericSensorEnable / GetSensorReading command-specific codes.
+_PLATFORM_CC_INVALID_SENSOR_ID = 0x80
+_PLATFORM_CC_EVENT_GENERATION_NOT_SUPPORTED = 0x82
 _PLATFORM_TRANSFER_DONE = 0
 _PLATFORM_EVENT_FORMAT_VERSION = 1
 _PLATFORM_SENSOR_EVENT_NUMERIC_SENSOR_STATE = 2
@@ -85,6 +88,7 @@ _PLATFORM_COMMANDS = [
     PldmPlatformMonitoringCmdCodes.PollForPlatformEventMessage,
     PldmPlatformMonitoringCmdCodes.EventMessageSupported,
     PldmPlatformMonitoringCmdCodes.EventMessageBufferSize,
+    PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable,
     PldmPlatformMonitoringCmdCodes.GetSensorReading,
     PldmPlatformMonitoringCmdCodes.GetPDRRepositoryInfo,
     PldmPlatformMonitoringCmdCodes.GetPDR,
@@ -846,6 +850,7 @@ class PldmSensorBehavior(Behavior):
             return self._reply(pkt, ctx, None, CompletionCodes.ERROR_UNSUPPORTED_CMD)
 
         handlers = {
+            PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable: self._set_numeric_sensor_enable,
             PldmPlatformMonitoringCmdCodes.GetSensorReading: self._get_sensor_reading,
             PldmPlatformMonitoringCmdCodes.GetPDRRepositoryInfo: self._get_pdr_repository_info,
             PldmPlatformMonitoringCmdCodes.GetPDR: self._get_pdr,
@@ -859,6 +864,39 @@ class PldmSensorBehavior(Behavior):
         if handler is None:
             return self._reply(pkt, ctx, None, CompletionCodes.ERROR_UNSUPPORTED_CMD)
         return handler(pkt, ctx, pldm)
+
+    def _set_numeric_sensor_enable(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        """DSP0248 SetNumericSensorEnable (0x10).
+
+        The requester enables each sensor before it starts polling, so refusing
+        this command aborts sensor discovery outright ("Sensor Handler Init
+        failed") even though GetSensorReading itself works.
+
+        Request is sensorID (uint16 LE), sensorOperationalState (enum8) and
+        sensorEventMessageEnable (enum8); the response carries only the
+        completion code.
+        """
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 4:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+
+        sensor_id, operational_state, event_message_enable = struct.unpack_from("<HBB", data)
+        sensor = self._state(ctx)["sensors"].get(sensor_id)
+        if sensor is None:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_INVALID_SENSOR_ID)
+
+        try:
+            state = GetSensorReadingOperationalStateEnum(operational_state)
+        except ValueError:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+        try:
+            events = GetSensorReadingEventMsgEnableEnum(event_message_enable)
+        except ValueError:
+            return self._reply(pkt, ctx, None, _PLATFORM_CC_EVENT_GENERATION_NOT_SUPPORTED)
+
+        sensor.operational_state = state
+        sensor.event_message_enable = events
+        return self._reply(pkt, ctx, None, CompletionCodes.SUCCESS)
 
     def _get_sensor_reading(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
         request = pkt.getlayer(GetSensorReadingPacket)

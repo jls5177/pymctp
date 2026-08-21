@@ -39,6 +39,8 @@ from pymctp.layers.mctp.pldm import (
 from pymctp.layers.mctp.pldm.type1_base import GetPLDMVersionOperation, GetPLDMVersionTransferFlag
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
     GetSensorReadingDataSizeEnum,
+    GetSensorReadingEventMsgEnableEnum,
+    GetSensorReadingOperationalStateEnum,
     GetSensorReadingPresentEnum,
     PlatformEventMsgClasses,
     PollForPlatformEventMsgPacket,
@@ -734,3 +736,79 @@ def test_large_pdr_response_is_fragmented_and_reassembles() -> None:
     assert next_transfer == 0
     assert transfer_flag == GetPDRTransferFlag.START_AND_END
     assert record_data == large_pdr.to_bytes()
+
+
+class TestSetNumericSensorEnable:
+    """DSP0248 SetNumericSensorEnable (0x10).
+
+    The requester enables every sensor before it starts polling. openbmc's
+    pldmd aborts sensor discovery when this is refused ("SetNumericSensorEnable:
+    Invalid completion code. CC: 5" then "Sensor Handler Init failed"), even
+    though GetSensorReading on its own works fine.
+    """
+
+    @staticmethod
+    def _enable(sensor_id: int, operational_state: int = 0, event_message_enable: int = 0):
+        return _platform_request(
+            PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable,
+            Raw(struct.pack("<HBB", sensor_id, operational_state, event_message_enable)),
+        )
+
+    def _behavior(self):
+        return PldmSensorBehavior(
+            sensors={
+                1: SensorDefinition(sensor_id=1, reading=40),
+                2: SensorDefinition(sensor_id=2, reading=41),
+            }
+        )
+
+    @pytest.mark.parametrize("sensor_id", [1, 2])
+    def test_enabling_a_known_sensor_succeeds(self, sensor_id: int) -> None:
+        pldm = _single_pldm(_get_reply(self._behavior(), self._enable(sensor_id), _ctx()))
+
+        assert pldm.completion_code == CompletionCodes.SUCCESS
+        assert _raw_payload(pldm) == b""
+
+    def test_it_is_advertised_by_get_pldm_commands(self) -> None:
+        """An unadvertised command is never called, so discovery would still stall."""
+        behavior = PldmBaseBehavior()
+        pkt = _base_request(
+            PldmControlCmdCodes.GetPLDMCommands,
+            GetPLDMCommandsPacket(PLDMType=PldmTypeCodes.PLATFORM_MONITORING, Version=0xF1F0F000),
+        )
+
+        pldm = _single_pldm(_get_reply(behavior, pkt, _ctx()))
+        payload = pldm.getlayer(GetPLDMCommandsPacket)
+
+        command = int(PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable)
+        assert payload.cmds[command // 8] & (1 << (command % 8))
+
+    def test_the_requested_state_is_retained(self) -> None:
+        behavior = self._behavior()
+        ctx = _ctx()
+
+        reply = _single_pldm(_get_reply(behavior, self._enable(1, operational_state=1, event_message_enable=2), ctx))
+        assert reply.completion_code == CompletionCodes.SUCCESS
+
+        sensor = behavior._state(ctx)["sensors"][1]
+        assert sensor.operational_state == GetSensorReadingOperationalStateEnum.DISABLED
+        assert sensor.event_message_enable == GetSensorReadingEventMsgEnableEnum.EVENTS_ENABLED
+
+    def test_unknown_sensor_id_is_rejected(self) -> None:
+        pldm = _single_pldm(_get_reply(self._behavior(), self._enable(99), _ctx()))
+        assert pldm.completion_code == 0x80  # PLDM_PLATFORM_INVALID_SENSOR_ID
+
+    def test_short_request_is_rejected(self) -> None:
+        request = _platform_request(
+            PldmPlatformMonitoringCmdCodes.SetNumericSensorEnable, Raw(struct.pack("<H", 1))
+        )
+        pldm = _single_pldm(_get_reply(self._behavior(), request, _ctx()))
+        assert pldm.completion_code == CompletionCodes.ERROR_INVALID_LENGTH
+
+    def test_unsupported_event_generation_is_rejected(self) -> None:
+        pldm = _single_pldm(_get_reply(self._behavior(), self._enable(1, event_message_enable=0x63), _ctx()))
+        assert pldm.completion_code == 0x82  # PLDM_PLATFORM_EVENT_GENERATION_NOT_SUPPORTED
+
+    def test_invalid_operational_state_is_rejected(self) -> None:
+        pldm = _single_pldm(_get_reply(self._behavior(), self._enable(1, operational_state=0x63), _ctx()))
+        assert pldm.completion_code == CompletionCodes.ERROR_INVALID_DATA
