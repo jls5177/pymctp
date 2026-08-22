@@ -171,6 +171,49 @@ def test_clone_deep_copies_mutable_state() -> None:
     assert clone.possible_states == {9: [1, 2]}
 
 
+def test_series_produces_independent_items() -> None:
+    """Generated templates expand through series(), so members must not share editable mutable fields."""
+    template = StateSensor(name="STATE_TEMPLATE", sensor_id=1, possible_states={9: [1]})
+    first, second = template.series([("STATE_A", 0x1001), ("STATE_B", 0x1002)])
+    first.possible_states[9].append(2)
+
+    assert template.possible_states == {9: [1]}
+    assert second.possible_states == {9: [1]}
+    assert first.possible_states == {9: [1, 2]}
+
+
+@pytest.mark.parametrize(
+    ("template", "id_field"),
+    [
+        (NumericSensor(name="NUMERIC_SENSOR_TEMPLATE", sensor_id=1), "sensor_id"),
+        (StateSensor(name="STATE_SENSOR_TEMPLATE", sensor_id=1), "sensor_id"),
+        (NumericEffecter(name="NUMERIC_EFFECTER_TEMPLATE", effecter_id=1), "effecter_id"),
+        (StateEffecter(name="STATE_EFFECTER_TEMPLATE", effecter_id=1), "effecter_id"),
+    ],
+)
+def test_series_sets_the_item_type_id_field(template, id_field: str) -> None:
+    first, second = template.series([("FIRST", 0x1001), ("SECOND", 0x1002)])
+
+    assert [getattr(item, id_field) for item in (first, second)] == [0x1001, 0x1002]
+
+
+def test_series_rejects_duplicate_ids() -> None:
+    template = NumericSensor(name="SENSOR_TEMPLATE", sensor_id=1)
+
+    with pytest.raises(ValueError, match="Duplicate sensor_id"):
+        template.series([("FIRST", 0x1001), ("SECOND", 0x1001)])
+
+
+def test_series_template_not_added_to_terminus_does_not_emit_record() -> None:
+    """A template is a definition only; only expanded series members should become PDRs."""
+    template = NumericSensor(name="SENSOR_TEMPLATE", sensor_id=0x2000)
+    hcp = Terminus(eid=1, tid=1, items=template.series([("SENSOR_A", 0x2001), ("SENSOR_B", 0x2002)]))
+
+    records = hcp.build().pdr_repository.encoded_records()
+
+    assert [decode_pdr(records[index]).sensor_id for index in (0, 2)] == [0x2001, 0x2002]
+
+
 def test_handles_remain_sequential_when_adding_clones() -> None:
     hcp = Terminus(eid=1, tid=1)
     seed = NumericSensor(name="SEED", sensor_id=0x2000)

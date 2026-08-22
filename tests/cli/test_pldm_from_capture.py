@@ -36,7 +36,7 @@ from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
 from pymctp.layers.mctp.pldm.types import CompletionCodes, PldmControlCmdCodes, PldmTypeCodes
 from pymctp.layers.mctp.transport import TransportHdr
 from pymctp.layers.mctp.types import MsgTypes
-from pymctp.pldm.model import TemperatureSensor, Terminus
+from pymctp.pldm.model import NumericSensor, TemperatureSensor, Terminus
 
 
 REQUESTER_EID = 0x20
@@ -302,6 +302,46 @@ def _fixed_auxiliary_size_terminus() -> Terminus:
     )
 
 
+def _repeated_item_terminus() -> Terminus:
+    """Twelve identical-except-id sensors, the shape grouping exists to collapse."""
+    return Terminus(
+        eid=TERMINUS_EID,
+        tid=1,
+        items=[
+            TemperatureSensor(name=f"BULK_TEMP_{index}", sensor_id=0x1200 + index, warning_high=80)
+            for index in range(12)
+        ],
+    )
+
+
+def _compressed_emit_terminus() -> Terminus:
+    return Terminus(
+        eid=TERMINUS_EID,
+        tid=1,
+        items=[
+            TemperatureSensor(name="TEMP_SHARED_A", sensor_id=0x1101, warning_high=80, critical_high=90),
+            NumericSensor(
+                name="GENERIC_DISTINCT",
+                sensor_id=0x1201,
+                data_size=GetSensorReadingDataSizeEnum.UINT16,
+                base_unit=99,
+                unit_modifier=2,
+                range_field_format=GetSensorReadingDataSizeEnum.UINT16,
+                normal_max=10,
+                warning_high=20,
+                warning_low=3,
+                critical_high=30,
+                critical_low=2,
+            ),
+            # Adjacent identical items become a real multi-member series; the
+            # separated TEMP_SHARED_A above stays a run of one.
+            TemperatureSensor(name="TEMP_SHARED_B", sensor_id=0x1102, warning_high=80, critical_high=90),
+            TemperatureSensor(name="TEMP_SHARED_C", sensor_id=0x1103, warning_high=80, critical_high=90),
+            TemperatureSensor(name="TEMP_NEAR", sensor_id=0x1104, warning_high=81, critical_high=90),
+        ],
+    )
+
+
 def _load_artifact(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -336,6 +376,12 @@ def _auxiliary_names(records: list[bytes]) -> list[str]:
         for group in decoded.get("sensors", []) or decoded.get("effecters", []):
             names.extend(entry["name"] for entry in group.get("names", []))
     return names
+
+
+def _ruff_check(path: Path) -> subprocess.CompletedProcess[str]:
+    ruff = shutil.which("ruff")
+    command = [ruff, "check", str(path)] if ruff else [sys.executable, "-m", "ruff", "check", str(path)]
+    return subprocess.run(command, cwd=Path(__file__).parents[2], capture_output=True, text=True, check=False)
 
 
 def test_end_to_end_writes_artifact_with_expected_schema(runner: CliRunner, tmp_path: Path) -> None:
@@ -564,6 +610,116 @@ def test_emit_python_builds_byte_identical_records_to_json_model(runner: CliRunn
     assert _built_records(python_terminus) == _built_records(json_terminus)
 
 
+def test_emit_python_groups_series_clones_near_duplicates_and_preserves_order(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """Compression is useful only if the generated module still rebuilds the exact ordered PDR stream."""
+    capture = tmp_path / "compressed-model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_compressed_emit_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "both",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    generated = (output_dir / f"pldm_terminus_{TERMINUS_EID}.py").read_text(encoding="utf-8")
+    assert "temperature_sensor = TemperatureSensor(" in generated
+    assert "*temperature_sensor.series(" in generated
+    # A run of one is not worth three lines of series syntax.
+    assert "temperature_sensor.clone(name='TEMP_SHARED_A', sensor_id=0x1101)" in generated
+    assert "for " not in generated
+    assert "f\"" not in generated
+    assert "f'" not in generated
+    assert "temperature_sensor.clone(\n            name='TEMP_NEAR',\n            sensor_id=0x1104,\n            warning_high=81,\n        )" in generated
+    assert "NumericSensor(\n            name='GENERIC_DISTINCT'," in generated
+
+    json_terminus = Terminus.from_artifact(_load_artifact(output_dir / f"pldm-terminus-{TERMINUS_EID}.json"))
+    python_terminus = _load_terminus_module(output_dir / f"pldm_terminus_{TERMINUS_EID}.py").terminus
+    json_records = _built_records(json_terminus)
+    python_records = _built_records(python_terminus)
+    assert python_records == json_records
+    # Derived from the source model rather than hardcoded: a template is a
+    # definition, not a position, so grouping must never reorder records.
+    expected_ids = [item.sensor_id for item in _compressed_emit_terminus().items]
+    assert [
+        decode_pdr(record).sensor_id
+        for record in python_records
+        if PdrHeader.from_bytes(record).pdr_type == PDR_TYPE_NUMERIC_SENSOR
+    ] == expected_ids
+
+
+def test_emit_python_is_substantially_smaller_than_the_json(runner: CliRunner, tmp_path: Path) -> None:
+    """The Python form exists to be maintainable, so its size advantage is the feature.
+
+    Without a floor under this, a change that quietly stops grouping items would
+    still pass every correctness test while undoing the reason the emitter
+    exists.
+    """
+    capture = tmp_path / "compressed-model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_repeated_item_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "both",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    python_lines = len((output_dir / f"pldm_terminus_{TERMINUS_EID}.py").read_text(encoding="utf-8").splitlines())
+    json_lines = len((output_dir / f"pldm-terminus-{TERMINUS_EID}.json").read_text(encoding="utf-8").splitlines())
+
+    assert python_lines * 2 < json_lines, f"expected real compression, got {python_lines} vs {json_lines}"
+
+
+def test_emit_python_template_naming_is_deterministic(runner: CliRunner, tmp_path: Path) -> None:
+    """Stable names keep regenerated modules reviewable when only the capture data changes."""
+    capture = tmp_path / "compressed-model.tcpdump.log"
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_compressed_emit_terminus())))
+
+    for output_dir in (first_dir, second_dir):
+        result = runner.invoke(
+            cli,
+            [
+                "pldm-from-capture",
+                str(capture),
+                "--output",
+                str(output_dir),
+                "--date",
+                "2026-01-02",
+                "--emit",
+                "python",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+    assert (first_dir / f"pldm_terminus_{TERMINUS_EID}.py").read_bytes() == (
+        second_dir / f"pldm_terminus_{TERMINUS_EID}.py"
+    ).read_bytes()
+
+
 def test_emit_python_uses_presets_and_omits_default_values(runner: CliRunner, tmp_path: Path) -> None:
     capture = tmp_path / "model.tcpdump.log"
     output_dir = tmp_path / "out"
@@ -784,15 +940,32 @@ def test_generated_python_passes_ruff(runner: CliRunner, tmp_path: Path) -> None
     )
 
     assert result.exit_code == 0, result.output
-    ruff = shutil.which("ruff")
-    command = [ruff, "check", str(output_dir / f"pldm_terminus_{TERMINUS_EID}.py")] if ruff else [
-        sys.executable,
-        "-m",
-        "ruff",
-        "check",
-        str(output_dir / f"pldm_terminus_{TERMINUS_EID}.py"),
-    ]
-    completed = subprocess.run(command, cwd=Path(__file__).parents[2], capture_output=True, text=True, check=False)
+    completed = _ruff_check(output_dir / f"pldm_terminus_{TERMINUS_EID}.py")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_compressed_generated_python_passes_ruff(runner: CliRunner, tmp_path: Path) -> None:
+    """Template and series formatting must be commit-ready, not just byte-identical."""
+    capture = tmp_path / "compressed-model.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(_compressed_emit_terminus())))
+
+    result = runner.invoke(
+        cli,
+        [
+            "pldm-from-capture",
+            str(capture),
+            "--output",
+            str(output_dir),
+            "--date",
+            "2026-01-02",
+            "--emit",
+            "python",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    completed = _ruff_check(output_dir / f"pldm_terminus_{TERMINUS_EID}.py")
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 

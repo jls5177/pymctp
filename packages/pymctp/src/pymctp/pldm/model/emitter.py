@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from enum import IntEnum
@@ -45,8 +46,17 @@ _WRAPPED_TEXT_CHUNK = 88
 _SENSOR_ID_FIELDS = {"sensor_id", "effecter_id"}
 _NUMERIC_FORMAT_FIELDS = {"data_size", "range_field_format"}
 _IGNORED_ITEM_FIELDS = {"name", "sensor_id", "effecter_id"}
+_IGNORED_SHAPE_FIELDS = {"record_handle", "sensor_id", "effecter_id", "pdr_type", "record_change_number"}
+_NEAR_DUPLICATE_FIELD_LIMIT = 4
 _PRESET_SENSOR_CLASSES = (TemperatureSensor, PowerSensor, VoltageSensor, CurrentSensor, CounterSensor)
 _AUXILIARY_NAME_PDR_TYPES = {PDR_TYPE_SENSOR_AUXILIARY_NAMES, PDR_TYPE_EFFECTER_AUXILIARY_NAMES}
+_NUMERIC_UNIT_NAMES = {
+    2: "temperature",
+    5: "voltage",
+    6: "current",
+    7: "power",
+    20: "counter",
+}
 
 
 @dataclass(frozen=True)
@@ -67,8 +77,9 @@ def emit_python_module(artifact: Mapping[str, Any]) -> PythonEmission:
         artifact_data["repository_info"] = {}
     terminus = Terminus.from_artifact(artifact_data)
     _apply_auxiliary_padding_policy(terminus, artifact_data)
-    rendered_items = [_render_item(item) for item in terminus.items]
-    imports = _imports_for_rendered_items(rendered_items)
+    rendered_templates, rendered_items = _render_model(terminus.items)
+    imports = _imports_for_rendered_items(rendered_items, rendered_templates)
+    templates = _render_templates(rendered_templates)
     code = "\n".join(
         [
             "# SPDX-FileCopyrightText: 2026 Justin Simon <justin@simonctl.com>",
@@ -84,15 +95,16 @@ def emit_python_module(artifact: Mapping[str, Any]) -> PythonEmission:
             "",
             *imports,
             "",
+            *templates,
             _render_terminus(terminus, rendered_items),
             "",
         ]
     )
     return PythonEmission(
         code=code,
-        preset_numeric_sensors=sum(1 for item in rendered_items if item.is_preset_numeric_sensor),
-        plain_numeric_sensors=sum(1 for item in rendered_items if item.class_name == "NumericSensor"),
-        verbatim_records=sum(1 for item in rendered_items if item.class_name == "VerbatimRecord"),
+        preset_numeric_sensors=sum(item.item_count for item in rendered_items if item.is_preset_numeric_sensor),
+        plain_numeric_sensors=sum(item.item_count for item in rendered_items if item.class_name == "NumericSensor"),
+        verbatim_records=sum(item.item_count for item in rendered_items if item.class_name == "VerbatimRecord"),
         verbatim_reasons=tuple(item.reason for item in rendered_items if item.reason is not None),
     )
 
@@ -104,6 +116,7 @@ class _RenderedItem:
     section: str
     is_preset_numeric_sensor: bool = False
     reason: str | None = None
+    item_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -111,12 +124,25 @@ class _RawExpression:
     code: str
 
 
-def _imports_for_rendered_items(items: list[_RenderedItem]) -> list[str]:
-    model_imports = sorted({item.class_name for item in items} | {"Terminus"})
+@dataclass(frozen=True)
+class _RenderedTemplate:
+    name: str
+    cls: type[Any]
+    class_name: str
+    item: TerminusItem
+    id_field: str
+    first_index: int
+
+
+def _imports_for_rendered_items(items: list[_RenderedItem], templates: list[_RenderedTemplate]) -> list[str]:
+    model_imports = sorted({item.class_name for item in items} | {template.class_name for template in templates} | {"Terminus"})
+    expressions = [item.expression for item in items] + [
+        _constructor_expr(template.cls, template.item, id_field=template.id_field) for template in templates
+    ]
     lines = []
     if any(item.class_name == "VerbatimRecord" for item in items):
         lines.extend(["from pymctp.layers.mctp.pldm.pdr import pdr_from_dict", ""])
-    if _uses_any(items, "GetSensorReadingDataSizeEnum."):
+    if _uses_any(expressions, "GetSensorReadingDataSizeEnum."):
         lines.extend(
             [
                 "from pymctp.layers.mctp.pldm.type_2_platform_monitoring import GetSensorReadingDataSizeEnum",
@@ -126,7 +152,7 @@ def _imports_for_rendered_items(items: list[_RenderedItem]) -> list[str]:
     pdr_imports = sorted(
         name
         for name in ("EffecterAuxiliaryNamesEntry", "PdrNameString", "SensorAuxiliaryNamesEntry")
-        if _uses_any(items, f"{name}(")
+        if _uses_any(expressions, f"{name}(")
     )
     if pdr_imports:
         if len(pdr_imports) == 1:
@@ -142,8 +168,142 @@ def _imports_for_rendered_items(items: list[_RenderedItem]) -> list[str]:
     return lines
 
 
-def _uses_any(items: list[_RenderedItem], needle: str) -> bool:
-    return any(needle in item.expression for item in items)
+def _uses_any(expressions: list[str], needle: str) -> bool:
+    return any(needle in expression for expression in expressions)
+
+
+def _render_model(items: list[TerminusItem]) -> tuple[list[_RenderedTemplate], list[_RenderedItem]]:
+    template_by_key, grouped_indices = _group_template_candidates(items)
+    rendered_templates = _name_templates(template_by_key, grouped_indices, items)
+    template_by_key = {_shape_key(template.item): template for template in rendered_templates}
+    clone_templates = _clone_templates_by_item_index(items, rendered_templates, grouped_indices)
+
+    rendered_items: list[_RenderedItem] = []
+    index = 0
+    while index < len(items):
+        item = items[index]
+        key = _shape_key(item)
+        template = template_by_key.get(key)
+        if template is not None and index in grouped_indices[key]:
+            run: list[TerminusItem] = []
+            while index < len(items) and _shape_key(items[index]) == key and index in grouped_indices[key]:
+                run.append(items[index])
+                index += 1
+            rendered_items.append(_render_series(template, run))
+            continue
+
+        clone_template = clone_templates.get(index)
+        if clone_template is not None:
+            rendered_items.append(_render_clone(clone_template, item))
+        else:
+            rendered_items.append(_render_item(item))
+        index += 1
+    return rendered_templates, rendered_items
+
+
+def _group_template_candidates(
+    items: list[TerminusItem],
+) -> tuple[dict[tuple[Any, ...], TerminusItem], dict[tuple[Any, ...], set[int]]]:
+    grouped: dict[tuple[Any, ...], list[tuple[int, TerminusItem]]] = {}
+    for index, item in enumerate(items):
+        key = _shape_key(item)
+        if key is not None:
+            grouped.setdefault(key, []).append((index, item))
+
+    template_by_key: dict[tuple[Any, ...], TerminusItem] = {}
+    grouped_indices: dict[tuple[Any, ...], set[int]] = {}
+    for key, indexed_items in grouped.items():
+        if len(indexed_items) <= 1:
+            continue
+        template = indexed_items[0][1]
+        compatible_indices = {index for index, member in indexed_items if _clone_matches_item(template, member, {})}
+        if len(compatible_indices) <= 1:
+            continue
+        template_by_key[key] = template
+        grouped_indices[key] = compatible_indices
+    return template_by_key, grouped_indices
+
+
+def _name_templates(
+    template_by_key: dict[tuple[Any, ...], TerminusItem],
+    grouped_indices: dict[tuple[Any, ...], set[int]],
+    items: list[TerminusItem],
+) -> list[_RenderedTemplate]:
+    used: set[str] = set()
+    templates: list[_RenderedTemplate] = []
+    for index, key in enumerate(sorted(template_by_key, key=lambda item_key: min(grouped_indices[item_key])), start=1):
+        template_item = template_by_key[key]
+        members = [items[item_index] for item_index in sorted(grouped_indices[key])]
+        cls, class_name, id_field, _ = _item_render_info(template_item)
+        base = _template_base_name(template_item, members, class_name)
+        name = _unique_template_name(base, used, fallback=f"{_snake_case(class_name)}_{index}")
+        templates.append(
+            _RenderedTemplate(
+                name=name,
+                cls=cls,
+                class_name=class_name,
+                item=template_item,
+                id_field=id_field,
+                first_index=min(grouped_indices[key]),
+            )
+        )
+    return templates
+
+
+def _clone_templates_by_item_index(
+    items: list[TerminusItem],
+    templates: list[_RenderedTemplate],
+    grouped_indices: dict[tuple[Any, ...], set[int]],
+) -> dict[int, _RenderedTemplate]:
+    grouped_item_indices = {index for indices in grouped_indices.values() for index in indices}
+    clone_templates: dict[int, _RenderedTemplate] = {}
+    for index, item in enumerate(items):
+        if index in grouped_item_indices or _shape_key(item) is None:
+            continue
+        candidates = []
+        for template in templates:
+            if _item_id_field(template.item) != _item_id_field(item):
+                continue
+            differences = _pdr_field_differences(template.item, item)
+            if 0 < len(differences) <= _NEAR_DUPLICATE_FIELD_LIMIT and _clone_matches_item(
+                template.item, item, _clone_overrides_from_pdr_fields(item, differences)
+            ):
+                candidates.append((len(differences), template.first_index, template))
+        if candidates:
+            clone_templates[index] = min(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]
+    return clone_templates
+
+
+def _render_templates(templates: list[_RenderedTemplate]) -> list[str]:
+    lines: list[str] = []
+    for template in templates:
+        lines.append(f"{template.name} = {_constructor_expr(template.cls, template.item, id_field=template.id_field)}")
+        lines.append("")
+    return lines
+
+
+def _render_series(template: _RenderedTemplate, items: list[TerminusItem]) -> _RenderedItem:
+    section = _item_render_info(template.item)[3]
+    pairs = [(getattr(item, "name"), getattr(item, template.id_field)) for item in items]
+    return _RenderedItem(
+        class_name=template.class_name,
+        expression=_series_expr(template.name, pairs, id_field=template.id_field),
+        section=section,
+        is_preset_numeric_sensor=template.class_name not in {"NumericSensor", "StateSensor", "NumericEffecter", "StateEffecter"},
+        item_count=len(items),
+    )
+
+
+def _render_clone(template: _RenderedTemplate, item: TerminusItem) -> _RenderedItem:
+    differences = _pdr_field_differences(template.item, item)
+    overrides = {"name": getattr(item, "name"), template.id_field: getattr(item, template.id_field)}
+    overrides.update(_clone_overrides_from_pdr_fields(item, differences))
+    return _RenderedItem(
+        class_name=template.class_name,
+        expression=_call_expr(f"{template.name}.clone", list(overrides.items()), level=0),
+        section=_item_render_info(item)[3],
+        is_preset_numeric_sensor=template.class_name not in {"NumericSensor", "StateSensor", "NumericEffecter", "StateEffecter"},
+    )
 
 
 def _render_terminus(terminus: Terminus, items: list[_RenderedItem]) -> str:
@@ -184,31 +344,196 @@ def _render_terminus(terminus: Terminus, items: list[_RenderedItem]) -> str:
 def _render_item(item: TerminusItem) -> _RenderedItem:
     if isinstance(item, VerbatimRecord):
         return _render_verbatim_record(item)
+    cls, class_name, id_field, section = _item_render_info(item)
+    return _RenderedItem(
+        class_name=class_name,
+        expression=_constructor_expr(cls, item, id_field=id_field),
+        section=section,
+        is_preset_numeric_sensor=cls is not NumericSensor and isinstance(item, NumericSensor),
+    )
+
+
+def _item_render_info(item: TerminusItem) -> tuple[type[Any], str, str, str]:
     if isinstance(item, NumericSensor):
         cls = _numeric_sensor_class(item)
-        return _RenderedItem(
-            class_name=cls.__name__,
-            expression=_constructor_expr(cls, item, id_field="sensor_id"),
-            section="Numeric sensors",
-            is_preset_numeric_sensor=cls is not NumericSensor,
-        )
+        return cls, cls.__name__, "sensor_id", "Numeric sensors"
     if isinstance(item, StateSensor):
-        return _RenderedItem(
-            class_name="StateSensor",
-            expression=_constructor_expr(StateSensor, item, id_field="sensor_id"),
-            section="State sensors",
-        )
+        return StateSensor, "StateSensor", "sensor_id", "State sensors"
     if isinstance(item, NumericEffecter):
-        return _RenderedItem(
-            class_name="NumericEffecter",
-            expression=_constructor_expr(NumericEffecter, item, id_field="effecter_id"),
-            section="Effecters",
-        )
-    return _RenderedItem(
-        class_name="StateEffecter",
-        expression=_constructor_expr(StateEffecter, item, id_field="effecter_id"),
-        section="Effecters",
+        return NumericEffecter, "NumericEffecter", "effecter_id", "Effecters"
+    if isinstance(item, StateEffecter):
+        return StateEffecter, "StateEffecter", "effecter_id", "Effecters"
+    msg = f"Unsupported template item: {type(item).__name__}"
+    raise TypeError(msg)
+
+
+def _item_id_field(item: TerminusItem) -> str:
+    if isinstance(item, (NumericSensor, StateSensor)):
+        return "sensor_id"
+    if isinstance(item, (NumericEffecter, StateEffecter)):
+        return "effecter_id"
+    return ""
+
+
+def _shape_key(item: TerminusItem) -> tuple[Any, ...] | None:
+    if isinstance(item, VerbatimRecord):
+        return None
+    return (
+        _item_id_field(item),
+        _item_render_info(item)[1],
+        _normalized_record_shape(pdr_to_dict(item.pdr(0))),
+        _normalized_auxiliary_shape(item),
     )
+
+
+def _normalized_auxiliary_shape(item: TerminusItem) -> tuple[Any, ...] | None:
+    if not getattr(item, "emit_auxiliary_names", False):
+        return None
+    record_size = getattr(item, "auxiliary_record_size", None)
+    record = _pad_auxiliary_pdr(item.auxiliary_pdr(1), record_size)
+    return _normalized_record_shape(pdr_to_dict(record), ignore_auxiliary_names=True)
+
+
+def _normalized_record_shape(record: Mapping[str, Any], *, ignore_auxiliary_names: bool = False) -> tuple[Any, ...]:
+    normalized = {
+        key: _normalized_shape_value(value, ignore_auxiliary_names=ignore_auxiliary_names)
+        for key, value in record.items()
+        if key not in _IGNORED_SHAPE_FIELDS
+    }
+    return tuple(sorted(normalized.items()))
+
+
+def _normalized_shape_value(value: Any, *, ignore_auxiliary_names: bool) -> Any:
+    if isinstance(value, Mapping):
+        normalized_items = []
+        for key, item in value.items():
+            if ignore_auxiliary_names and key in {"name", "name_bytes"}:
+                normalized_items.append((key, ""))
+            elif ignore_auxiliary_names and key == "name_data":
+                normalized_items.append((key, _name_data_shape(str(value.get("name", "")), item)))
+            else:
+                normalized_items.append((key, _normalized_shape_value(item, ignore_auxiliary_names=ignore_auxiliary_names)))
+        return tuple(sorted(normalized_items))
+    if isinstance(value, list):
+        return tuple(_normalized_shape_value(item, ignore_auxiliary_names=ignore_auxiliary_names) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_normalized_shape_value(item, ignore_auxiliary_names=ignore_auxiliary_names) for item in value)
+    if isinstance(value, IntEnum):
+        return int(value)
+    return value
+
+
+def _name_data_shape(name: str, value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    data = bytes.fromhex(value)
+    if data == name.encode("utf-16-le"):
+        return "utf-16-le"
+    if data == name.encode("utf-16-be"):
+        return "utf-16-be"
+    return ("raw", data)
+
+
+def _pdr_field_differences(template: TerminusItem, item: TerminusItem) -> list[str]:
+    template_fields = _shape_fields(template)
+    item_fields = _shape_fields(item)
+    differences = [
+        name
+        for name in sorted(set(template_fields) | set(item_fields))
+        if template_fields.get(name) != item_fields.get(name)
+    ]
+    return differences
+
+
+def _shape_fields(item: TerminusItem) -> dict[str, Any]:
+    if isinstance(item, VerbatimRecord):
+        return {}
+    record = pdr_to_dict(item.pdr(0))
+    return {
+        key: _normalized_shape_value(value, ignore_auxiliary_names=False)
+        for key, value in record.items()
+        if key not in _IGNORED_SHAPE_FIELDS
+    }
+
+
+def _clone_overrides_from_pdr_fields(item: TerminusItem, fields_to_override: list[str]) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    for name in fields_to_override:
+        constructor_name = "data_size" if name == "effecter_data_size" else name
+        if not hasattr(item, constructor_name):
+            return {}
+        overrides[constructor_name] = getattr(item, constructor_name)
+    return overrides
+
+
+def _clone_matches_item(template: TerminusItem, item: TerminusItem, overrides: dict[str, Any]) -> bool:
+    if not hasattr(template, "clone"):
+        return False
+    id_field = _item_id_field(item)
+    clone_overrides = {"name": getattr(item, "name"), id_field: getattr(item, id_field)}
+    clone_overrides.update(overrides)
+    return _item_records_match(item, template.clone(**clone_overrides))
+
+
+def _template_base_name(template: TerminusItem, members: list[TerminusItem], class_name: str) -> str:
+    if isinstance(template, (NumericSensor, NumericEffecter)):
+        unit_name = _NUMERIC_UNIT_NAMES.get(int(template.base_unit))
+        if unit_name is not None:
+            return f"{unit_name}_{'effecter' if isinstance(template, NumericEffecter) else 'sensor'}"
+    name_tokens = _common_name_tokens([getattr(member, "name") for member in members])
+    if name_tokens:
+        return "_".join(name_tokens[:3])
+    return _snake_case(class_name)
+
+
+def _common_name_tokens(names: list[str]) -> list[str]:
+    tokenized = [[token for token in _name_tokens(name) if not token.isdigit()] for name in names]
+    if not tokenized:
+        return []
+    common = set(tokenized[0])
+    for tokens in tokenized[1:]:
+        common &= set(tokens)
+    return [token for token in tokenized[0] if token in common]
+
+
+def _name_tokens(name: str) -> list[str]:
+    return [token for token in re.split(r"[^0-9A-Za-z]+", name.lower()) if token]
+
+
+def _snake_case(name: str) -> str:
+    value = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+    value = re.sub(r"[^0-9a-zA-Z_]+", "_", value).strip("_")
+    if not value or value[0].isdigit():
+        value = f"template_{value}"
+    return value
+
+
+def _unique_template_name(base: str, used: set[str], *, fallback: str) -> str:
+    candidate = _snake_case(base)
+    if candidate in used:
+        candidate = _snake_case(fallback)
+    suffix = 2
+    original = candidate
+    while candidate in used:
+        candidate = f"{original}_{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _series_expr(template_name: str, pairs: list[tuple[str, int]], *, id_field: str = "sensor_id") -> str:
+    # Repository order interleaves item kinds, so a shape often appears as many
+    # short runs. A run of one is not a series worth spelling out over three
+    # lines - a plain clone says the same thing on one.
+    if len(pairs) == 1:
+        name, item_id = pairs[0]
+        return f"{template_name}.clone(name={_literal(name)}, {id_field}={_id_literal(int(item_id))})"
+
+    lines = [f"*{template_name}.series(["]
+    for name, item_id in pairs:
+        lines.append(f"{_INDENT}({_literal(name)}, {_id_literal(int(item_id))}),")
+    lines.append("])")
+    return "\n".join(lines)
 
 
 def _render_verbatim_record(item: VerbatimRecord) -> _RenderedItem:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, TypeVar
@@ -72,6 +72,28 @@ class _Cloneable:
         if "name" in overrides and hasattr(item, "auxiliary_name_bytes") and "auxiliary_name_bytes" not in overrides:
             setattr(item, "auxiliary_name_bytes", None)
         return item
+
+    def series(self: _T, members: Iterable[tuple[str, int]]) -> list[_T]:
+        id_field = _item_id_field(self)
+        seen_ids: set[int] = set()
+        items: list[_T] = []
+        for name, item_id in members:
+            item_id = int(item_id)
+            if item_id in seen_ids:
+                msg = f"Duplicate {id_field} in {type(self).__name__}.series(): {item_id:#x}"
+                raise ValueError(msg)
+            seen_ids.add(item_id)
+            items.append(self.clone(name=name, **{id_field: item_id}))
+        return items
+
+
+def _item_id_field(item: Any) -> str:
+    if hasattr(item, "sensor_id"):
+        return "sensor_id"
+    if hasattr(item, "effecter_id"):
+        return "effecter_id"
+    msg = f"{type(item).__name__} does not have a sensor_id or effecter_id field"
+    raise TypeError(msg)
 
 
 @dataclass
@@ -893,7 +915,17 @@ def _replace_first_name(names: list[PdrNameString], name: str, name_bytes: bytes
     old_name = names[0].name
     previous_name_bytes = names[0].name_bytes
     names[0].name = name
-    names[0].name_bytes = name_bytes if name_bytes is not None else previous_name_bytes if old_name == name else None
+    names[0].name_bytes = (
+        name_bytes if name_bytes is not None else previous_name_bytes if old_name == name else _renamed_name_bytes(old_name, name, previous_name_bytes)
+    )
+
+
+def _renamed_name_bytes(old_name: str, new_name: str, previous_name_bytes: bytes | None) -> bytes | None:
+    if previous_name_bytes == old_name.encode("utf-16-le"):
+        return new_name.encode("utf-16-le")
+    if previous_name_bytes == old_name.encode("utf-16-be"):
+        return new_name.encode("utf-16-be")
+    return None
 
 
 def _first_sensor_name(aux: SensorAuxiliaryNamesPdr) -> str:
