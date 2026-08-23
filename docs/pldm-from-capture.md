@@ -77,7 +77,7 @@ terminus = Terminus(
 
 Use `NumericSensor`, `StateSensor`, `NumericEffecter`, and `StateEffecter` for
 fully explicit records. The presets `TemperatureSensor`, `PowerSensor`,
-`VoltageSensor`, `CurrentSensor`, and `CounterSensor` fill in common numeric
+`VoltageSensor`, `CurrentSensor`, and `FrequencySensor` fill in common numeric
 sensor fields. `clone()` duplicates an item while changing only fields such as
 `name` and `sensor_id`.
 

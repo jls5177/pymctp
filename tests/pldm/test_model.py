@@ -46,7 +46,7 @@ from pymctp.layers.mctp.pldm.types import PldmTypeCodes
 from pymctp.layers.mctp.transport import SmbusTransport, TransportHdr, TransportHdrPacket
 from pymctp.layers.mctp.types import EndpointContext, MsgTypes, Smbus7bitAddress
 from pymctp.pldm.model import (
-    CounterSensor,
+    FrequencySensor,
     CurrentSensor,
     NumericEffecter,
     NumericSensor,
@@ -233,7 +233,7 @@ def test_handles_remain_sequential_when_adding_clones() -> None:
         (PowerSensor, 7, 0, GetSensorReadingDataSizeEnum.UINT32, GetSensorReadingDataSizeEnum.UINT32),
         (VoltageSensor, 5, -3, GetSensorReadingDataSizeEnum.UINT32, GetSensorReadingDataSizeEnum.UINT32),
         (CurrentSensor, 6, -3, GetSensorReadingDataSizeEnum.SINT32, GetSensorReadingDataSizeEnum.SINT32),
-        (CounterSensor, 20, 0, GetSensorReadingDataSizeEnum.UINT32, GetSensorReadingDataSizeEnum.UINT32),
+        (FrequencySensor, 20, 0, GetSensorReadingDataSizeEnum.UINT32, GetSensorReadingDataSizeEnum.UINT32),
     ],
 )
 def test_presets_set_captured_unit_modifier_and_width(sensor_cls, base_unit: int, unit_modifier: int, data_size, range_field_format) -> None:

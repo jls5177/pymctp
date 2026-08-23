@@ -267,7 +267,9 @@ class CurrentSensor(NumericSensor):
 
 
 @dataclass
-class CounterSensor(NumericSensor):
+class FrequencySensor(NumericSensor):
+    #: DSP0248 baseUnit 20 is hertz (libpldm PLDM_SENSOR_UNIT_HERTZ); counts is
+    #: 67. openbmc's pldmd maps this unit to /xyz/openbmc_project/sensors/frequency.
     base_unit: int = 20
     data_size: GetSensorReadingDataSizeEnum | int = GetSensorReadingDataSizeEnum.UINT32
     unit_modifier: int = 0
@@ -962,7 +964,7 @@ def _fallback_entry(index: int, item: Mapping[str, Any], reason: str) -> dict[st
 
 
 __all__ = [
-    "CounterSensor",
+    "FrequencySensor",
     "CurrentSensor",
     "NumericEffecter",
     "NumericSensor",

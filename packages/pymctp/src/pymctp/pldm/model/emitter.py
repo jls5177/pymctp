@@ -27,7 +27,7 @@ from pymctp.layers.mctp.pldm.pdr import (
 )
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import GetSensorReadingDataSizeEnum
 from pymctp.pldm.model import (
-    CounterSensor,
+    FrequencySensor,
     CurrentSensor,
     NumericEffecter,
     NumericSensor,
@@ -48,7 +48,7 @@ _NUMERIC_FORMAT_FIELDS = {"data_size", "range_field_format"}
 _IGNORED_ITEM_FIELDS = {"name", "sensor_id", "effecter_id"}
 _IGNORED_SHAPE_FIELDS = {"record_handle", "sensor_id", "effecter_id", "pdr_type", "record_change_number"}
 _NEAR_DUPLICATE_FIELD_LIMIT = 4
-_PRESET_SENSOR_CLASSES = (TemperatureSensor, PowerSensor, VoltageSensor, CurrentSensor, CounterSensor)
+_PRESET_SENSOR_CLASSES = (TemperatureSensor, PowerSensor, VoltageSensor, CurrentSensor, FrequencySensor)
 _AUXILIARY_NAME_PDR_TYPES = {PDR_TYPE_SENSOR_AUXILIARY_NAMES, PDR_TYPE_EFFECTER_AUXILIARY_NAMES}
 _NUMERIC_UNIT_NAMES = {
     2: "temperature",
