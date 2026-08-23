@@ -15,6 +15,7 @@ from typing import Any
 
 import click
 
+from pymctp.layers.mctp.pldm.fru import decode_fru_table, fru_record_to_dict
 from pymctp.layers.mctp.pldm.pdr import (
     PDR_TYPE_ENTITY_AUXILIARY_NAMES,
     PDR_TYPE_NUMERIC_SENSOR,
@@ -156,7 +157,7 @@ def _artifact(
     terminus: TerminusCapture,
     decoded_pdrs: list[tuple[Any, dict[str, Any]]],
 ) -> dict[str, Any]:
-    return {
+    artifact = {
         "eid": terminus.eid,
         "tid": terminus.tid,
         "source": source,
@@ -165,12 +166,37 @@ def _artifact(
         "sensors": _sensors(terminus, decoded_pdrs),
         "warnings": list(terminus.warnings),
     }
+    fru = _fru_artifact(terminus)
+    if fru is not None:
+        artifact["fru"] = fru
+    return artifact
 
 
 def _repository_info(repository_info: dict[str, Any] | None) -> dict[str, Any] | None:
     if repository_info is None:
         return None
     return {key: repository_info.get(key) for key in _REPOSITORY_INFO_KEYS}
+
+
+def _fru_artifact(terminus: TerminusCapture) -> dict[str, Any] | None:
+    if terminus.fru_metadata is None and terminus.fru_record_table is None:
+        return None
+    table = terminus.fru_record_table or b""
+    records = []
+    for record in decode_fru_table(table):
+        record_dict = fru_record_to_dict(record)
+        if "data" not in record_dict:
+            record_dict["name"] = _fru_record_name(record_dict)
+        records.append(record_dict)
+    return {
+        "metadata": terminus.fru_metadata,
+        "table_padding": terminus.fru_record_table_padding.hex(),
+        "records": records,
+    }
+
+
+def _fru_record_name(record: dict[str, Any]) -> str:
+    return f"fru_record_{int(record['record_set_identifier']):04x}_{int(record['record_type']):02x}"
 
 
 def _sensors(
@@ -291,6 +317,7 @@ def _print_summary(
         click.echo(f"  Repository: expected {expected} record(s); recovered {len(decoded_pdrs)}")
     click.echo(f"  PDRs: {structured_count} decoded, {opaque_count} opaque")
     _print_pdr_table(decoded_pdrs)
+    _print_fru_summary(terminus)
     _print_sensor_summary(terminus)
     if terminus.warnings:
         click.echo("  WARNINGS:")
@@ -364,6 +391,15 @@ def _print_sensor_summary(terminus: TerminusCapture) -> None:
             f"    {sensor_id}: data_size={data_size}, readings={len(readings)}, "
             f"observed={_json_number(min(readings))}..{_json_number(max(readings))}"
         )
+
+
+def _print_fru_summary(terminus: TerminusCapture) -> None:
+    if terminus.fru_metadata is None and terminus.fru_record_table is None:
+        return
+    table_len = len(terminus.fru_record_table or b"")
+    padding_len = len(terminus.fru_record_table_padding)
+    record_count = len(decode_fru_table(terminus.fru_record_table or b""))
+    click.echo(f"  FRU: {record_count} record(s), table_length={table_len}, padding={padding_len}")
 
 
 def _print_table(headers: tuple[str, ...], rows: list[tuple[str, ...]], *, indent: str = "") -> None:

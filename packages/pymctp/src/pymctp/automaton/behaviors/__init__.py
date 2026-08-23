@@ -14,6 +14,7 @@ from .cerberus_responder import (
     ComponentAttestation,
 )
 from .pldm_responder import (
+    FruRepository,
     NumericSensorPdr,
     PdrRepository,
     PlatformEvent,
@@ -53,6 +54,7 @@ __all__ = [
     "DiscoveryStep",
     "DiscoveryTarget",
     "EidResolver",
+    "FruRepository",
     "NumericSensorPdr",
     "PdrRepository",
     "PlatformEvent",

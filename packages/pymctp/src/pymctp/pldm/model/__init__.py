@@ -15,11 +15,20 @@ from typing import Any, TypeVar
 
 from pymctp.automaton.behaviors.pldm_responder import (
     EffecterDefinition,
+    FruRepository,
     NumericSensorPdr,
     PdrRepository,
     PldmSensorProfile,
     SensorDefinition,
     StateSensorPdr,
+)
+from pymctp.layers.mctp.pldm.fru import (
+    FruField,
+    FruRecord,
+    OpaqueFruField,
+    OpaqueFruRecord,
+    encode_fru_record,
+    fru_record_from_dict,
 )
 from pymctp.layers.mctp.pldm.pdr import (
     PDR_TYPE_EFFECTER_AUXILIARY_NAMES,
@@ -92,7 +101,9 @@ def _item_id_field(item: Any) -> str:
         return "sensor_id"
     if hasattr(item, "effecter_id"):
         return "effecter_id"
-    msg = f"{type(item).__name__} does not have a sensor_id or effecter_id field"
+    if hasattr(item, "record_set_identifier"):
+        return "record_set_identifier"
+    msg = f"{type(item).__name__} does not have a sensor_id, effecter_id, or record_set_identifier field"
     raise TypeError(msg)
 
 
@@ -586,7 +597,51 @@ class VerbatimRecord:
             return None
 
 
+@dataclass
+class FruRecordItem(_Cloneable):
+    """Editable PLDM FRU record-set entry."""
+
+    name: str
+    record_set_identifier: int
+    record_type: int
+    fields: list[FruField | OpaqueFruField] = field(default_factory=list)
+    encoding_type: int = 1
+
+    def __post_init__(self) -> None:
+        self.record_set_identifier = int(self.record_set_identifier)
+        self.record_type = int(self.record_type)
+        self.encoding_type = int(self.encoding_type)
+        self.fields = copy.deepcopy(self.fields)
+
+    def fru_record(self) -> FruRecord:
+        return FruRecord(
+            record_set_identifier=self.record_set_identifier,
+            record_type=self.record_type,
+            encoding_type=self.encoding_type,
+            fields=copy.deepcopy(self.fields),
+        )
+
+
+@dataclass
+class VerbatimFruRecord:
+    """A FRU record that is passed through without reinterpretation."""
+
+    record: Any
+    reason: str = "verbatim FRU escape hatch"
+
+    def __post_init__(self) -> None:
+        if isinstance(self.record, (bytes, bytearray)):
+            self.record = bytes(self.record)
+        else:
+            self.record = copy.deepcopy(self.record)
+
+    @property
+    def encoded(self) -> bytes:
+        return encode_fru_record(self.record)
+
+
 TerminusItem = NumericSensor | StateSensor | NumericEffecter | StateEffecter | VerbatimRecord
+FruTerminusItem = FruRecordItem | VerbatimFruRecord
 
 
 @dataclass
@@ -594,18 +649,28 @@ class Terminus:
     eid: int
     tid: int
     items: list[TerminusItem] = field(default_factory=list)
+    fru_records: list[FruTerminusItem] = field(default_factory=list)
     repository_state: int = 0
     reported_record_count: int | None = None
     reported_repository_size: int | None = None
     reported_largest_record_size: int | None = None
     data_transfer_handle_timeout: int = 0
     auxiliary_record_size: int | None = None
+    fru_major_version: int = 1
+    fru_minor_version: int = 0
+    fru_table_maximum_size: int = 0
+    fru_reported_table_length: int | None = None
+    fru_reported_record_set_count: int | None = None
+    fru_reported_record_count: int | None = None
+    fru_reported_integrity_checksum: int | None = None
+    fru_table_padding: bytes = b""
     verbatim_fallbacks: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.eid = int(self.eid)
         self.tid = int(self.tid)
         self.auxiliary_record_size = None if self.auxiliary_record_size is None else int(self.auxiliary_record_size)
+        self.fru_table_padding = bytes(self.fru_table_padding)
         self._reindex()
 
     def add(self, item: TerminusItem | bytes | bytearray) -> TerminusItem:
@@ -622,7 +687,24 @@ class Terminus:
         self.add(item)
         return item
 
-    def __getitem__(self, key: str | int) -> TerminusItem:
+    def add_fru(self, item: FruTerminusItem | FruRecord | OpaqueFruRecord | bytes | bytearray) -> FruTerminusItem:
+        if isinstance(item, (bytes, bytearray)):
+            item = VerbatimFruRecord(bytes(item), reason="caller supplied raw FRU bytes")
+        elif isinstance(item, FruRecord):
+            item = FruRecordItem(
+                name=_fru_record_name(item),
+                record_set_identifier=item.record_set_identifier,
+                record_type=item.record_type,
+                encoding_type=item.encoding_type,
+                fields=copy.deepcopy(item.fields),
+            )
+        elif not isinstance(item, (FruRecordItem, VerbatimFruRecord)):
+            item = VerbatimFruRecord(item, reason="caller supplied decoded FRU record")
+        self.fru_records.append(item)
+        self._reindex()
+        return item
+
+    def __getitem__(self, key: str | int) -> TerminusItem | FruTerminusItem:
         return self._by_name[key] if isinstance(key, str) else self._by_id[int(key)]
 
     def build(self) -> PldmSensorProfile:
@@ -654,7 +736,20 @@ class Terminus:
             reported_largest_record_size=self.reported_largest_record_size,
             data_transfer_handle_timeout=self.data_transfer_handle_timeout,
         )
-        return PldmSensorProfile(sensors=sensors, effecters=effecters, pdr_repository=repository)
+        fru_repository = FruRepository(
+            records=[
+                item.fru_record() if isinstance(item, FruRecordItem) else item.record for item in self.fru_records
+            ],
+            table_padding=self.fru_table_padding,
+            major_version=self.fru_major_version,
+            minor_version=self.fru_minor_version,
+            table_maximum_size=self.fru_table_maximum_size,
+            reported_table_length=self.fru_reported_table_length,
+            reported_record_set_count=self.fru_reported_record_set_count,
+            reported_record_count=self.fru_reported_record_count,
+            reported_integrity_checksum=self.fru_reported_integrity_checksum,
+        )
+        return PldmSensorProfile(sensors=sensors, effecters=effecters, pdr_repository=repository, fru_repository=fru_repository)
 
     @classmethod
     def from_artifact(cls, artifact: str | Path | Mapping[str, Any]) -> Terminus:
@@ -668,6 +763,7 @@ class Terminus:
             reported_repository_size=_optional_int(repository_info.get("repository_size")),
             reported_largest_record_size=_optional_int(repository_info.get("largest_record_size")),
             data_transfer_handle_timeout=int(repository_info.get("data_transfer_handle_timeout", 0)),
+            **_fru_kwargs_from_artifact(data.get("fru")),
         )
         pdrs = data.get("pdrs", [])
         if not isinstance(pdrs, list):
@@ -700,10 +796,11 @@ class Terminus:
                 terminus.add_verbatim(record, reason=reason)
                 terminus.verbatim_fallbacks.append(_fallback_entry(index + offset, source_item, reason))
             index += len(source_items)
+        _load_fru_artifact_records(terminus, data.get("fru"))
         return terminus
 
     def _reindex(self) -> None:
-        self._by_name: dict[str, TerminusItem] = {}
+        self._by_name: dict[str, TerminusItem | FruTerminusItem] = {}
         self._by_id: dict[int, TerminusItem] = {}
         for item in self.items:
             name = getattr(item, "name", None)
@@ -712,6 +809,10 @@ class Terminus:
             item_id = getattr(item, "sensor_id", getattr(item, "effecter_id", None))
             if item_id is not None:
                 self._by_id[int(item_id)] = item
+        for item in self.fru_records:
+            name = getattr(item, "name", None)
+            if isinstance(name, str):
+                self._by_name[name] = item
 
 
 def _artifact_data(artifact: str | Path | Mapping[str, Any]) -> Mapping[str, Any]:
@@ -722,6 +823,54 @@ def _artifact_data(artifact: str | Path | Mapping[str, Any]) -> Mapping[str, Any
 
 def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
+
+
+def _fru_kwargs_from_artifact(fru: Any) -> dict[str, Any]:
+    if not isinstance(fru, Mapping):
+        return {}
+    metadata = fru.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    return {
+        "fru_major_version": int(metadata.get("major_version", 1)),
+        "fru_minor_version": int(metadata.get("minor_version", 0)),
+        "fru_table_maximum_size": int(metadata.get("table_maximum_size", 0)),
+        "fru_reported_table_length": _optional_int(metadata.get("table_length")),
+        "fru_reported_record_set_count": _optional_int(metadata.get("total_record_set_identifiers")),
+        "fru_reported_record_count": _optional_int(metadata.get("total_records")),
+        "fru_reported_integrity_checksum": _optional_int(metadata.get("integrity_checksum")),
+        "fru_table_padding": bytes.fromhex(str(fru.get("table_padding", ""))),
+    }
+
+
+def _load_fru_artifact_records(terminus: Terminus, fru: Any) -> None:
+    if not isinstance(fru, Mapping):
+        return
+    records = fru.get("records", [])
+    if not isinstance(records, list):
+        msg = "PLDM artifact field 'fru.records' must be a list"
+        raise ValueError(msg)
+    for index, item in enumerate(records):
+        if not isinstance(item, Mapping):
+            msg = f"PLDM artifact fru.records[{index}] must be an object"
+            raise ValueError(msg)
+        record = fru_record_from_dict(dict(item))
+        if isinstance(record, FruRecord):
+            terminus.add_fru(
+                FruRecordItem(
+                    name=str(item.get("name") or _fru_record_name(record)),
+                    record_set_identifier=record.record_set_identifier,
+                    record_type=record.record_type,
+                    encoding_type=record.encoding_type,
+                    fields=copy.deepcopy(record.fields),
+                )
+            )
+        else:
+            terminus.add_fru(VerbatimFruRecord(record, reason="FRU record is opaque in the artifact"))
+
+
+def _fru_record_name(record: FruRecord) -> str:
+    return f"fru_record_{record.record_set_identifier:04x}_{record.record_type:02x}"
 
 
 def _pad_auxiliary_pdr(
@@ -966,6 +1115,7 @@ def _fallback_entry(index: int, item: Mapping[str, Any], reason: str) -> dict[st
 __all__ = [
     "FrequencySensor",
     "CurrentSensor",
+    "FruRecordItem",
     "NumericEffecter",
     "NumericSensor",
     "PowerSensor",
@@ -974,5 +1124,6 @@ __all__ = [
     "TemperatureSensor",
     "Terminus",
     "VerbatimRecord",
+    "VerbatimFruRecord",
     "VoltageSensor",
 ]

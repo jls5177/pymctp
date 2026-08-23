@@ -17,16 +17,19 @@ from scapy.packet import Raw
 from scapy.plist import PacketList
 
 from pymctp.automaton.behaviors.pldm_responder import (
+    FruRepository,
     GetPDRTransferFlag,
     GetPDRTransferOperation,
     NumericSensorPdr,
     PdrRepository,
     PldmBaseBehavior,
     PldmSensorBehavior,
+    PldmSensorProfile,
     SensorDefinition,
     SensorSimulation,
     StateSensorPdr,
 )
+from pymctp.layers.mctp.pldm.fru import FruField, FruRecord, PldmFruCmdCodes
 from pymctp.automaton.roles import get_behaviors_for_roles
 from pymctp.layers.mctp.pldm import (
     GetPLDMCommandsPacket,
@@ -223,6 +226,10 @@ def _platform_request(cmd_code: int, payload=None, **kwargs):
     return _request(PldmTypeCodes.PLATFORM_MONITORING, cmd_code, payload, **kwargs)
 
 
+def _fru_request(cmd_code: int, payload=None, **kwargs):
+    return _request(PldmTypeCodes.FRU, cmd_code, payload, **kwargs)
+
+
 def _raw_payload(pldm: PldmHdrPacket) -> bytes:
     if isinstance(pldm.payload, Raw):
         return bytes(pldm.payload.load)
@@ -252,6 +259,16 @@ def _parse_pdr_response(pldm: PldmHdrPacket) -> tuple[int, int, int, bytes, byte
     start = struct.calcsize("<IIBH")
     end = start + response_count
     return next_record_handle, next_data_transfer_handle, transfer_flag, data[start:end], data[end:]
+
+
+def _get_fru_table_request(data_transfer_handle: int, operation: GetPDRTransferOperation) -> bytes:
+    return struct.pack("<IB", data_transfer_handle, int(operation))
+
+
+def _parse_fru_table_response(pldm: PldmHdrPacket) -> tuple[int, int, bytes]:
+    data = _raw_payload(pldm)
+    next_data_transfer_handle, transfer_flag = struct.unpack_from("<IB", data)
+    return next_data_transfer_handle, transfer_flag, data[5:]
 
 
 def _pdr_header(record: bytes) -> tuple[int, int, int, int, int]:
@@ -365,6 +382,33 @@ def test_get_pldm_commands_reports_32_byte_command_bitfield() -> None:
         PldmPlatformMonitoringCmdCodes.GetPDR,
     ):
         assert payload.cmds[int(command) // 8] & (1 << (int(command) % 8))
+
+
+def test_get_pldm_types_and_commands_advertise_fru_by_default() -> None:
+    base = PldmBaseBehavior()
+    ctx = _ctx()
+
+    types = _single_pldm(_get_reply(base, _base_request(PldmControlCmdCodes.GetPLDMTypes), ctx))
+    type_payload = types.getlayer(GetPLDMTypesPacket)
+    commands = _single_pldm(
+        _get_reply(
+            base,
+            _base_request(
+                PldmControlCmdCodes.GetPLDMCommands,
+                GetPLDMCommandsPacket(PLDMType=PldmTypeCodes.FRU, Version=0x00F1F000),
+            ),
+            ctx,
+        )
+    )
+    command_payload = commands.getlayer(GetPLDMCommandsPacket)
+
+    assert type_payload.PLDMTypes1 & (1 << int(PldmTypeCodes.FRU))
+    assert command_payload.cmds[int(PldmFruCmdCodes.GetFRURecordTableMetadata) // 8] & (
+        1 << (int(PldmFruCmdCodes.GetFRURecordTableMetadata) % 8)
+    )
+    assert command_payload.cmds[int(PldmFruCmdCodes.GetFRURecordTable) // 8] & (
+        1 << (int(PldmFruCmdCodes.GetFRURecordTable) % 8)
+    )
 
 
 def test_get_pldm_version_returns_single_part_version_bytes() -> None:
@@ -692,6 +736,102 @@ def test_get_pdr_transfer_state_is_isolated_per_endpoint_context() -> None:
 
     assert first_1[3] + next_1[3] == behavior.profile.pdr_repository.get_record(0)
     assert first_2[3] + next_2[3] == behavior.profile.pdr_repository.get_record(0)
+
+
+def test_get_fru_metadata_and_table_single_part_are_served_from_profile() -> None:
+    table_record = FruRecord(1, 0xFE, 1, [FruField(1, "ALPHA")])
+    repository = FruRepository(records=[table_record], table_padding=b"\x00\x00")
+    behavior = PldmSensorBehavior(profile=PldmSensorProfile(fru_repository=repository))
+    ctx = _ctx()
+
+    metadata = _single_pldm(
+        _get_reply(behavior, _fru_request(PldmFruCmdCodes.GetFRURecordTableMetadata), ctx)
+    )
+    table = _single_pldm(
+        _get_reply(
+            behavior,
+            _fru_request(
+                PldmFruCmdCodes.GetFRURecordTable,
+                Raw(_get_fru_table_request(0, GetPDRTransferOperation.GET_FIRST_PART)),
+            ),
+            ctx,
+        )
+    )
+    next_handle, transfer_flag, chunk = _parse_fru_table_response(table)
+
+    assert metadata.completion_code == CompletionCodes.SUCCESS
+    assert _raw_payload(metadata) == repository.metadata().to_bytes()
+    assert table.completion_code == CompletionCodes.SUCCESS
+    assert next_handle == 0
+    assert transfer_flag == GetPDRTransferFlag.START_AND_END
+    assert chunk == repository.response_table()
+
+
+def test_get_fru_table_multipart_reassembles_response_table() -> None:
+    """FRU has no request-count field, so responder chunking must still walk transfer handles."""
+    records = [
+        FruRecord(1, 0xFE, 1, [FruField(1, "ALPHA"), FruField(2, "BRAVO")]),
+        FruRecord(2, 0xFE, 1, [FruField(1, "CHARLIE")]),
+    ]
+    repository = FruRepository(records=records)
+    behavior = PldmSensorBehavior(profile=PldmSensorProfile(fru_repository=repository, fru_transfer_chunk_size=8))
+    ctx = _ctx()
+    collected = bytearray()
+    transfer_handle = 0
+    operation = GetPDRTransferOperation.GET_FIRST_PART
+
+    while True:
+        pldm = _single_pldm(
+            _get_reply(
+                behavior,
+                _fru_request(
+                    PldmFruCmdCodes.GetFRURecordTable,
+                    Raw(_get_fru_table_request(transfer_handle, operation)),
+                ),
+                ctx,
+            )
+        )
+        transfer_handle, transfer_flag, chunk = _parse_fru_table_response(pldm)
+        collected.extend(chunk)
+        if transfer_handle == 0:
+            assert transfer_flag == GetPDRTransferFlag.END
+            break
+        assert transfer_flag in (GetPDRTransferFlag.START, GetPDRTransferFlag.MIDDLE)
+        operation = GetPDRTransferOperation.GET_NEXT_PART
+
+    assert bytes(collected) == repository.response_table()
+
+
+def test_get_fru_short_and_unknown_requests_return_specific_completion_codes() -> None:
+    behavior = PldmSensorBehavior(profile=PldmSensorProfile(fru_repository=FruRepository()))
+    ctx = _ctx()
+
+    short = _single_pldm(
+        _get_reply(behavior, _fru_request(PldmFruCmdCodes.GetFRURecordTable, Raw(b"\x00")), ctx)
+    )
+    invalid_operation = _single_pldm(
+        _get_reply(
+            behavior,
+            _fru_request(PldmFruCmdCodes.GetFRURecordTable, Raw(struct.pack("<IB", 0, 0xFF))),
+            ctx,
+        )
+    )
+    invalid_handle = _single_pldm(
+        _get_reply(
+            behavior,
+            _fru_request(
+                PldmFruCmdCodes.GetFRURecordTable,
+                Raw(_get_fru_table_request(0x9999, GetPDRTransferOperation.GET_NEXT_PART)),
+            ),
+            ctx,
+        )
+    )
+    unknown = _single_pldm(_get_reply(behavior, _fru_request(0x7F), ctx))
+
+    assert short.completion_code == CompletionCodes.ERROR_INVALID_LENGTH
+    assert invalid_operation.completion_code == 0x81
+    assert invalid_handle.completion_code == 0x80
+    assert unknown.completion_code == CompletionCodes.ERROR_UNSUPPORTED_CMD
 
 
 def test_pdrs_are_derived_from_configured_sensors_and_match_readings() -> None:

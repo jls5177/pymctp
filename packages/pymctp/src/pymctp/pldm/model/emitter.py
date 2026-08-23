@@ -25,10 +25,12 @@ from pymctp.layers.mctp.pldm.pdr import (
     pdr_from_dict,
     pdr_to_dict,
 )
+from pymctp.layers.mctp.pldm.fru import FruField, OpaqueFruField, fru_record_to_dict
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import GetSensorReadingDataSizeEnum
 from pymctp.pldm.model import (
     FrequencySensor,
     CurrentSensor,
+    FruRecordItem,
     NumericEffecter,
     NumericSensor,
     PowerSensor,
@@ -36,6 +38,7 @@ from pymctp.pldm.model import (
     StateSensor,
     TemperatureSensor,
     Terminus,
+    VerbatimFruRecord,
     TerminusItem,
     VerbatimRecord,
     VoltageSensor,
@@ -78,7 +81,8 @@ def emit_python_module(artifact: Mapping[str, Any]) -> PythonEmission:
     terminus = Terminus.from_artifact(artifact_data)
     _apply_auxiliary_padding_policy(terminus, artifact_data)
     rendered_templates, rendered_items = _render_model(terminus.items)
-    imports = _imports_for_rendered_items(rendered_items, rendered_templates)
+    rendered_fru_records = _render_fru_records(terminus.fru_records)
+    imports = _imports_for_rendered_items(rendered_items + rendered_fru_records, rendered_templates)
     templates = _render_templates(rendered_templates)
     code = "\n".join(
         [
@@ -96,7 +100,7 @@ def emit_python_module(artifact: Mapping[str, Any]) -> PythonEmission:
             *imports,
             "",
             *templates,
-            _render_terminus(terminus, rendered_items),
+            _render_terminus(terminus, rendered_items, rendered_fru_records),
             "",
         ]
     )
@@ -142,6 +146,8 @@ def _imports_for_rendered_items(items: list[_RenderedItem], templates: list[_Ren
     lines = []
     if any(item.class_name == "VerbatimRecord" for item in items):
         lines.extend(["from pymctp.layers.mctp.pldm.pdr import pdr_from_dict", ""])
+    if any(item.class_name == "VerbatimFruRecord" for item in items):
+        lines.extend(["from pymctp.layers.mctp.pldm.fru import fru_record_from_dict", ""])
     if _uses_any(expressions, "GetSensorReadingDataSizeEnum."):
         lines.extend(
             [
@@ -154,12 +160,23 @@ def _imports_for_rendered_items(items: list[_RenderedItem], templates: list[_Ren
         for name in ("EffecterAuxiliaryNamesEntry", "PdrNameString", "SensorAuxiliaryNamesEntry")
         if _uses_any(expressions, f"{name}(")
     )
+    fru_imports = sorted(
+        name for name in ("FruField", "OpaqueFruField") if _uses_any(expressions, f"{name}(")
+    )
     if pdr_imports:
         if len(pdr_imports) == 1:
             lines.append(f"from pymctp.layers.mctp.pldm.pdr import {pdr_imports[0]}")
         else:
             lines.append("from pymctp.layers.mctp.pldm.pdr import (")
             lines.extend(f"{_INDENT}{name}," for name in pdr_imports)
+            lines.append(")")
+        lines.append("")
+    if fru_imports:
+        if len(fru_imports) == 1:
+            lines.append(f"from pymctp.layers.mctp.pldm.fru import {fru_imports[0]}")
+        else:
+            lines.append("from pymctp.layers.mctp.pldm.fru import (")
+            lines.extend(f"{_INDENT}{name}," for name in fru_imports)
             lines.append(")")
         lines.append("")
     lines.append("from pymctp.pldm.model import (")
@@ -306,7 +323,7 @@ def _render_clone(template: _RenderedTemplate, item: TerminusItem) -> _RenderedI
     )
 
 
-def _render_terminus(terminus: Terminus, items: list[_RenderedItem]) -> str:
+def _render_terminus(terminus: Terminus, items: list[_RenderedItem], fru_records: list[_RenderedItem]) -> str:
     args: list[tuple[str, Any]] = [("eid", terminus.eid), ("tid", terminus.tid)]
     for field_name in (
         "repository_state",
@@ -315,6 +332,14 @@ def _render_terminus(terminus: Terminus, items: list[_RenderedItem]) -> str:
         "reported_largest_record_size",
         "data_transfer_handle_timeout",
         "auxiliary_record_size",
+        "fru_major_version",
+        "fru_minor_version",
+        "fru_table_maximum_size",
+        "fru_reported_table_length",
+        "fru_reported_record_set_count",
+        "fru_reported_record_count",
+        "fru_reported_integrity_checksum",
+        "fru_table_padding",
     ):
         value = getattr(terminus, field_name)
         if value != getattr(Terminus(eid=terminus.eid, tid=terminus.tid), field_name):
@@ -337,6 +362,14 @@ def _render_terminus(terminus: Terminus, items: list[_RenderedItem]) -> str:
         lines.append(f"{_INDENT}],")
     else:
         lines.append(f"{_INDENT}items=[],")
+    if fru_records:
+        lines.append(f"{_INDENT}fru_records=[")
+        for item in fru_records:
+            if item.reason is not None:
+                lines.append(f"{_INDENT * 2}# Verbatim: {item.reason}.")
+            lines.extend(f"{_INDENT * 2}{line}" if line else "" for line in item.expression.splitlines())
+            lines[-1] += ","
+        lines.append(f"{_INDENT}],")
     lines.append(")")
     return "\n".join(lines)
 
@@ -351,6 +384,56 @@ def _render_item(item: TerminusItem) -> _RenderedItem:
         section=section,
         is_preset_numeric_sensor=cls is not NumericSensor and isinstance(item, NumericSensor),
     )
+
+
+def _render_fru_records(items: list[Any]) -> list[_RenderedItem]:
+    rendered: list[_RenderedItem] = []
+    for item in items:
+        if isinstance(item, VerbatimFruRecord):
+            rendered.append(_render_verbatim_fru_record(item))
+        elif isinstance(item, FruRecordItem):
+            rendered.append(
+                _RenderedItem(
+                    class_name="FruRecordItem",
+                    expression=_call_expr(
+                        "FruRecordItem",
+                        [
+                            ("name", item.name),
+                            ("record_set_identifier", item.record_set_identifier),
+                            ("record_type", item.record_type),
+                            ("encoding_type", item.encoding_type),
+                            ("fields", item.fields),
+                        ],
+                        level=0,
+                    ),
+                    section="FRU records",
+                )
+            )
+    return rendered
+
+
+def _render_verbatim_fru_record(item: VerbatimFruRecord) -> _RenderedItem:
+    expression = _call_expr(
+        "VerbatimFruRecord",
+        [
+            ("record", _RawExpression(f"fru_record_from_dict({_literal(_verbatim_fru_dict(item), level=2)})")),
+            ("reason", item.reason),
+        ],
+        level=0,
+    )
+    return _RenderedItem(
+        class_name="VerbatimFruRecord",
+        expression=expression,
+        section="FRU records",
+        reason=item.reason,
+    )
+
+
+def _verbatim_fru_dict(item: VerbatimFruRecord) -> dict[str, Any]:
+    try:
+        return fru_record_to_dict(item.record)
+    except TypeError:
+        return {"record_set_identifier": 0, "record_type": -1, "data": item.encoded.hex()}
 
 
 def _item_render_info(item: TerminusItem) -> tuple[type[Any], str, str, str]:
@@ -766,6 +849,8 @@ def _wrapped_text_body(text: str, *, level: int) -> str:
 
 
 def _dataclass_literal(value: Any, *, level: int) -> str:
+    if isinstance(value, (FruField, OpaqueFruField)):
+        return _call_expr(type(value).__name__, [(field.name, getattr(value, field.name)) for field in fields(value)], level=level)
     if isinstance(value, (SensorAuxiliaryNamesEntry, EffecterAuxiliaryNamesEntry)):
         return _call_expr(type(value).__name__, [("names", value.names)], level=level)
     if isinstance(value, PdrNameString):

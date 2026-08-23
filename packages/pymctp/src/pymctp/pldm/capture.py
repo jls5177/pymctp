@@ -16,6 +16,8 @@ from scapy.compat import raw
 from scapy.packet import Packet
 
 from pymctp.cli.analyze_tcpdump import parse_pcap_file, parse_text_file
+from pymctp.layers.mctp.pldm.fru import FruMetadata, fru_metadata_to_dict
+from pymctp.layers.mctp.pldm.fru import PldmFruCmdCodes
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import PldmPlatformMonitoringCmdCodes
 from pymctp.layers.mctp.pldm.types import PldmControlCmdCodes, PldmTypeCodes
 from pymctp.layers.mctp.transport import TransportHdrPacket
@@ -32,8 +34,13 @@ TRANSFER_FLAG_START_AND_END = 0x05
 class TerminusCapture:
     eid: int
     tid: int | None = None
+    supported_pldm_types: list[int] | None = None
+    supported_pldm_commands: dict[int, list[int]] = field(default_factory=dict)
     repository_info: dict | None = None
     pdr_records: list[bytes] = field(default_factory=list)
+    fru_metadata: dict[str, int] | None = None
+    fru_record_table: bytes | None = None
+    fru_record_table_padding: bytes = b""
     sensor_readings: dict[int, list[float]] = field(default_factory=dict)
     sensor_data_sizes: dict[int, int] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -78,6 +85,11 @@ class _PdrTransfer:
     chunks: list[bytes]
 
 
+@dataclass
+class _FruTransfer:
+    chunks: list[bytes]
+
+
 def read_capture(
     path: str | pathlib.Path,
     *,
@@ -101,6 +113,7 @@ def extract_pldm(packets: Iterable[tuple[datetime | None, Any]]) -> dict[int, Te
     outstanding: dict[tuple[int, int, int, int, int], _Request] = {}
     pdr_records_by_handle: dict[int, OrderedDict[int, bytes]] = {}
     pdr_transfers: dict[int, dict[int, _PdrTransfer]] = {}
+    fru_transfers: dict[int, dict[int, _FruTransfer]] = {}
     fragment_buffers: dict[tuple[int, int, int, int], _FragmentBuffer] = {}
 
     def terminus(eid: int) -> TerminusCapture:
@@ -144,6 +157,8 @@ def extract_pldm(packets: Iterable[tuple[datetime | None, Any]]) -> dict[int, Te
                 pdr_records_by_handle,
                 pdr_transfers,
             )
+        elif pldm.pldm_type == PldmTypeCodes.FRU:
+            _process_fru_response(terminus(message.src), pldm.cmd_code, request.payload, pldm.payload, fru_transfers)
 
     for _, packet in packets:
         transport = _transport_layer(packet)
@@ -214,6 +229,10 @@ def extract_pldm(packets: Iterable[tuple[datetime | None, Any]]) -> dict[int, Te
 
     for buffer in fragment_buffers.values():
         warn(_terminus_eid(buffer.src, buffer.dst, buffer.to), "dropped incomplete MCTP PLDM message at end of capture")
+
+    for eid, transfers in fru_transfers.items():
+        if transfers:
+            termini[eid].warnings.append("dropped incomplete GetFRURecordTable transfer at end of capture")
 
     for eid, records in pdr_records_by_handle.items():
         termini[eid].pdr_records = list(records.values())
@@ -289,6 +308,10 @@ def _process_control_response(
         capture.tid = request_payload[0]
     elif cmd_code == PldmControlCmdCodes.GetTID and response_payload:
         capture.tid = response_payload[0]
+    elif cmd_code == PldmControlCmdCodes.GetPLDMTypes and len(response_payload) >= 8:
+        capture.supported_pldm_types = _decode_bitfield(response_payload[:8])
+    elif cmd_code == PldmControlCmdCodes.GetPLDMCommands and len(request_payload) >= 1 and len(response_payload) >= 32:
+        capture.supported_pldm_commands[int(request_payload[0])] = _decode_bitfield(response_payload[:32])
 
 
 def _process_platform_response(
@@ -309,6 +332,22 @@ def _process_platform_response(
         _process_get_pdr_response(capture, request_payload, response_payload, pdr_records_by_handle, pdr_transfers)
     elif cmd_code == PldmPlatformMonitoringCmdCodes.GetSensorReading:
         _process_sensor_reading(capture, request_payload, response_payload)
+
+
+def _process_fru_response(
+    capture: TerminusCapture,
+    cmd_code: int,
+    request_payload: bytes,
+    response_payload: bytes,
+    fru_transfers: dict[int, dict[int, _FruTransfer]],
+) -> None:
+    if cmd_code == PldmFruCmdCodes.GetFRURecordTableMetadata:
+        try:
+            capture.fru_metadata = fru_metadata_to_dict(FruMetadata.from_bytes(response_payload))
+        except ValueError:
+            capture.warnings.append("malformed GetFRURecordTableMetadata response skipped")
+    elif cmd_code == PldmFruCmdCodes.GetFRURecordTable:
+        _process_get_fru_record_table_response(capture, request_payload, response_payload, fru_transfers)
 
 
 def _parse_repository_info(response_payload: bytes) -> dict[str, int | str] | None:
@@ -392,6 +431,87 @@ def _parse_get_pdr_response(payload: bytes) -> tuple[int, int, int, bytes] | Non
     return next_record_handle, next_data_transfer_handle, transfer_flag, payload[record_start:record_end]
 
 
+def _process_get_fru_record_table_response(
+    capture: TerminusCapture,
+    request_payload: bytes,
+    response_payload: bytes,
+    fru_transfers: dict[int, dict[int, _FruTransfer]],
+) -> None:
+    request = _parse_get_fru_record_table_request(request_payload)
+    response = _parse_get_fru_record_table_response(response_payload)
+    if request is None or response is None:
+        capture.warnings.append("malformed GetFRURecordTable transfer skipped")
+        return
+
+    data_transfer_handle, _ = request
+    next_data_transfer_handle, transfer_flag, table_data = response
+    transfers = fru_transfers.setdefault(capture.eid, {})
+
+    if transfer_flag == TRANSFER_FLAG_START_AND_END:
+        _finish_fru_table(capture, table_data)
+        return
+
+    if transfer_flag == TRANSFER_FLAG_START:
+        if next_data_transfer_handle in transfers:
+            capture.warnings.append(
+                f"replaced unfinished GetFRURecordTable transfer for handle 0x{next_data_transfer_handle:08x}"
+            )
+        transfers[next_data_transfer_handle] = _FruTransfer(chunks=[table_data])
+        return
+
+    transfer = transfers.pop(data_transfer_handle, None)
+    if transfer is None:
+        capture.warnings.append(
+            f"dropped GetFRURecordTable fragment for unknown transfer handle 0x{data_transfer_handle:08x}"
+        )
+        return
+
+    transfer.chunks.append(table_data)
+    if transfer_flag == TRANSFER_FLAG_MIDDLE:
+        transfers[next_data_transfer_handle] = transfer
+    elif transfer_flag == TRANSFER_FLAG_END:
+        _finish_fru_table(capture, b"".join(transfer.chunks))
+    else:
+        capture.warnings.append(f"dropped GetFRURecordTable response with unknown transfer flag 0x{transfer_flag:02x}")
+
+
+def _parse_get_fru_record_table_request(payload: bytes) -> tuple[int, int] | None:
+    if len(payload) < 5:
+        return None
+    return struct.unpack_from("<IB", payload)
+
+
+def _parse_get_fru_record_table_response(payload: bytes) -> tuple[int, int, bytes] | None:
+    if len(payload) < 5:
+        return None
+    next_data_transfer_handle, transfer_flag = struct.unpack_from("<IB", payload)
+    return next_data_transfer_handle, transfer_flag, payload[5:]
+
+
+def _finish_fru_table(capture: TerminusCapture, response_table: bytes) -> None:
+    table_length = None if capture.fru_metadata is None else capture.fru_metadata.get("table_length")
+    if table_length is None:
+        capture.fru_record_table = bytes(response_table)
+        capture.fru_record_table_padding = b""
+        return
+
+    table_length = int(table_length)
+    if len(response_table) < table_length:
+        capture.fru_record_table = bytes(response_table)
+        capture.fru_record_table_padding = b""
+        capture.warnings.append(
+            f"GetFRURecordTable returned {len(response_table)} byte(s), shorter than metadata length {table_length}"
+        )
+        return
+
+    capture.fru_record_table = bytes(response_table[:table_length])
+    capture.fru_record_table_padding = bytes(response_table[table_length:])
+    if capture.fru_record_table_padding and any(capture.fru_record_table_padding):
+        capture.warnings.append(
+            f"GetFRURecordTable returned {len(capture.fru_record_table_padding)} non-zero byte(s) after metadata length"
+        )
+
+
 def _process_sensor_reading(
     capture: TerminusCapture,
     request_payload: bytes,
@@ -431,3 +551,7 @@ def _decode_sensor_reading(sensor_data_size: int, payload: bytes) -> int | None:
     if len(payload) < size:
         return None
     return int(struct.unpack_from(fmt, payload)[0])
+
+
+def _decode_bitfield(data: bytes) -> list[int]:
+    return [index * 8 + bit for index, value in enumerate(data) for bit in range(8) if value & (1 << bit)]

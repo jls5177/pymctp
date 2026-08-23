@@ -59,3 +59,23 @@ from .pdr import (
     pdr_to_dict,
     split_pdr_records,
 )
+
+from .fru import (
+    FRU_METADATA_LEN,
+    FRU_RECORD_HEADER_LEN,
+    FruField,
+    FruMetadata,
+    FruRecord,
+    FruRepository,
+    OpaqueFruField,
+    OpaqueFruRecord,
+    PldmFruCmdCodes,
+    decode_fru_record,
+    decode_fru_table,
+    encode_fru_record,
+    encode_fru_table,
+    fru_metadata_from_dict,
+    fru_metadata_to_dict,
+    fru_record_from_dict,
+    fru_record_to_dict,
+)

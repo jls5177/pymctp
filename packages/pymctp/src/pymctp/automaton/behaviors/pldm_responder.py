@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import binascii
+import copy
 import importlib
 import json
 from collections import deque
@@ -37,6 +38,7 @@ from ...layers.mctp.pldm.pdr import (
     encode_pdr,
     pdr_from_dict,
 )
+from ...layers.mctp.pldm.fru import FruRepository, PldmFruCmdCodes, encode_fru_record
 from ...layers.mctp.pldm.pldm import PldmHdr, PldmHdrPacket
 from ...layers.mctp.pldm.type1_base import (
     GetPLDMCommandsPacket,
@@ -86,6 +88,8 @@ _PLATFORM_CC_INVALID_DATA_TRANSFER_HANDLE = 0x80
 _PLATFORM_CC_INVALID_TRANSFER_OPERATION_FLAG = 0x81
 _PLATFORM_CC_INVALID_RECORD_HANDLE = 0x82
 _PLATFORM_CC_INVALID_RECORD_CHANGE_NUMBER = 0x83
+_FRU_CC_INVALID_DATA_TRANSFER_HANDLE = 0x80
+_FRU_CC_INVALID_TRANSFER_OPERATION_FLAG = 0x81
 #: DSP0248 SetNumericSensorEnable / GetSensorReading command-specific codes.
 _PLATFORM_CC_INVALID_SENSOR_ID = 0x80
 _PLATFORM_CC_INVALID_EFFECTER_ID = 0x80
@@ -130,6 +134,10 @@ _PLATFORM_COMMANDS = [
     PldmPlatformMonitoringCmdCodes.GetPDRRepositoryInfo,
     PldmPlatformMonitoringCmdCodes.GetPDR,
 ]
+_FRU_COMMANDS = [
+    PldmFruCmdCodes.GetFRURecordTableMetadata,
+    PldmFruCmdCodes.GetFRURecordTable,
+]
 
 
 class GetPDRTransferOperation(IntEnum):
@@ -154,7 +162,11 @@ class PldmBaseProfile:
 
     tid: int = 1
     supported_types: list[int] = field(
-        default_factory=lambda: [int(PldmTypeCodes.CONTROL), int(PldmTypeCodes.PLATFORM_MONITORING)]
+        default_factory=lambda: [
+            int(PldmTypeCodes.CONTROL),
+            int(PldmTypeCodes.PLATFORM_MONITORING),
+            int(PldmTypeCodes.FRU),
+        ]
     )
     #: Spec revisions a real terminus reports, taken from a hardware capture:
     #: DSP0240 (base) 1.1.0 and DSP0248 (platform monitoring) 1.3.0.
@@ -162,12 +174,14 @@ class PldmBaseProfile:
         default_factory=lambda: {
             int(PldmTypeCodes.CONTROL): ["1.1.0"],
             int(PldmTypeCodes.PLATFORM_MONITORING): ["1.3.0"],
+            int(PldmTypeCodes.FRU): ["1.0.0"],
         }
     )
     commands: dict[int, list[int]] = field(
         default_factory=lambda: {
             int(PldmTypeCodes.CONTROL): [int(cmd) for cmd in _BASE_COMMANDS],
             int(PldmTypeCodes.PLATFORM_MONITORING): [int(cmd) for cmd in _PLATFORM_COMMANDS],
+            int(PldmTypeCodes.FRU): [int(cmd) for cmd in _FRU_COMMANDS],
         }
     )
 
@@ -866,11 +880,13 @@ class PldmSensorProfile:
     sensors: dict[int, SensorDefinition] = field(default_factory=dict)
     effecters: dict[int, EffecterDefinition] = field(default_factory=dict)
     pdr_repository: PdrRepository | list[PdrRecord] | None = None
+    fru_repository: FruRepository | list[Any] | dict[str, Any] | None = None
     pdrs_from: str | None = None
     pdrs_model: str | None = None
     emit_events: bool = False
     event_buffer_size: int = 256
     event_poll_chunk_size: int = 256
+    fru_transfer_chunk_size: int = 0
     event_msg_tag: int = 0
     event_timeout_s: float = 0.5
     terminus_uid: uuid.UUID | str | bytes | None = None
@@ -908,6 +924,14 @@ class PldmSensorProfile:
             pass
         else:
             self.pdr_repository = PdrRepository(list(self.pdr_repository))
+        if self.fru_repository is None:
+            self.fru_repository = FruRepository()
+        elif isinstance(self.fru_repository, FruRepository):
+            pass
+        elif isinstance(self.fru_repository, dict):
+            self.fru_repository = FruRepository(**self.fru_repository)
+        else:
+            self.fru_repository = FruRepository(list(self.fru_repository))
         self.sensors.update(_synthesized_sensors_from_pdrs(self.pdr_repository, self.sensors))
         self.effecters.update(_synthesized_effecters_from_pdrs(self.pdr_repository, self.effecters))
         _warn_sensor_pdr_mismatches(self.sensors, self.pdr_repository)
@@ -915,6 +939,7 @@ class PldmSensorProfile:
         self.emit_events = bool(self.emit_events)
         self.event_buffer_size = int(self.event_buffer_size)
         self.event_poll_chunk_size = int(self.event_poll_chunk_size)
+        self.fru_transfer_chunk_size = int(self.fru_transfer_chunk_size)
         self.event_msg_tag = int(self.event_msg_tag)
         self.event_timeout_s = float(self.event_timeout_s)
         self.terminus_uid = _coerce_uuid(self.terminus_uid)
@@ -1003,7 +1028,11 @@ class PldmSensorBehavior(Behavior):
         if MsgTypes.PLDM not in ctx.supported_msg_types:
             return False
         pldm = pkt.getlayer(PldmHdrPacket)
-        return bool(pldm is not None and pldm.rq == 1 and pldm.pldm_type == PldmTypeCodes.PLATFORM_MONITORING)
+        return bool(
+            pldm is not None
+            and pldm.rq == 1
+            and pldm.pldm_type in (PldmTypeCodes.PLATFORM_MONITORING, PldmTypeCodes.FRU)
+        )
 
     def handle(self, pkt: Packet, ctx: EndpointContext) -> HandlerResponse | None:
         self._ctx = ctx
@@ -1075,6 +1104,8 @@ class PldmSensorBehavior(Behavior):
         pldm = pkt.getlayer(PldmHdrPacket)
         if pldm is None:
             return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+        if pldm.pldm_type == PldmTypeCodes.FRU:
+            return self._handle_fru(pkt, ctx, pldm)
 
         try:
             cmd_code = PldmPlatformMonitoringCmdCodes(pldm.cmd_code)
@@ -1100,6 +1131,21 @@ class PldmSensorBehavior(Behavior):
             PldmPlatformMonitoringCmdCodes.EventMessageSupported: self._event_message_supported,
             PldmPlatformMonitoringCmdCodes.PollForPlatformEventMessage: self._poll_for_platform_event_message,
             PldmPlatformMonitoringCmdCodes.PlatformEventMessage: self._platform_event_message,
+        }
+        handler = handlers.get(cmd_code)
+        if handler is None:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_UNSUPPORTED_CMD)
+        return handler(pkt, ctx, pldm)
+
+    def _handle_fru(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        try:
+            cmd_code = PldmFruCmdCodes(pldm.cmd_code)
+        except ValueError:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_UNSUPPORTED_CMD)
+
+        handlers = {
+            PldmFruCmdCodes.GetFRURecordTableMetadata: self._get_fru_record_table_metadata,
+            PldmFruCmdCodes.GetFRURecordTable: self._get_fru_record_table,
         }
         handler = handlers.get(cmd_code)
         if handler is None:
@@ -1448,6 +1494,72 @@ class PldmSensorBehavior(Behavior):
         payload = _get_pdr_response(transfer["next_record_handle"], next_transfer_handle, GetPDRTransferFlag.MIDDLE, chunk)
         return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
 
+    def _get_fru_record_table_metadata(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        if _pldm_payload_bytes(pldm):
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+        repository = self._state(ctx)["fru_repository"]
+        return self._reply(pkt, ctx, repository.metadata().to_bytes(), CompletionCodes.SUCCESS)
+
+    def _get_fru_record_table(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
+        data = _pldm_payload_bytes(pldm)
+        if len(data) < 5:
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_LENGTH)
+        transfer_handle, operation = struct.unpack_from("<IB", data)
+        try:
+            op = GetPDRTransferOperation(operation)
+        except ValueError:
+            return self._reply(pkt, ctx, None, _FRU_CC_INVALID_TRANSFER_OPERATION_FLAG)
+        if op == GetPDRTransferOperation.GET_FIRST_PART:
+            return self._get_fru_record_table_first_part(pkt, ctx, transfer_handle)
+        return self._get_fru_record_table_next_part(pkt, ctx, transfer_handle)
+
+    def _get_fru_record_table_first_part(
+        self,
+        pkt: Packet,
+        ctx: EndpointContext,
+        transfer_handle: int,
+    ) -> HandlerResponse:
+        if transfer_handle != 0:
+            return self._reply(pkt, ctx, None, _FRU_CC_INVALID_DATA_TRANSFER_HANDLE)
+        state = self._state(ctx)
+        table = state["fru_repository"].response_table()
+        count = _fru_slice_count(len(table), self.profile.fru_transfer_chunk_size)
+        chunk = table[:count]
+        if count >= len(table):
+            payload = _get_fru_record_table_response(_PLATFORM_TRANSFER_DONE, GetPDRTransferFlag.START_AND_END, chunk)
+            return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
+        next_transfer_handle = state["next_fru_transfer_handle"]
+        state["next_fru_transfer_handle"] += 1
+        state["fru_transfers"][next_transfer_handle] = {"table": table, "offset": count}
+        payload = _get_fru_record_table_response(next_transfer_handle, GetPDRTransferFlag.START, chunk)
+        return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
+
+    def _get_fru_record_table_next_part(
+        self,
+        pkt: Packet,
+        ctx: EndpointContext,
+        transfer_handle: int,
+    ) -> HandlerResponse:
+        state = self._state(ctx)
+        transfer = state["fru_transfers"].get(transfer_handle)
+        if transfer is None:
+            return self._reply(pkt, ctx, None, _FRU_CC_INVALID_DATA_TRANSFER_HANDLE)
+        table = transfer["table"]
+        offset = int(transfer["offset"])
+        count = _fru_slice_count(len(table) - offset, self.profile.fru_transfer_chunk_size)
+        chunk = table[offset : offset + count]
+        end = offset + count >= len(table)
+        if end:
+            del state["fru_transfers"][transfer_handle]
+            payload = _get_fru_record_table_response(_PLATFORM_TRANSFER_DONE, GetPDRTransferFlag.END, chunk)
+            return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
+        next_transfer_handle = state["next_fru_transfer_handle"]
+        state["next_fru_transfer_handle"] += 1
+        state["fru_transfers"][next_transfer_handle] = {"table": table, "offset": offset + count}
+        del state["fru_transfers"][transfer_handle]
+        payload = _get_fru_record_table_response(next_transfer_handle, GetPDRTransferFlag.MIDDLE, chunk)
+        return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
+
     def _set_event_receiver(self, pkt: Packet, ctx: EndpointContext, pldm: PldmHdrPacket) -> HandlerResponse:
         data = _pldm_payload_bytes(pldm)
         transport = pkt.getlayer(TransportHdrPacket)
@@ -1655,8 +1767,11 @@ class PldmSensorBehavior(Behavior):
                     "sensors": _clone_sensors(self.profile.sensors),
                     "effecters": _clone_effecters(self.profile.effecters),
                     "pdr_repository": _clone_repository(self.profile.pdr_repository),
+                    "fru_repository": _clone_fru_repository(self.profile.fru_repository),
                     "pdr_transfers": {},
                     "next_pdr_transfer_handle": 1,
+                    "fru_transfers": {},
+                    "next_fru_transfer_handle": 1,
                     "event_receiver": {},
                     "event_queue": deque(),
                     "event_transfers": {},
@@ -2387,6 +2502,24 @@ def _clone_repository(repository: PdrRepository | list[PdrRecord] | None) -> Pdr
     return cloned
 
 
+def _clone_fru_repository(repository: FruRepository | list[Any] | None) -> FruRepository:
+    if repository is None:
+        return FruRepository()
+    if not isinstance(repository, FruRepository):
+        return FruRepository(list(repository))
+    return FruRepository(
+        records=copy.deepcopy(repository.records),
+        table_padding=repository.table_padding,
+        major_version=repository.major_version,
+        minor_version=repository.minor_version,
+        table_maximum_size=repository.table_maximum_size,
+        reported_table_length=repository.reported_table_length,
+        reported_record_set_count=repository.reported_record_set_count,
+        reported_record_count=repository.reported_record_count,
+        reported_integrity_checksum=repository.reported_integrity_checksum,
+    )
+
+
 def _pdr_header(record_handle: int, pdr_type: int, record_change_number: int, data_length: int) -> bytes:
     return _PDR_COMMON_HEADER.pack(
         int(record_handle) & 0xFFFFFFFF,
@@ -2561,6 +2694,13 @@ def _slice_count(request_count: int, remaining: int, fallback: int) -> int:
     return max(0, min(count, remaining))
 
 
+def _fru_slice_count(remaining: int, chunk_size: int) -> int:
+    if remaining <= 0:
+        return 0
+    count = int(chunk_size) if chunk_size else remaining
+    return max(0, min(count, remaining))
+
+
 def _get_pdr_response(
     next_record_handle: int,
     next_transfer_handle: int,
@@ -2579,6 +2719,14 @@ def _get_pdr_response(
     if crc is not None:
         payload += struct.pack("<I", crc & 0xFFFFFFFF)
     return payload
+
+
+def _get_fru_record_table_response(
+    next_transfer_handle: int,
+    transfer_flag: GetPDRTransferFlag,
+    chunk: bytes,
+) -> bytes:
+    return struct.pack("<IB", int(next_transfer_handle) & 0xFFFFFFFF, int(transfer_flag) & 0xFF) + bytes(chunk)
 
 
 def _poll_no_event_payload(ctx: EndpointContext) -> PollForPlatformEventMsgPacket:

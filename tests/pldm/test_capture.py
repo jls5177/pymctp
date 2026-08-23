@@ -16,7 +16,8 @@ from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
     GetSensorReadingDataSizeEnum,
     PldmPlatformMonitoringCmdCodes,
 )
-from pymctp.layers.mctp.pldm.types import CompletionCodes, PldmTypeCodes
+from pymctp.layers.mctp.pldm.fru import FruMetadata, PldmFruCmdCodes
+from pymctp.layers.mctp.pldm.types import CompletionCodes, PldmControlCmdCodes, PldmTypeCodes
 from pymctp.layers.mctp.transport import SmbusTransport, TransportHdr
 from pymctp.layers.mctp.types import MsgTypes
 from pymctp.pldm.capture import TerminusCapture, extract_pldm, read_capture
@@ -172,6 +173,14 @@ def _repository_info_response(*, record_count: int) -> bytes:
     )
 
 
+def _fru_request(*, data_transfer_handle: int = 0, transfer_operation_flag: int = 1) -> bytes:
+    return struct.pack("<IB", data_transfer_handle, transfer_operation_flag)
+
+
+def _fru_response(record_table: bytes, *, next_data_transfer_handle: int = 0, transfer_flag: int = 5) -> bytes:
+    return struct.pack("<IB", next_data_transfer_handle, transfer_flag) + record_table
+
+
 def _sensor_request(sensor_id: int) -> bytes:
     return struct.pack("<HB", sensor_id, 0)
 
@@ -239,6 +248,72 @@ def test_split_get_pdr_record_reassembles_original_bytes():
     )
 
     assert _terminus(result).pdr_records == [record]
+
+
+def test_split_get_fru_record_table_reassembles_original_bytes_and_padding():
+    """FRU tables use the same handle chain as GetPDR, and device padding is outside FRUTableLength."""
+    table = bytes.fromhex("0100fe01010105414c504841")
+    padding = b"\x00\x00\x00"
+    metadata = FruMetadata(1, 0, 0, len(table), 1, 1, 0).to_bytes()
+
+    result = extract_pldm(
+        _capture(
+            _request(
+                b"",
+                pldm_type=PldmTypeCodes.FRU,
+                cmd_code=PldmFruCmdCodes.GetFRURecordTableMetadata,
+                instance_id=1,
+            ),
+            _response(
+                metadata,
+                pldm_type=PldmTypeCodes.FRU,
+                cmd_code=PldmFruCmdCodes.GetFRURecordTableMetadata,
+                instance_id=1,
+            ),
+            _request(
+                _fru_request(data_transfer_handle=0),
+                pldm_type=PldmTypeCodes.FRU,
+                cmd_code=PldmFruCmdCodes.GetFRURecordTable,
+                instance_id=2,
+            ),
+            _response(
+                _fru_response(table[:4], next_data_transfer_handle=0xA0, transfer_flag=TRANSFER_START),
+                pldm_type=PldmTypeCodes.FRU,
+                cmd_code=PldmFruCmdCodes.GetFRURecordTable,
+                instance_id=2,
+            ),
+            _request(
+                _fru_request(data_transfer_handle=0xA0, transfer_operation_flag=0),
+                pldm_type=PldmTypeCodes.FRU,
+                cmd_code=PldmFruCmdCodes.GetFRURecordTable,
+                instance_id=3,
+            ),
+            _response(
+                _fru_response(table[4:8], next_data_transfer_handle=0xA1, transfer_flag=TRANSFER_MIDDLE),
+                pldm_type=PldmTypeCodes.FRU,
+                cmd_code=PldmFruCmdCodes.GetFRURecordTable,
+                instance_id=3,
+            ),
+            _request(
+                _fru_request(data_transfer_handle=0xA1, transfer_operation_flag=0),
+                pldm_type=PldmTypeCodes.FRU,
+                cmd_code=PldmFruCmdCodes.GetFRURecordTable,
+                instance_id=4,
+            ),
+            _response(
+                _fru_response(table[8:] + padding, transfer_flag=TRANSFER_END),
+                pldm_type=PldmTypeCodes.FRU,
+                cmd_code=PldmFruCmdCodes.GetFRURecordTable,
+                instance_id=4,
+            ),
+        )
+    )
+
+    capture = _terminus(result)
+    assert capture.fru_metadata is not None
+    assert capture.fru_metadata["table_length"] == len(table)
+    assert capture.fru_record_table == table
+    assert capture.fru_record_table_padding == padding
 
 
 def test_multi_packet_mctp_get_pdr_response_reassembles_before_decoding():
@@ -371,6 +446,41 @@ def test_sensor_readings_are_collected_in_order_for_multiple_widths():
         1: GetSensorReadingDataSizeEnum.UINT8,
         2: GetSensorReadingDataSizeEnum.SINT16,
     }
+
+
+def test_pldm_type_and_command_advertisements_are_captured():
+    result = extract_pldm(
+        _capture(
+            _request(
+                b"",
+                pldm_type=PldmTypeCodes.CONTROL,
+                cmd_code=PldmControlCmdCodes.GetPLDMTypes,
+                instance_id=1,
+            ),
+            _response(
+                bytes.fromhex("1500000000000080"),
+                pldm_type=PldmTypeCodes.CONTROL,
+                cmd_code=PldmControlCmdCodes.GetPLDMTypes,
+                instance_id=1,
+            ),
+            _request(
+                bytes([PldmTypeCodes.FRU]) + b"\xf1\xf0\xf1\x00",
+                pldm_type=PldmTypeCodes.CONTROL,
+                cmd_code=PldmControlCmdCodes.GetPLDMCommands,
+                instance_id=2,
+            ),
+            _response(
+                bytes.fromhex("0600000000000000000000000000000000000000000000000000000000000000"),
+                pldm_type=PldmTypeCodes.CONTROL,
+                cmd_code=PldmControlCmdCodes.GetPLDMCommands,
+                instance_id=2,
+            ),
+        )
+    )
+
+    capture = _terminus(result)
+    assert capture.supported_pldm_types == [0, 2, 4, 63]
+    assert capture.supported_pldm_commands[int(PldmTypeCodes.FRU)] == [1, 2]
 
 
 def test_record_count_mismatch_warns_capture_may_be_truncated():

@@ -38,6 +38,7 @@ from pymctp.layers.mctp.pldm.pdr import (
     decode_pdr,
     encode_pdr,
 )
+from pymctp.layers.mctp.pldm.fru import FruField, FruRecord, FruRepository, OpaqueFruField, fru_record_to_dict
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
     GetSensorReadingDataSizeEnum,
     PldmPlatformMonitoringCmdCodes,
@@ -48,6 +49,7 @@ from pymctp.layers.mctp.types import EndpointContext, MsgTypes, Smbus7bitAddress
 from pymctp.pldm.model import (
     FrequencySensor,
     CurrentSensor,
+    FruRecordItem,
     NumericEffecter,
     NumericSensor,
     PowerSensor,
@@ -55,8 +57,10 @@ from pymctp.pldm.model import (
     StateSensor,
     TemperatureSensor,
     Terminus,
+    VerbatimFruRecord,
     VoltageSensor,
 )
+from pymctp.pldm.model.emitter import emit_python_module
 
 
 def _ctx() -> EndpointContext:
@@ -283,6 +287,55 @@ def test_build_output_drives_pldm_sensor_behavior_get_pdr() -> None:
     assert transfer_handle == 0
     assert transfer_flag == GetPDRTransferFlag.START_AND_END
     assert record_data == behavior.profile.pdr_repository.get_record(0)
+
+
+def test_fru_record_model_builds_byte_identical_repository() -> None:
+    record = FruRecord(0x1234, 0xFE, 1, [FruField(1, "ALPHA"), OpaqueFruField(0xE0, b"\x01")])
+    hcp = Terminus(eid=1, tid=1, fru_records=[FruRecordItem("fru_alpha", 0x1234, 0xFE, record.fields)])
+
+    assert hcp["fru_alpha"].record_set_identifier == 0x1234
+    assert hcp.build().fru_repository.response_table() == record.to_bytes()
+
+
+def test_fru_artifact_and_python_emission_rebuild_byte_identically() -> None:
+    """Generated Python models must preserve FRU bytes or the responder cannot replay captured tables."""
+    record = FruRecord(1, 0xFE, 1, [FruField(1, "ALPHA", b"ALPHA"), OpaqueFruField(0xE0, b"\x01\x02")])
+    padding = b"\x00\x00\x00"
+    repository = FruRepository(records=[record], table_padding=padding)
+    artifact = {
+        "eid": 1,
+        "tid": 1,
+        "fru": {
+            "metadata": {
+                "major_version": 1,
+                "minor_version": 0,
+                "table_maximum_size": 0,
+                "table_length": len(record.to_bytes()),
+                "total_record_set_identifiers": 1,
+                "total_records": 1,
+                "integrity_checksum": repository.integrity_checksum,
+            },
+            "table_padding": padding.hex(),
+            "records": [{"name": "fru_alpha", **fru_record_to_dict(record)}],
+        },
+        "pdrs": [],
+    }
+
+    model = Terminus.from_artifact(artifact)
+    namespace: dict[str, object] = {}
+    exec(emit_python_module(artifact).code, namespace)
+    emitted = namespace["terminus"]
+
+    assert model.build().fru_repository.response_table() == record.to_bytes() + padding
+    assert emitted.build().fru_repository.response_table() == record.to_bytes() + padding
+    assert emitted.build().fru_repository.metadata().to_bytes() == repository.metadata().to_bytes()
+
+
+def test_verbatim_fru_record_passes_through_byte_for_byte() -> None:
+    raw = bytes.fromhex("0100fe0101e003010203")
+    hcp = Terminus(eid=1, tid=1, fru_records=[VerbatimFruRecord(raw)])
+
+    assert hcp.build().fru_repository.response_table() == raw
 
 
 def test_state_sensors_and_effecters_build_structured_records_and_definitions() -> None:
