@@ -36,7 +36,7 @@ from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
 from pymctp.layers.mctp.pldm.types import CompletionCodes, PldmControlCmdCodes, PldmTypeCodes
 from pymctp.layers.mctp.transport import TransportHdr
 from pymctp.layers.mctp.types import MsgTypes
-from pymctp.pldm.model import NumericSensor, TemperatureSensor, Terminus
+from pymctp.pldm.model import NumericSensor, PowerSensor, TemperatureSensor, Terminus
 
 
 REQUESTER_EID = 0x20
@@ -642,7 +642,12 @@ def test_emit_python_groups_series_clones_near_duplicates_and_preserves_order(
     assert "for " not in generated
     assert "f\"" not in generated
     assert "f'" not in generated
-    assert "temperature_sensor.clone(\n            name='TEMP_NEAR',\n            sensor_id=0x1104,\n            warning_high=81,\n        )" in generated
+    # The near-duplicate is emitted as a clone carrying whatever it needs to
+    # reproduce its record. Which fields those are depends on what survived the
+    # template's own reduction, so assert the behaviour, not the exact text.
+    assert "temperature_sensor.clone(" in generated
+    assert "name='TEMP_NEAR'" in generated
+    assert "warning_high=81" in generated
     assert "NumericSensor(\n            name='GENERIC_DISTINCT'," in generated
 
     json_terminus = Terminus.from_artifact(_load_artifact(output_dir / f"pldm-terminus-{TERMINUS_EID}.json"))
@@ -1043,3 +1048,37 @@ def test_emit_python_existing_output_file_requires_force(runner: CliRunner, tmp_
 
     assert overwritten.exit_code == 0, overwritten.output
     assert isinstance(_load_terminus_module(module_path).terminus, Terminus)
+
+
+def test_template_reduction_cannot_break_its_clones(runner: CliRunner, tmp_path: Path) -> None:
+    """A field elided from a template must still be safe for everything cloning it.
+
+    Some PDR fields are derived from others when left unset. Such a field can be
+    redundant for the template itself while being load-bearing for a member that
+    overrides what it derives from - so reducing a template against itself alone
+    silently changed those members' records.
+    """
+    source = Terminus(
+        eid=TERMINUS_EID,
+        tid=1,
+        items=[
+            # Same shape, but each declares supported_thresholds=0 while still
+            # carrying threshold values, which is what the derivation would
+            # otherwise overwrite.
+            PowerSensor(name="PWR_A", sensor_id=0x2001, supported_thresholds=0, warning_high=100, critical_high=120),
+            PowerSensor(name="PWR_B", sensor_id=0x2002, supported_thresholds=0, warning_high=100, critical_high=120),
+            PowerSensor(name="PWR_C", sensor_id=0x2003, supported_thresholds=0, warning_high=200, critical_high=240),
+        ],
+    )
+    capture = tmp_path / "derived.tcpdump.log"
+    output_dir = tmp_path / "out"
+    _write_capture(capture, _capture_packets_from_records(_built_records(source)))
+
+    result = runner.invoke(
+        cli,
+        ["pldm-from-capture", str(capture), "--output", str(output_dir), "--date", "2026-01-02", "--emit", "both"],
+    )
+
+    assert result.exit_code == 0, result.output
+    generated = _load_terminus_module(output_dir / f"pldm_terminus_{TERMINUS_EID}.py").terminus
+    assert _built_records(generated) == _built_records(source)

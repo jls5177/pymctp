@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field as dc_field, fields
 from enum import IntEnum
 from typing import Any
 
@@ -25,7 +25,7 @@ from pymctp.layers.mctp.pldm.pdr import (
     pdr_from_dict,
     pdr_to_dict,
 )
-from pymctp.layers.mctp.pldm.fru import FruField, OpaqueFruField, fru_record_to_dict
+from pymctp.layers.mctp.pldm.fru import FruField, OpaqueFruField, _field_value_bytes, fru_record_to_dict
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import GetSensorReadingDataSizeEnum
 from pymctp.pldm.model import (
     FrequencySensor,
@@ -45,6 +45,8 @@ from pymctp.pldm.model import (
 )
 
 _INDENT = " " * 4
+#: Keep generated lines within the project's ruff line-length.
+_MAX_LINE_LENGTH = 120
 _WRAPPED_TEXT_CHUNK = 88
 _SENSOR_ID_FIELDS = {"sensor_id", "effecter_id"}
 _NUMERIC_FORMAT_FIELDS = {"data_size", "range_field_format"}
@@ -136,6 +138,24 @@ class _RenderedTemplate:
     item: TerminusItem
     id_field: str
     first_index: int
+    #: Every item that will clone from this template. A field is only safe to
+    #: elide from the template if all of them still round-trip without it.
+    members: list[TerminusItem] = dc_field(default_factory=list)
+
+    def emitted_item(self) -> TerminusItem:
+        """The template as the generated module will construct it.
+
+        Clones inherit whatever survived reduction, so every decision about a
+        clone has to be made against this rather than the richer source item.
+        """
+        kwargs = _minimal_constructor_kwargs(
+            self.cls,
+            self.item,
+            {"name": self.item.name, self.id_field: getattr(self.item, self.id_field)},
+            id_field=self.id_field,
+            members=self.members,
+        )
+        return self.cls(**kwargs)
 
 
 def _imports_for_rendered_items(items: list[_RenderedItem], templates: list[_RenderedTemplate]) -> list[str]:
@@ -262,6 +282,7 @@ def _name_templates(
                 item=template_item,
                 id_field=id_field,
                 first_index=min(grouped_indices[key]),
+                members=members,
             )
         )
     return templates
@@ -281,9 +302,10 @@ def _clone_templates_by_item_index(
         for template in templates:
             if _item_id_field(template.item) != _item_id_field(item):
                 continue
-            differences = _pdr_field_differences(template.item, item)
+            emitted = template.emitted_item()
+            differences = _pdr_field_differences(emitted, item)
             if 0 < len(differences) <= _NEAR_DUPLICATE_FIELD_LIMIT and _clone_matches_item(
-                template.item, item, _clone_overrides_from_pdr_fields(item, differences)
+                emitted, item, _clone_overrides_from_pdr_fields(item, differences)
             ):
                 candidates.append((len(differences), template.first_index, template))
         if candidates:
@@ -294,7 +316,20 @@ def _clone_templates_by_item_index(
 def _render_templates(templates: list[_RenderedTemplate]) -> list[str]:
     lines: list[str] = []
     for template in templates:
-        lines.append(f"{template.name} = {_constructor_expr(template.cls, template.item, id_field=template.id_field)}")
+        expression = _call_expr(
+            template.cls.__name__,
+            list(
+                _minimal_constructor_kwargs(
+                    template.cls,
+                    template.item,
+                    {"name": template.item.name, template.id_field: getattr(template.item, template.id_field)},
+                    id_field=template.id_field,
+                    members=template.members,
+                ).items()
+            ),
+            level=0,
+        )
+        lines.append(f"{template.name} = {expression}")
         lines.append("")
     return lines
 
@@ -312,7 +347,7 @@ def _render_series(template: _RenderedTemplate, items: list[TerminusItem]) -> _R
 
 
 def _render_clone(template: _RenderedTemplate, item: TerminusItem) -> _RenderedItem:
-    differences = _pdr_field_differences(template.item, item)
+    differences = _pdr_field_differences(template.emitted_item(), item)
     overrides = {"name": getattr(item, "name"), template.id_field: getattr(item, template.id_field)}
     overrides.update(_clone_overrides_from_pdr_fields(item, differences))
     return _RenderedItem(
@@ -386,6 +421,21 @@ def _render_item(item: TerminusItem) -> _RenderedItem:
     )
 
 
+def _compact_fru_field(field_: Any, encoding_type: int) -> Any:
+    """Drop raw_value when the text alone re-encodes to the same bytes.
+
+    A FRU field carries its value twice, and the raw bytes only matter when
+    they do not round-trip through the declared encoding. Emitting both for
+    every field doubles the FRU section and leaves stale bytes behind the
+    moment someone edits the text.
+    """
+    if not isinstance(field_, FruField) or field_.raw_value is None:
+        return field_
+    if _field_value_bytes(field_.value, encoding_type, None) == field_.raw_value:
+        return FruField(field_type=field_.field_type, value=field_.value)
+    return field_
+
+
 def _render_fru_records(items: list[Any]) -> list[_RenderedItem]:
     rendered: list[_RenderedItem] = []
     for item in items:
@@ -402,7 +452,7 @@ def _render_fru_records(items: list[Any]) -> list[_RenderedItem]:
                             ("record_set_identifier", item.record_set_identifier),
                             ("record_type", item.record_type),
                             ("encoding_type", item.encoding_type),
-                            ("fields", item.fields),
+                            ("fields", [_compact_fru_field(f, item.encoding_type) for f in item.fields]),
                         ],
                         level=0,
                     ),
@@ -654,13 +704,26 @@ def _numeric_sensor_class(item: NumericSensor) -> type[NumericSensor]:
     return NumericSensor
 
 
-def _constructor_expr(cls: type[Any], item: Any, *, id_field: str) -> str:
+def _constructor_expr(
+    cls: type[Any],
+    item: Any,
+    *,
+    id_field: str,
+    members: list[Any] | None = None,
+) -> str:
     required = {"name": item.name, id_field: getattr(item, id_field)}
-    kwargs = _minimal_constructor_kwargs(cls, item, required, id_field=id_field)
+    kwargs = _minimal_constructor_kwargs(cls, item, required, id_field=id_field, members=members)
     return _call_expr(cls.__name__, list(kwargs.items()), level=0)
 
 
-def _minimal_constructor_kwargs(cls: type[Any], item: Any, required: dict[str, Any], *, id_field: str) -> dict[str, Any]:
+def _minimal_constructor_kwargs(
+    cls: type[Any],
+    item: Any,
+    required: dict[str, Any],
+    *,
+    id_field: str,
+    members: list[Any] | None = None,
+) -> dict[str, Any]:
     kwargs: dict[str, Any] = dict(required)
     candidate_fields = [
         field.name
@@ -677,8 +740,16 @@ def _minimal_constructor_kwargs(cls: type[Any], item: Any, required: dict[str, A
             continue
         trial = dict(kwargs)
         del trial[name]
-        if _item_records_match(item, cls(**trial)):
-            del kwargs[name]
+        if not _item_records_match(item, cls(**trial)):
+            continue
+        # A template is reduced by checking it still reproduces itself, but its
+        # clones inherit the reduced form. Some fields are derived from others
+        # when left unset, so a field that is redundant for the template can
+        # still be load-bearing for a member that overrides what it derives
+        # from.
+        if members and not all(_clone_matches_item(cls(**trial), member, {}) for member in members):
+            continue
+        del kwargs[name]
     return kwargs
 
 
@@ -850,7 +921,15 @@ def _wrapped_text_body(text: str, *, level: int) -> str:
 
 def _dataclass_literal(value: Any, *, level: int) -> str:
     if isinstance(value, (FruField, OpaqueFruField)):
-        return _call_expr(type(value).__name__, [(field.name, getattr(value, field.name)) for field in fields(value)], level=level)
+        args = [
+            (field.name, getattr(value, field.name))
+            for field in fields(value)
+            if getattr(value, field.name) is not None or field.default is not None
+        ]
+        single_line = f"{type(value).__name__}({', '.join(f'{n}={_literal(v)}' for n, v in args)})"
+        if len(_INDENT * level) + len(single_line) <= _MAX_LINE_LENGTH:
+            return single_line
+        return _call_expr(type(value).__name__, args, level=level)
     if isinstance(value, (SensorAuxiliaryNamesEntry, EffecterAuxiliaryNamesEntry)):
         return _call_expr(type(value).__name__, [("names", value.names)], level=level)
     if isinstance(value, PdrNameString):
