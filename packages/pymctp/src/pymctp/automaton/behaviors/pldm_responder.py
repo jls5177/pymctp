@@ -38,7 +38,7 @@ from ...layers.mctp.pldm.pdr import (
     encode_pdr,
     pdr_from_dict,
 )
-from ...layers.mctp.pldm.fru import FruRepository, PldmFruCmdCodes, encode_fru_record
+from ...layers.mctp.pldm.fru import FruRepository, PldmFruCmdCodes, encode_fru_record, fru_record_from_dict
 from ...layers.mctp.pldm.pldm import PldmHdr, PldmHdrPacket
 from ...layers.mctp.pldm.type1_base import (
     GetPLDMCommandsPacket,
@@ -161,11 +161,14 @@ class PldmBaseProfile:
     """PLDM Type 0 capability profile advertised by ``PldmBaseBehavior``."""
 
     tid: int = 1
+    #: FRU is deliberately absent by default. Advertising a type we cannot
+    #: serve is worse than not offering it: a requester that asks for a FRU
+    #: table and gets a response with no table data rejects it as malformed
+    #: and discards the whole terminus, sensors included.
     supported_types: list[int] = field(
         default_factory=lambda: [
             int(PldmTypeCodes.CONTROL),
             int(PldmTypeCodes.PLATFORM_MONITORING),
-            int(PldmTypeCodes.FRU),
         ]
     )
     #: Spec revisions a real terminus reports, taken from a hardware capture:
@@ -905,13 +908,15 @@ class PldmSensorProfile:
         loaded_repository: PdrRepository | None = None
         loaded_sensors: dict[int, SensorDefinition] = {}
         loaded_effecters: dict[int, EffecterDefinition] = {}
+        loaded_fru: FruRepository | None = None
         if self.pdrs_from:
-            loaded_repository, loaded_sensors = _load_pdrs_from(self.pdrs_from)
+            loaded_repository, loaded_sensors, loaded_fru = _load_pdrs_from(self.pdrs_from)
         elif self.pdrs_model:
             loaded_profile = _load_pdrs_model(self.pdrs_model, self._device_name)
             loaded_repository = loaded_profile.pdr_repository
             loaded_sensors = loaded_profile.sensors
             loaded_effecters = loaded_profile.effecters
+            loaded_fru = loaded_profile.fru_repository
         loaded_sensors.update(configured_sensors)
         loaded_effecters.update(configured_effecters)
         self.sensors = loaded_sensors
@@ -925,7 +930,7 @@ class PldmSensorProfile:
         else:
             self.pdr_repository = PdrRepository(list(self.pdr_repository))
         if self.fru_repository is None:
-            self.fru_repository = FruRepository()
+            self.fru_repository = loaded_fru if loaded_fru is not None else FruRepository()
         elif isinstance(self.fru_repository, FruRepository):
             pass
         elif isinstance(self.fru_repository, dict):
@@ -969,6 +974,10 @@ class PldmSensorBehavior(Behavior):
         loads_external_pdrs = overrides.get("pdrs_from") is not None or overrides.get("pdrs_model") is not None
         if loads_external_pdrs and "pdr_repository" not in overrides:
             data["pdr_repository"] = None
+        # The default profile has already turned fru_repository into an empty
+        # repository, so it has to be cleared for the loaded one to be adopted.
+        if loads_external_pdrs and "fru_repository" not in overrides:
+            data["fru_repository"] = None
         if overrides:
             profile_fields = {item.name for item in fields(PldmSensorProfile)}
             unknown = sorted(set(overrides) - profile_fields)
@@ -1523,6 +1532,12 @@ class PldmSensorBehavior(Behavior):
             return self._reply(pkt, ctx, None, _FRU_CC_INVALID_DATA_TRANSFER_HANDLE)
         state = self._state(ctx)
         table = state["fru_repository"].response_table()
+        if not table:
+            # A response carrying no table data is indistinguishable from a
+            # truncated one, so DSP0257 requesters reject it outright rather
+            # than reading it as an empty table. Refusing plainly lets the
+            # requester keep the rest of the terminus.
+            return self._reply(pkt, ctx, None, CompletionCodes.ERROR_UNSUPPORTED_CMD)
         count = _fru_slice_count(len(table), self.profile.fru_transfer_chunk_size)
         chunk = table[:count]
         if count >= len(table):
@@ -1876,7 +1891,7 @@ def _coerce_effecters(
     return coerced
 
 
-def _load_pdrs_from(path: str) -> tuple[PdrRepository, dict[int, SensorDefinition]]:
+def _load_pdrs_from(path: str) -> tuple[PdrRepository, dict[int, SensorDefinition], FruRepository]:
     model_path = Path(path)
     try:
         text = model_path.read_text(encoding="utf-8")
@@ -1921,10 +1936,39 @@ def _load_pdrs_from(path: str) -> tuple[PdrRepository, dict[int, SensorDefinitio
         msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} field 'sensors' must be an object"
         raise ValueError(msg)
     try:
-        return repository, _coerce_sensors(dict(sensors))
+        coerced = _coerce_sensors(dict(sensors))
     except (TypeError, ValueError) as exc:
         msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} has invalid sensors: {exc}"
         raise ValueError(msg) from exc
+
+    fru = data.get("fru")
+    if fru is None:
+        return repository, coerced, FruRepository()
+    if not isinstance(fru, Mapping):
+        msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} field 'fru' must be an object"
+        raise ValueError(msg)
+    try:
+        return repository, coerced, _fru_repository_from_artifact(fru)
+    except (TypeError, ValueError) as exc:
+        msg = f"PLDM sensor profile option 'pdrs_from' file {model_path} has invalid FRU data: {exc}"
+        raise ValueError(msg) from exc
+
+
+def _fru_repository_from_artifact(fru: Mapping[str, Any]) -> FruRepository:
+    """Build a FRU repository from a generated artifact's ``fru`` object."""
+    metadata = fru.get("metadata") or {}
+    padding = fru.get("table_padding") or ""
+    return FruRepository(
+        records=[fru_record_from_dict(dict(record)) for record in fru.get("records", [])],
+        table_padding=bytes.fromhex(padding) if isinstance(padding, str) else bytes(padding),
+        major_version=int(metadata.get("major_version", 1)),
+        minor_version=int(metadata.get("minor_version", 0)),
+        table_maximum_size=int(metadata.get("table_maximum_size", 0)),
+        reported_table_length=_optional_int(metadata.get("table_length")),
+        reported_record_set_count=_optional_int(metadata.get("total_record_set_identifiers")),
+        reported_record_count=_optional_int(metadata.get("total_records")),
+        reported_integrity_checksum=_optional_int(metadata.get("integrity_checksum")),
+    )
 
 
 def _load_pdrs_model(reference: str, device_name: str | None) -> PldmSensorProfile:

@@ -24,7 +24,7 @@ from pymctp.automaton.behaviors.pldm_responder import (
     PldmSensorBehavior,
     SensorDefinition,
 )
-from pymctp.automaton.roles import get_behaviors_for_roles
+from pymctp.automaton.roles import get_behaviors_for_roles, normalize_roles
 from pymctp.layers.mctp.pldm import PldmHdr, PldmHdrPacket
 from pymctp.layers.mctp.pldm.type_2_platform_monitoring import (
     GetSensorReadingDataSizeEnum,
@@ -283,3 +283,37 @@ def test_pdrs_model_round_trip_is_verbatim_and_not_path_resolved(
     ] == f"{module_name}:hcp"
     assert reloaded.device("dev").role_options["pldm-sensor"]["pdrs_model"] == f"{module_name}:hcp"
     assert behavior.profile.pdr_repository.get_record(0) is not None
+
+
+def test_fru_is_advertised_only_when_the_model_has_a_table(tmp_path: Path, monkeypatch) -> None:
+    """The advertisement has to track the actual capability, in both directions.
+
+    Claiming Type 4 with no table makes a requester reject the response and drop
+    the terminus; staying silent about a table we do have means it is never
+    asked for. Both halves are asserted here because each has bitten in
+    production.
+    """
+    module = tmp_path / "fru_models.py"
+    module.write_text(
+        "from pymctp.pldm.model import Terminus, FruRecordItem, FruField, TemperatureSensor\n"
+        "bare = Terminus(eid=9, tid=1, items=[TemperatureSensor(name='T', sensor_id=1)])\n"
+        "stocked = Terminus(eid=9, tid=1, items=[TemperatureSensor(name='T', sensor_id=1)])\n"
+        "stocked.add_fru(FruRecordItem(name='board', record_set_identifier=1, record_type=1,\n"
+        "    fields=[FruField(field_type=1, value=b'PART-1')]))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    for attribute, expect_fru in (("bare", False), ("stocked", True)):
+        behaviors = {
+            behavior.name: behavior
+            for behavior in get_behaviors_for_roles(
+                *normalize_roles(["pldm-sensor"], {"pldm-sensor": {"pdrs_model": f"fru_models:{attribute}"}})
+            )
+        }
+        advertised = int(PldmTypeCodes.FRU) in behaviors["pldm-base"].profile.supported_types
+        served = bool(behaviors["pldm-sensor"].profile.fru_repository.records)
+
+        assert advertised == expect_fru, attribute
+        assert served == expect_fru, attribute
+        assert advertised == served, "advertisement and capability must not diverge"

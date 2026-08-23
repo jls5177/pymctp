@@ -384,8 +384,33 @@ def test_get_pldm_commands_reports_32_byte_command_bitfield() -> None:
         assert payload.cmds[int(command) // 8] & (1 << (int(command) % 8))
 
 
-def test_get_pldm_types_and_commands_advertise_fru_by_default() -> None:
+def test_fru_is_not_advertised_without_a_table() -> None:
+    """Advertising Type 4 with nothing to serve costs the whole terminus.
+
+    A GetFRURecordTable response carrying no table data is only six bytes, and
+    DSP0257 requesters reject that as malformed rather than reading it as an
+    empty table. openbmc's pldmd then fails FRU init and deletes the device -
+    sensors included - so a terminus with no FRU must stay quiet about Type 4.
+    """
     base = PldmBaseBehavior()
+    types = _single_pldm(_get_reply(base, _base_request(PldmControlCmdCodes.GetPLDMTypes), _ctx()))
+
+    assert not types.getlayer(GetPLDMTypesPacket).PLDMTypes1 & (1 << int(PldmTypeCodes.FRU))
+
+
+def test_empty_fru_table_is_refused_rather_than_returned_empty() -> None:
+    """A short response is indistinguishable from a truncated one, so refuse plainly."""
+    behavior = PldmSensorBehavior()
+    request = _request(PldmTypeCodes.FRU, PldmFruCmdCodes.GetFRURecordTable, Raw(struct.pack("<IB", 0, 1)))
+
+    pldm = _single_pldm(_get_reply(behavior, request, _ctx()))
+
+    assert pldm.completion_code == CompletionCodes.ERROR_UNSUPPORTED_CMD
+    assert _raw_payload(pldm) == b""
+
+
+def test_get_pldm_types_and_commands_advertise_fru_when_configured() -> None:
+    base = PldmBaseBehavior(supported_types=[int(PldmTypeCodes.CONTROL), int(PldmTypeCodes.FRU)])
     ctx = _ctx()
 
     types = _single_pldm(_get_reply(base, _base_request(PldmControlCmdCodes.GetPLDMTypes), ctx))

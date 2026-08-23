@@ -249,12 +249,26 @@ def _pldm_base_behaviors(**options: Any) -> list[Behavior]:
 
 
 def _pldm_sensor_behaviors(**options: Any) -> list[Behavior]:
+    from ..layers.mctp.pldm.types import PldmTypeCodes
     from .behaviors.pldm_responder import PldmBaseBehavior, PldmSensorBehavior
 
     # A sensor endpoint must also answer PLDM Type 0 discovery (GetPLDMTypes /
     # GetPLDMCommands) or a requester never learns Type 2 is supported.
-    base_options = options.pop("base", None) or {}
-    return [PldmBaseBehavior(**base_options), PldmSensorBehavior(**options)]
+    base_options = dict(options.pop("base", None) or {})
+    sensor = PldmSensorBehavior(**options)
+
+    # Advertise FRU exactly when we can serve it. Claiming Type 4 with nothing
+    # to return makes a requester reject the response as malformed and discard
+    # the whole terminus, sensors included; staying silent about a table we do
+    # have means it is never asked for.
+    if "supported_types" not in base_options and sensor.profile.fru_repository.records:
+        base = PldmBaseBehavior(**base_options)
+        types = list(base.profile.supported_types)
+        if int(PldmTypeCodes.FRU) not in types:
+            types.append(int(PldmTypeCodes.FRU))
+        base_options["supported_types"] = types
+
+    return [PldmBaseBehavior(**base_options), sensor]
 
 
 def _cerberus_rot_behaviors(**options: Any) -> list[Behavior]:
