@@ -121,6 +121,14 @@ class EndpointConfig(DataClassDictMixin):
     role: str | list[str] | None = None
     role_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     name: str | None = None
+    #: Seconds between the packets of one fragmented reply. ``None`` keeps the
+    #: default pacing, which exists because the emulated controllers we talk to
+    #: take one frame at a time and drop the rest of a burst. Raise it for a
+    #: transport that still cannot keep up.
+    inter_packet_delay_s: float | None = None
+    #: Seconds to wait before writing a reply. Only useful for deliberately
+    #: simulating a slow device; it makes requesters time out and retry.
+    response_delay_s: float | None = None
 
     class Config(BaseConfig):
         serialization_strategy = {
@@ -162,6 +170,8 @@ class EndpointManager:
             verbose=verbose,
             prn=prn or session.on_packet_received,
             downstream_endpoints=cfg.downstream_endpoints,
+            inter_packet_delay_s=cfg.inter_packet_delay_s,
+            response_delay_s=cfg.response_delay_s,
         )
 
         roles = cfg.roles

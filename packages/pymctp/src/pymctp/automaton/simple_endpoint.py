@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: MIT
 
 import logging
-import random
 import threading
 import time
 from collections.abc import Callable
@@ -68,13 +67,21 @@ class SimpleEndpointAM(AnsweringMachine):
     # removed the "socket" option to allow it to be passed to "parse_options"
     send_options_list = ["iface", "inter", "loop", "verbose"]
 
-    #: Artificial latency, as ``(low, high)`` seconds, applied before writing a
-    #: single-packet reply and between the packets of a fragmented one. Off by
-    #: default: a responder that dawdles makes a requester time out and retry,
-    #: and a retry racing an in-flight fragmented reply is exactly what
-    #: corrupts a reassembled message.
-    response_delay_s: tuple[float, float] | None = None
-    inter_packet_delay_s: tuple[float, float] | None = None
+    #: Delay in seconds before writing a reply. Zero by default: a responder
+    #: that dawdles makes a requester time out and retry, and a retry racing an
+    #: in-flight fragmented reply is what corrupts a reassembled message.
+    response_delay_s: float = 0.0
+
+    #: Gap in seconds between the packets of one fragmented message.
+    #:
+    #: Deliberately non-zero. The QEMU transports we talk to hand one frame at
+    #: a time to the emulated controller, so packets written back to back are
+    #: accepted on the socket and then dropped before the requester ever sees
+    #: them -- every multi-packet reply silently disappears while single-packet
+    #: replies keep working. There is no flow control on this link to wait for,
+    #: so the gap is the only means of pacing. Lower it only against a
+    #: transport you have shown can keep up.
+    inter_packet_delay_s: float = 0.005
 
     def __init__(
         self,
@@ -83,8 +90,8 @@ class SimpleEndpointAM(AnsweringMachine):
         context: EndpointContext | None = None,
         timeout: float | None = None,
         downstream_endpoints: map | None = None,
-        response_delay_s: tuple[float, float] | None = None,
-        inter_packet_delay_s: tuple[float, float] | None = None,
+        response_delay_s: float | None = None,
+        inter_packet_delay_s: float | None = None,
         **kwargs,
     ):
         """
@@ -233,13 +240,18 @@ class SimpleEndpointAM(AnsweringMachine):
         """
         Sends the reply packets (sequentially) on the socket or using the "send_function" (if specified).
 
-        The packets of one message are written under a lock and without gaps.
-        MCTP reassembly is keyed on source EID, destination EID and tag, so a
-        second response that interleaves its packets with an in-flight one is
-        spliced into it by the receiver: the result reassembles cleanly, with
-        consecutive sequence numbers, but carries bytes from both messages.
-        That surfaces far from its cause -- as a bad PLDM FRU table checksum,
-        for instance -- so emission is kept atomic rather than left to chance.
+        The packets of one message are written under a lock, so a second
+        response cannot get its packets into the middle of an in-flight one.
+        MCTP reassembly is keyed on source EID, destination EID and tag, so
+        interleaved packets are spliced by the receiver into a single message
+        that reassembles cleanly, with consecutive sequence numbers, but
+        carries bytes from both messages. That surfaces far from its cause --
+        as a bad PLDM FRU table checksum, for instance -- so emission is kept
+        atomic rather than left to chance.
+
+        Packets are paced by ``inter_packet_delay_s``, because the emulated
+        controllers on the other end take one frame at a time and drop the
+        rest of a burst.
 
         @note This method does not wait for a response before sending the next reply
 
@@ -247,11 +259,12 @@ class SimpleEndpointAM(AnsweringMachine):
         :param send_function: An optional callable method to invoke to send each packet (instead of the socket)
         """
         packets = list(reply)
-        delay = self.response_delay_s if len(packets) == 1 else self.inter_packet_delay_s
         with self._send_lock:
-            for p in packets:
-                if delay:
-                    time.sleep(random.uniform(*delay))  # noqa: S311
+            if self.response_delay_s:
+                time.sleep(self.response_delay_s)
+            for index, p in enumerate(packets):
+                if index and self.inter_packet_delay_s:
+                    time.sleep(self.inter_packet_delay_s)
                 if send_function is not None:
                     send_function(p)
                 elif self.socket:

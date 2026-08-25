@@ -68,21 +68,29 @@ def test_concurrent_replies_do_not_interleave_their_packets() -> None:
     assert transitions == 1, f"messages interleaved: {markers}"
 
 
-def test_replies_are_not_delayed_by_default() -> None:
-    """Artificial latency made requesters time out and retry, which is what raced.
+def test_fragmented_replies_are_paced_but_whole_replies_are_not_delayed() -> None:
+    """The gap between packets is load-bearing; the one before a reply is not.
 
-    A retry arriving while a fragmented response is still going out is exactly
-    the interleaving above, so the delay is off unless a test asks for it.
+    The emulated controllers we talk to take one frame at a time, so packets
+    written back to back are accepted on the socket and then dropped before
+    the requester sees them: every multi-packet reply vanishes while
+    single-packet replies keep working. Removing this pacing broke PLDM PDR
+    discovery outright, so it is asserted rather than left to a comment.
+
+    Delaying the reply itself is the opposite -- it only makes requesters time
+    out and retry, and a retry racing an in-flight fragmented reply is what
+    corrupts a reassembled message.
     """
     socket = RecordingSocket()
     am = SimpleEndpointAM(socket=socket, context=EndpointContext())
 
-    assert am.response_delay_s is None
-    assert am.inter_packet_delay_s is None
+    assert am.inter_packet_delay_s > 0, "packets of one message must be paced"
+    assert not am.response_delay_s
 
     started = time.monotonic()
     am.send_reply(_message(0xCC, 1))
-    assert time.monotonic() - started < 0.05
+    elapsed = time.monotonic() - started
+    assert elapsed < am.inter_packet_delay_s + 0.05, "a single-packet reply must not wait"
 
 
 def test_send_function_is_used_when_supplied() -> None:
