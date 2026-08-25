@@ -1549,3 +1549,38 @@ class TestSetNumericSensorEnable:
     def test_invalid_operational_state_is_rejected(self) -> None:
         pldm = _single_pldm(_get_reply(self._behavior(), self._enable(1, operational_state=0x63), _ctx()))
         assert pldm.completion_code == CompletionCodes.ERROR_INVALID_DATA
+
+
+def test_a_repeated_instance_id_is_reported_as_a_lost_response(caplog) -> None:
+    """PLDM reuses the instance id on a retry, which is the clearest sign of a lost reply.
+
+    When a transfer fails only occasionally, the fact worth having is whether
+    the requester ever received the response at all. Counting instance ids by
+    hand in a packet dump is exactly the sort of thing that gets missed, so the
+    responder says it outright.
+    """
+    behavior = PldmSensorBehavior()
+    ctx = _ctx()
+    request = _request(PldmTypeCodes.PLATFORM_MONITORING, PldmPlatformMonitoringCmdCodes.GetTID, instance_id=9)
+
+    _get_reply(behavior, request, ctx)
+    with caplog.at_level(logging.WARNING, logger="pymctp.automaton.behaviors.pldm_responder"):
+        _get_reply(behavior, request, ctx)
+
+    assert "repeated PLDM type 2 cmd 0x02 instance 9" in caplog.text
+    assert "did not get through" in caplog.text
+
+
+def test_a_fresh_instance_id_is_not_reported_as_a_retry(caplog) -> None:
+    behavior = PldmSensorBehavior()
+    ctx = _ctx()
+
+    with caplog.at_level(logging.WARNING, logger="pymctp.automaton.behaviors.pldm_responder"):
+        for instance_id in (1, 2):
+            _get_reply(
+                behavior,
+                _request(PldmTypeCodes.PLATFORM_MONITORING, PldmPlatformMonitoringCmdCodes.GetTID, instance_id=instance_id),
+                ctx,
+            )
+
+    assert "repeated" not in caplog.text

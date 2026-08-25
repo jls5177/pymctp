@@ -18,9 +18,11 @@ import logging
 from pathlib import Path
 import struct
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 import uuid
 
+from scapy.compat import raw
 from scapy.packet import Packet, Raw
 
 from ...layers.mctp.pldm.pdr import (
@@ -1109,10 +1111,38 @@ class PldmSensorBehavior(Behavior):
             ctx=ctx,
         )
 
+    def _note_repeated_request(self, ctx: EndpointContext, pldm: PldmHdrPacket) -> None:
+        """Report a request the requester is asking for again.
+
+        PLDM reuses the instance id on a retry, so the same id arriving twice
+        for the same command means our previous response never got there, or
+        was rejected. That is the one fact worth having when a transfer fails
+        intermittently, and it is invisible in a packet dump without counting
+        instance ids by hand.
+        """
+        key = (int(pldm.pldm_type), int(pldm.cmd_code), int(pldm.instance_id))
+        state = self._state(ctx)
+        now = time.monotonic()
+        previous = state.get("last_request")
+        state["last_request"] = (key, now)
+        if previous is None or previous[0] != key:
+            return
+        logger.warning(
+            "eid 0x%02X: requester repeated PLDM type %d cmd 0x%02X instance %d after %.2fs -- "
+            "the previous response of %d byte(s) did not get through",
+            ctx.assigned_eid or 0,
+            key[0],
+            key[1],
+            key[2],
+            now - previous[1],
+            state.get("last_response_bytes", 0),
+        )
+
     def _handle(self, pkt: Packet, ctx: EndpointContext) -> HandlerResponse:
         pldm = pkt.getlayer(PldmHdrPacket)
         if pldm is None:
             return self._reply(pkt, ctx, None, CompletionCodes.ERROR_INVALID_DATA)
+        self._note_repeated_request(ctx, pldm)
         if pldm.pldm_type == PldmTypeCodes.FRU:
             return self._handle_fru(pkt, ctx, pldm)
 
@@ -1538,6 +1568,7 @@ class PldmSensorBehavior(Behavior):
             # than reading it as an empty table. Refusing plainly lets the
             # requester keep the rest of the terminus.
             return self._reply(pkt, ctx, None, CompletionCodes.ERROR_UNSUPPORTED_CMD)
+        self._check_fru_table_matches_metadata(ctx, state, table)
         count = _fru_slice_count(len(table), self.profile.fru_transfer_chunk_size)
         chunk = table[:count]
         if count >= len(table):
@@ -1548,6 +1579,38 @@ class PldmSensorBehavior(Behavior):
         state["fru_transfers"][next_transfer_handle] = {"table": table, "offset": count}
         payload = _get_fru_record_table_response(next_transfer_handle, GetPDRTransferFlag.START, chunk)
         return self._reply(pkt, ctx, payload, CompletionCodes.SUCCESS)
+
+    def _check_fru_table_matches_metadata(
+        self,
+        ctx: EndpointContext,
+        state: dict[str, Any],
+        table: bytes,
+    ) -> None:
+        """Log the table we are about to serve against the checksum we advertised.
+
+        A requester that reports a FRU checksum mismatch has either been sent
+        the wrong bytes or received them damaged, and only one of those is ours
+        to fix. Recording both values at the moment we serve them settles which
+        it is without needing a packet capture: if they agree here, the table
+        left intact and the damage happened downstream.
+        """
+        repository = state["fru_repository"]
+        advertised = repository.integrity_checksum
+        served = binascii.crc32(table) & 0xFFFFFFFF
+        if served != advertised:
+            logger.warning(
+                "eid 0x%02X: serving a FRU table whose checksum 0x%08X differs from the advertised 0x%08X",
+                ctx.assigned_eid or 0,
+                served,
+                advertised,
+            )
+            return
+        logger.debug(
+            "eid 0x%02X: serving FRU table, %d byte(s), checksum 0x%08X (as advertised)",
+            ctx.assigned_eid or 0,
+            len(table),
+            served,
+        )
 
     def _get_fru_record_table_next_part(
         self,
@@ -1772,6 +1835,9 @@ class PldmSensorBehavior(Behavior):
     ) -> HandlerResponse:
         pldm = pkt.getlayer(PldmHdrPacket)
         pldm_payload = pldm.build_reply(ctx, payload, completion_code) if pldm is not None else payload
+        state = ctx.msg_type_context[self.name]
+        if state:
+            state["last_response_bytes"] = len(raw(pldm_payload)) if pldm_payload else 0
         return HandlerResponse(stop_processing=True, reply=build_layered_reply(pkt, ctx, pldm_payload))
 
     def _state(self, ctx: EndpointContext) -> dict[str, Any]:
