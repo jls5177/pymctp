@@ -118,7 +118,9 @@ class OpaqueFruRecord:
 @dataclass
 class FruRepository:
     records: list[Any] = field(default_factory=list)
-    table_padding: bytes = b""
+    #: ``None`` derives the padding; explicit bytes are used verbatim for a
+    #: device whose padding is not simply alignment.
+    table_padding: bytes | None = None
     major_version: int = 1
     minor_version: int = 0
     table_maximum_size: int = 0
@@ -129,7 +131,7 @@ class FruRepository:
 
     def __post_init__(self) -> None:
         self.records = list(self.records)
-        self.table_padding = bytes(self.table_padding)
+        self.table_padding = None if self.table_padding is None else bytes(self.table_padding)
         self.major_version = int(self.major_version)
         self.minor_version = int(self.minor_version)
         self.table_maximum_size = int(self.table_maximum_size)
@@ -142,7 +144,23 @@ class FruRepository:
         return b"".join(encode_fru_record(record) for record in self.records)
 
     def response_table(self) -> bytes:
-        return self.encoded_table() + self.table_padding
+        table = self.encoded_table()
+        return table + self.padding_for(table)
+
+    def padding_for(self, table: bytes) -> bytes:
+        """Bytes appended to *table* on the wire.
+
+        DSP0257 computes the integrity checksum over the table padded to a
+        multiple of four, and a device transfers those pad bytes, so deriving
+        them keeps an edited table self-consistent. An explicitly supplied
+        value wins, for a device whose trailing bytes are not just alignment.
+        """
+        if self.table_padding is not None:
+            return self.table_padding
+        if not table:
+            return b""
+        remainder = len(table) % 4
+        return b"\x00" * (4 - remainder) if remainder else b""
 
     @property
     def table_length(self) -> int:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field as dc_field, fields
+from dataclasses import dataclass, field as dc_field, fields, replace
 from enum import IntEnum
 from typing import Any
 
@@ -358,6 +358,29 @@ def _render_clone(template: _RenderedTemplate, item: TerminusItem) -> _RenderedI
     )
 
 
+_DERIVED_FRU_METADATA = {
+    "fru_reported_table_length",
+    "fru_reported_record_set_count",
+    "fru_reported_record_count",
+    "fru_reported_integrity_checksum",
+    "fru_table_padding",
+}
+
+
+def _fru_metadata_is_derivable(terminus: Terminus, field_name: str, value: Any) -> bool:
+    """True when the model would compute *value* anyway from the FRU records."""
+    probe = replace(terminus, **{field_name: None if field_name != "fru_table_padding" else None})
+    repository = probe.build().fru_repository
+    derived = {
+        "fru_reported_table_length": repository.table_length,
+        "fru_reported_record_set_count": repository.record_set_count,
+        "fru_reported_record_count": repository.record_count,
+        "fru_reported_integrity_checksum": repository.integrity_checksum,
+        "fru_table_padding": repository.padding_for(repository.encoded_table()),
+    }[field_name]
+    return derived == value
+
+
 def _render_terminus(terminus: Terminus, items: list[_RenderedItem], fru_records: list[_RenderedItem]) -> str:
     args: list[tuple[str, Any]] = [("eid", terminus.eid), ("tid", terminus.tid)]
     for field_name in (
@@ -377,8 +400,14 @@ def _render_terminus(terminus: Terminus, items: list[_RenderedItem], fru_records
         "fru_table_padding",
     ):
         value = getattr(terminus, field_name)
-        if value != getattr(Terminus(eid=terminus.eid, tid=terminus.tid), field_name):
-            args.append((field_name, value))
+        if value == getattr(Terminus(eid=terminus.eid, tid=terminus.tid), field_name):
+            continue
+        # FRU metadata a device merely restates is derived from the records, so
+        # emitting it would freeze the captured numbers in place and make any
+        # later edit fail the requester's length and checksum checks.
+        if field_name in _DERIVED_FRU_METADATA and _fru_metadata_is_derivable(terminus, field_name, value):
+            continue
+        args.append((field_name, value))
 
     lines = ["terminus = Terminus("]
     for name, value in args:

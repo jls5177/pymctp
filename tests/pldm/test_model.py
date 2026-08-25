@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import binascii
 import struct
 
 import pytest
@@ -294,7 +295,9 @@ def test_fru_record_model_builds_byte_identical_repository() -> None:
     hcp = Terminus(eid=1, tid=1, fru_records=[FruRecordItem("fru_alpha", 0x1234, 0xFE, record.fields)])
 
     assert hcp["fru_alpha"].record_set_identifier == 0x1234
-    assert hcp.build().fru_repository.response_table() == record.to_bytes()
+    # The table proper is the records; alignment padding is appended outside it
+    # and is not part of what table_length describes.
+    assert hcp.build().fru_repository.encoded_table() == record.to_bytes()
 
 
 def test_fru_artifact_and_python_emission_rebuild_byte_identically() -> None:
@@ -335,7 +338,7 @@ def test_verbatim_fru_record_passes_through_byte_for_byte() -> None:
     raw = bytes.fromhex("0100fe0101e003010203")
     hcp = Terminus(eid=1, tid=1, fru_records=[VerbatimFruRecord(raw)])
 
-    assert hcp.build().fru_repository.response_table() == raw
+    assert hcp.build().fru_repository.encoded_table() == raw
 
 
 def test_state_sensors_and_effecters_build_structured_records_and_definitions() -> None:
@@ -505,3 +508,34 @@ def _pdr_dict(record: NumericSensorPdr) -> dict[str, object]:
             "fatal_low",
         )
     }
+
+
+def test_fru_metadata_follows_the_records_when_they_are_edited() -> None:
+    """Reported FRU metadata must be derived, or editing a record breaks the requester.
+
+    A requester checks the table it received against the reported length and
+    integrity checksum. openbmc's pldmd pads the table to a multiple of four
+    and CRC-32s that, so both the padding and the checksum have to move with
+    the records rather than staying frozen at whatever a capture reported.
+    """
+    hcp = Terminus(eid=1, tid=1, fru_records=[FruRecordItem("first", 1, 0xFE, [FruField(1, "ALPHA")])])
+    before = hcp.build().fru_repository.metadata()
+
+    hcp.add_fru(FruRecordItem("second", 2, 0x01, [FruField(8, "A LONGER PRODUCT NAME")]))
+    repository = hcp.build().fru_repository
+    after = repository.metadata()
+
+    assert after.table_length == len(repository.encoded_table()) != before.table_length
+    assert after.total_records == 2
+    assert after.total_record_set_identifiers == 2
+    assert after.integrity_checksum != before.integrity_checksum
+    assert after.integrity_checksum == binascii.crc32(repository.response_table()) & 0xFFFFFFFF
+    assert len(repository.response_table()) % 4 == 0, "pldmd CRCs the table padded to a multiple of four"
+
+
+def test_explicit_fru_padding_overrides_the_derived_alignment() -> None:
+    """A device whose trailing bytes are not simply alignment must still be reproducible."""
+    record = FruRecordItem("only", 1, 0xFE, [FruField(1, "ALPHA")])
+    hcp = Terminus(eid=1, tid=1, fru_records=[record], fru_table_padding=b"\xaa\xbb")
+
+    assert hcp.build().fru_repository.response_table().endswith(b"\xaa\xbb")

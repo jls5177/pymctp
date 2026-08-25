@@ -663,14 +663,15 @@ class Terminus:
     fru_reported_record_set_count: int | None = None
     fru_reported_record_count: int | None = None
     fru_reported_integrity_checksum: int | None = None
-    fru_table_padding: bytes = b""
+    #: ``None`` derives alignment padding from the table length.
+    fru_table_padding: bytes | None = None
     verbatim_fallbacks: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.eid = int(self.eid)
         self.tid = int(self.tid)
         self.auxiliary_record_size = None if self.auxiliary_record_size is None else int(self.auxiliary_record_size)
-        self.fru_table_padding = bytes(self.fru_table_padding)
+        self.fru_table_padding = None if self.fru_table_padding is None else bytes(self.fru_table_padding)
         self._reindex()
 
     def add(self, item: TerminusItem | bytes | bytearray) -> TerminusItem:
@@ -839,7 +840,7 @@ def _fru_kwargs_from_artifact(fru: Any) -> dict[str, Any]:
         "fru_reported_record_set_count": _optional_int(metadata.get("total_record_set_identifiers")),
         "fru_reported_record_count": _optional_int(metadata.get("total_records")),
         "fru_reported_integrity_checksum": _optional_int(metadata.get("integrity_checksum")),
-        "fru_table_padding": bytes.fromhex(str(fru.get("table_padding", ""))),
+        "fru_table_padding": bytes.fromhex(str(fru.get("table_padding", "") or "")),
     }
 
 
