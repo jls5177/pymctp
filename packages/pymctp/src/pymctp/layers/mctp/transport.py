@@ -27,6 +27,10 @@ from ..helpers import AllowRawSummary, AnyPacketType
 from ..interfaces import ICanSetMySummaryClasses, ICanVerifyIfRequest
 from .types import EndpointContext, ICanReply, MsgTypes, Smbus7bitAddress
 
+#: The MCTP message type byte occupies the first byte of the first packet's
+#: payload, so it counts against that packet's share of the transmission unit.
+_MSG_TYPE_SIZE = 1
+
 
 class TransportHdrPacket(AllowRawSummary, Packet):
     name = "MCTP-Transport"
@@ -147,9 +151,18 @@ class TransportHdrPacket(AllowRawSummary, Packet):
         buf_size = msg_size = len(buf)
         buf_offset = 0
         pkt_seq = self.pkt_seq + 1
+        # The MCTP message type byte travels inside the first packet's payload,
+        # so that packet carries one fewer upper-layer byte. Budgeting it
+        # separately made the first packet a byte larger than every other one,
+        # which both overruns the transmission unit and breaks DSP0236's rule
+        # that every packet of a message except the last is the same size.
+        # Real hardware emits uniform payloads: a 922-byte FRU table goes out
+        # as 120 x 7 + 82, with the type byte counted in the leading 120.
+        first_unit = max(1, ctx.mtu_size - _MSG_TYPE_SIZE)
         while buf_size > 0:
-            packet_size = min(ctx.mtu_size, buf_size)
-            packet = payload_resp if msg_size <= ctx.mtu_size else buf[buf_offset : buf_offset + packet_size]
+            unit = first_unit if not buf_offset else ctx.mtu_size
+            packet_size = min(unit, buf_size)
+            packet = payload_resp if msg_size <= first_unit else buf[buf_offset : buf_offset + packet_size]
             som = bool(not buf_offset)
             eom = (buf_offset + packet_size) >= msg_size
 
