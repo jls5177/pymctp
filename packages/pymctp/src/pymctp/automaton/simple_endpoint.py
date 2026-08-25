@@ -68,6 +68,14 @@ class SimpleEndpointAM(AnsweringMachine):
     # removed the "socket" option to allow it to be passed to "parse_options"
     send_options_list = ["iface", "inter", "loop", "verbose"]
 
+    #: Artificial latency, as ``(low, high)`` seconds, applied before writing a
+    #: single-packet reply and between the packets of a fragmented one. Off by
+    #: default: a responder that dawdles makes a requester time out and retry,
+    #: and a retry racing an in-flight fragmented reply is exactly what
+    #: corrupts a reassembled message.
+    response_delay_s: tuple[float, float] | None = None
+    inter_packet_delay_s: tuple[float, float] | None = None
+
     def __init__(
         self,
         session: EndpointSession | None = None,
@@ -75,6 +83,8 @@ class SimpleEndpointAM(AnsweringMachine):
         context: EndpointContext | None = None,
         timeout: float | None = None,
         downstream_endpoints: map | None = None,
+        response_delay_s: tuple[float, float] | None = None,
+        inter_packet_delay_s: tuple[float, float] | None = None,
         **kwargs,
     ):
         """
@@ -92,11 +102,21 @@ class SimpleEndpointAM(AnsweringMachine):
         if self.session:
             self.session.am = self
         self.downstream_endpoints = downstream_endpoints or {}
+        if response_delay_s is not None:
+            self.response_delay_s = response_delay_s
+        if inter_packet_delay_s is not None:
+            self.inter_packet_delay_s = inter_packet_delay_s
 
         self.sniffer: AsyncSniffer | None = None
         self._sniff_ready = threading.Event()
         self._sniff_started = threading.Event()
         self._stop_requested = threading.Event()
+        # A multi-packet message must reach the wire as one uninterrupted run.
+        # MCTP reassembly is keyed on source, destination and tag, so if a
+        # second response interleaves its packets with an in-flight one the
+        # receiver splices both into a single message that is complete and
+        # correctly sequenced but has the wrong contents.
+        self._send_lock = threading.Lock()
         super().__init__(timeout=timeout, **kwargs)
 
     def sniff(self) -> PacketList | None:
@@ -213,18 +233,29 @@ class SimpleEndpointAM(AnsweringMachine):
         """
         Sends the reply packets (sequentially) on the socket or using the "send_function" (if specified).
 
+        The packets of one message are written under a lock and without gaps.
+        MCTP reassembly is keyed on source EID, destination EID and tag, so a
+        second response that interleaves its packets with an in-flight one is
+        spliced into it by the receiver: the result reassembles cleanly, with
+        consecutive sequence numbers, but carries bytes from both messages.
+        That surfaces far from its cause -- as a bad PLDM FRU table checksum,
+        for instance -- so emission is kept atomic rather than left to chance.
+
         @note This method does not wait for a response before sending the next reply
 
         :param reply: The fully formed packet(s) to send
         :param send_function: An optional callable method to invoke to send each packet (instead of the socket)
         """
-        for p in reply:
-            if len(reply) > 1:
-                time.sleep(random.uniform(0.001, 0.01))  # noqa: S311
-            else:
-                time.sleep(random.uniform(0.1, 0.25))  # noqa: S311
-            if self.socket:
-                self.socket.send(p)
+        packets = list(reply)
+        delay = self.response_delay_s if len(packets) == 1 else self.inter_packet_delay_s
+        with self._send_lock:
+            for p in packets:
+                if delay:
+                    time.sleep(random.uniform(*delay))  # noqa: S311
+                if send_function is not None:
+                    send_function(p)
+                elif self.socket:
+                    self.socket.send(p)
 
     def print_reply(self, req: AnyPacketType, reply: AnyPacketType) -> None:
         if isinstance(reply, PacketList):
