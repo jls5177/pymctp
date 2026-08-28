@@ -11,6 +11,10 @@ from typing import Any
 
 from pymctp.topology.types import DeviceSpec, EidMap, MachineDefaults, MachineSpec
 
+#: Distinguishes "leave this default alone" from an explicit ``None``. A sniff
+#: timeout of ``None`` means run until stopped, so it has to be expressible.
+_UNSET: Any = object()
+
 
 class MachineBuilder:
     """Fluent helper for constructing :class:`MachineSpec` instances."""
@@ -26,7 +30,7 @@ class MachineBuilder:
         self,
         *,
         count: int | None = None,
-        timeout: float | None = None,
+        timeout: float | None = _UNSET,
         bg: bool | None = None,
         thread_kwargs: Mapping[str, Any] | None = None,
         dump_packet: bool | None = None,
@@ -41,7 +45,8 @@ class MachineBuilder:
             merged_thread_kwargs.update(thread_kwargs)
         if count is not None:
             merged_thread_kwargs["count"] = count
-        if timeout is not None:
+        if timeout is not _UNSET:
+            # ``None`` is meaningful here: it runs the sniffer until stopped.
             merged_thread_kwargs["timeout"] = timeout
         if bg is not None:
             merged_thread_kwargs["bg"] = bg

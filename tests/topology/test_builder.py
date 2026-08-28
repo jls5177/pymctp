@@ -55,3 +55,20 @@ def test_devices_bulk_helper_uses_index_and_name() -> None:
     assert spec.device_names() == ["hsp1", "hsp2"]
     assert spec.device("hsp1").transport["port"] == 5570
     assert spec.device("hsp2").transport["port"] == 5571
+
+
+def test_an_explicit_none_timeout_runs_until_stopped() -> None:
+    """``None`` is a meaningful sniff timeout, so it must survive the builder.
+
+    Treating it as "no value supplied" left the 30-minute default in place and
+    no caller could ask for a long-lived rig.
+    """
+    builder = MachineBuilder("board").defaults(timeout=None)
+
+    assert builder.build().defaults.thread_kwargs["timeout"] is None
+
+
+def test_omitting_the_timeout_keeps_the_existing_default() -> None:
+    builder = MachineBuilder("board").defaults(timeout=90).defaults(count=0)
+
+    assert builder.build().defaults.thread_kwargs["timeout"] == 90
