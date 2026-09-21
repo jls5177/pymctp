@@ -31,6 +31,10 @@ class RqBit(IntEnum):
 DEFAULT_HDR_VERSION = 0
 
 
+class DropResponse(Exception):
+    """Signal that an emulated request was handled without sending a response."""
+
+
 class ShortVdPciPacket(Packet):
     """Fallback for VDPCI payloads shorter than the standard 4-byte header.
 
@@ -150,6 +154,14 @@ class VdPciHdrPacket(Packet):
                 if delay:
                     time.sleep(delay / 1000.0)
                 return Raw(bytes([hdr_data[0], hdr_data[1], 0, hdr_data[3]])) / resp_data
+
+        if self.payload and isinstance(self.payload, ICanVerifyIfRequest) and hasattr(self.payload, "make_reply"):
+            try:
+                payload_resp = self.payload.make_reply(ctx)
+            except DropResponse:
+                return None
+            if isinstance(payload_resp, VdPciHdrPacket):
+                return payload_resp
 
         rsp = VdPciHdr(
             rq=False,

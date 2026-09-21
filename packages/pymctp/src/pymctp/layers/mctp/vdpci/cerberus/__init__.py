@@ -90,6 +90,14 @@ from .manifest import (
 )
 
 from .fw_update import (
+    FW_UPDATE_CONTEXT_KEY,
+    CerberusFwUpdateEmulator,
+    ExpectedByteProvider,
+    FwUpdateFaultControls,
+    FwUpdateIssue,
+    FwUpdatePhase,
+    FwUpdateSnapshot,
+    FwUpdateVerification,
     InitFwUpdateRequestPacket,
     FwUpdateRequestPacket,
     CompleteFwUpdateRequestPacket,
