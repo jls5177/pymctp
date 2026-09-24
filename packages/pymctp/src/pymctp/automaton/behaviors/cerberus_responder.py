@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, fields
 import hashlib
 import logging
+import random
 import struct
 from typing import Any
 
@@ -62,6 +63,9 @@ _HASH_BY_SIZE = {
     64: hashlib.sha512,
 }
 _MOCK_SIGNATURE_CONTEXT = b"pymctp-cerberus-mock-attestation-v1"
+_SYNTHETIC_DEBUG_LOG_LIMIT = 65536
+_SYNTHETIC_DEBUG_RECORD_MIN = 28
+_SYNTHETIC_DEBUG_RECORD_MAX = 96
 TCG_SHA256_ALG_ID = 0x000B
 TCG_SHA384_ALG_ID = 0x000C
 TCG_SHA512_ALG_ID = 0x000D
@@ -266,6 +270,10 @@ class CerberusResponderProfile:
     attestation_status_version: int = 2
     components: list[ComponentAttestation] = field(default_factory=list)
     debug_log: bytes = b""
+    synthetic_debug_log: bool = False
+    synthetic_debug_log_seed: int | None = None
+    synthetic_debug_log_min_size: int = 32768
+    synthetic_debug_log_max_size: int = _SYNTHETIC_DEBUG_LOG_LIMIT
     attestation_log: bytes = b""
     attestation_log_builder: AttestationLogBuilder = field(default_factory=AttestationLogBuilder)
     tamper_log: bytes = b""
@@ -299,6 +307,24 @@ class CerberusResponderProfile:
             for component in self.components
         ]
         self.debug_log = bytes(self.debug_log)
+        if not isinstance(self.synthetic_debug_log, bool):
+            raise TypeError("synthetic_debug_log must be a bool")
+        if self.synthetic_debug_log_seed is not None and (
+            isinstance(self.synthetic_debug_log_seed, bool) or not isinstance(self.synthetic_debug_log_seed, int)
+        ):
+            raise TypeError("synthetic_debug_log_seed must be an int or None")
+        if any(
+            isinstance(size, bool) or not isinstance(size, int)
+            for size in (self.synthetic_debug_log_min_size, self.synthetic_debug_log_max_size)
+        ):
+            raise TypeError("synthetic debug log sizes must be integers")
+        if not (
+            _SYNTHETIC_DEBUG_RECORD_MIN
+            <= self.synthetic_debug_log_min_size
+            <= self.synthetic_debug_log_max_size
+            <= _SYNTHETIC_DEBUG_LOG_LIMIT
+        ):
+            raise ValueError("synthetic debug log sizes must be between 28 and 65536, with min <= max")
         self.attestation_log = bytes(self.attestation_log)
         if isinstance(self.attestation_log_builder, dict):
             self.attestation_log_builder = AttestationLogBuilder(**self.attestation_log_builder)
@@ -573,6 +599,13 @@ class CerberusChallengeBehavior(Behavior):
         return payload / body if body else payload
 
     def _get_log_info(self, pkt: Packet, ctx: EndpointContext) -> Packet:
+        if self.profile.synthetic_debug_log:
+            state = self._state(ctx)
+            state["logs"][int(CerberusLogType.DEBUG)] = _synthetic_debug_log(
+                state["synthetic_debug_rng"],
+                self.profile.synthetic_debug_log_min_size,
+                self.profile.synthetic_debug_log_max_size,
+            )
         return LogInfoResponsePacket(
             debug_log_length=len(self._get_log(ctx, int(CerberusLogType.DEBUG)) or b""),
             attestation_log_length=len(self._get_log(ctx, int(CerberusLogType.ATTESTATION)) or b""),
@@ -683,7 +716,7 @@ class CerberusChallengeBehavior(Behavior):
         return bool(self.profile.slot_mask & (1 << int(slot)))
 
     def _max_log_chunk(self) -> int:
-        return max(0, int(self.profile.max_log_chunk))
+        return min(4091, max(0, int(self.profile.max_log_chunk)))
 
     def _get_log(self, ctx: EndpointContext, log_type: int) -> bytes | None:
         state = self._state(ctx)
@@ -716,6 +749,16 @@ class CerberusChallengeBehavior(Behavior):
         return state
 
     def _new_state(self) -> dict[str, Any]:
+        debug_rng = random.Random(self.profile.synthetic_debug_log_seed)
+        debug_log = (
+            _synthetic_debug_log(
+                debug_rng,
+                self.profile.synthetic_debug_log_min_size,
+                self.profile.synthetic_debug_log_max_size,
+            )
+            if self.profile.synthetic_debug_log
+            else bytes(self.profile.debug_log)
+        )
         return {
             "capabilities_requested": False,
             "device_id_requested": False,
@@ -725,10 +768,11 @@ class CerberusChallengeBehavior(Behavior):
             "last_challenge": {},
             "cert_transfer": {},
             "logs": {
-                int(CerberusLogType.DEBUG): bytes(self.profile.debug_log),
+                int(CerberusLogType.DEBUG): debug_log,
                 int(CerberusLogType.ATTESTATION): bytes(self.profile.attestation_log),
                 int(CerberusLogType.TAMPER): bytes(self.profile.tamper_log),
             },
+            "synthetic_debug_rng": debug_rng,
             "attestation_log_builder": _clone_attestation_log_builder(self.profile.attestation_log_builder),
             "components": _clone_components(self.profile.components),
             "last_log_read": {},
@@ -744,6 +788,41 @@ class CerberusChallengeBehavior(Behavior):
         if isinstance(profile, CerberusResponderProfile):
             return profile
         return CerberusResponderProfile(**profile)
+
+
+def _synthetic_debug_log(rng: random.Random, minimum: int, maximum: int) -> bytes:
+    target = rng.randint(minimum, maximum)
+    records = bytearray()
+    sequence = 0
+    while len(records) < target:
+        remaining = target - len(records)
+        length = (
+            remaining
+            if remaining <= _SYNTHETIC_DEBUG_RECORD_MAX
+            else rng.randint(
+                _SYNTHETIC_DEBUG_RECORD_MIN,
+                min(_SYNTHETIC_DEBUG_RECORD_MAX, remaining - _SYNTHETIC_DEBUG_RECORD_MIN),
+            )
+        )
+        # 0xCB debug records have a 9-byte header and a 19-byte base entry.
+        records.extend(
+            struct.pack(
+                "<BHIHBBBIIQ",
+                0xCB,
+                length,
+                sequence,
+                0,
+                rng.randrange(3),
+                13,  # Generic MCTP component, not a device-specific message.
+                rng.randrange(4),
+                rng.getrandbits(32),
+                rng.getrandbits(32),
+                sequence * 100,
+            )
+        )
+        records.extend(rng.randbytes(length - _SYNTHETIC_DEBUG_RECORD_MIN))
+        sequence += 1
+    return bytes(records)
 
 
 def _resize_bytes(data: bytes, size: int) -> bytes:

@@ -404,6 +404,155 @@ def _load_tcg_log_decoder():
 
 
 class TestCerberusUtilityFlow:
+    @staticmethod
+    def _debug_info(behavior: CerberusChallengeBehavior, ctx: EndpointContext) -> int:
+        reply = _get_reply(behavior, _request(CerberusCmdCodes.GET_LOG_INFO, GetLogInfoRequestPacket()), ctx)
+        info = _reassembled_vdpci(reply).getlayer(LogInfoResponsePacket)
+        assert info is not None
+        return int(info.debug_log_length)
+
+    @staticmethod
+    def _debug_read(behavior: CerberusChallengeBehavior, ctx: EndpointContext, offset: int) -> bytes:
+        return _raw_response_payload(
+            _get_reply(
+                behavior,
+                _request(
+                    CerberusCmdCodes.READ_LOG,
+                    ReadLogRequestPacket(log_type=CerberusLogType.DEBUG, offset=offset),
+                ),
+                ctx,
+            )
+        )
+
+    def test_synthetic_debug_snapshot_is_seeded_bounded_and_has_whole_variable_records(self) -> None:
+        profile = CerberusResponderProfile(
+            synthetic_debug_log=True,
+            synthetic_debug_log_seed=42,
+            synthetic_debug_log_min_size=65536,
+            synthetic_debug_log_max_size=65536,
+        )
+        behavior = CerberusChallengeBehavior(profile=profile)
+        ctx = _ctx()
+        assert self._debug_info(behavior, ctx) == 65536
+
+        snapshot = b"".join(
+            self._debug_read(behavior, ctx, offset) for offset in range(0, 65536, 4091)
+        )
+        assert len(snapshot) == 65536
+        assert self._debug_read(behavior, ctx, 65536) == b""
+        assert self._debug_read(behavior, ctx, 65537) == b""
+        assert self._debug_read(behavior, ctx, 4090) == snapshot[4090 : 4090 + 4091]
+
+        position = 0
+        sizes = set()
+        sequence = 0
+        while position < len(snapshot):
+            magic, length, number, fmt, severity, component, message, arg1, arg2, elapsed = (
+                struct.unpack_from("<BHIHBBBIIQ", snapshot, position)
+            )
+            assert 28 <= length <= 96
+            assert position + length <= len(snapshot)
+            assert (magic, number, fmt, component, elapsed) == (0xCB, sequence, 0, 13, sequence * 100)
+            assert severity in (0, 1, 2)
+            assert message in (0, 1, 2, 3)
+            assert 0 <= arg1 <= 0xFFFFFFFF
+            assert 0 <= arg2 <= 0xFFFFFFFF
+            sizes.add(length)
+            position += length
+            sequence += 1
+        assert position == len(snapshot)
+        assert len(sizes) > 1
+
+        other = CerberusChallengeBehavior(profile=profile)
+        other_ctx = _ctx()
+        assert self._debug_info(other, other_ctx) == 65536
+        assert self._debug_read(other, other_ctx, 0) == snapshot[:4091]
+        assert self._debug_info(behavior, ctx) == 65536
+        assert self._debug_read(behavior, ctx, 0) != snapshot[:4091]
+        assert self._debug_info(other, other_ctx) == 65536
+        assert self._debug_read(other, other_ctx, 0) == self._debug_read(behavior, ctx, 0)
+
+    def test_synthetic_debug_read_short_chunks_clear_restart_and_endpoint_isolation(self) -> None:
+        behavior = CerberusChallengeBehavior(
+            synthetic_debug_log=True,
+            synthetic_debug_log_seed=123,
+            synthetic_debug_log_min_size=62000,
+            synthetic_debug_log_max_size=65536,
+            max_log_chunk=103,
+        )
+        ctx1, ctx2 = _ctx(), _ctx()
+        length = self._debug_info(behavior, ctx1)
+        assert 62000 <= length <= 65536
+        first = self._debug_read(behavior, ctx1, 0)
+        assert self._debug_info(behavior, ctx2) == length
+        assert self._debug_read(behavior, ctx2, 0) == first
+        second_length = self._debug_info(behavior, ctx1)
+        assert 62000 <= second_length <= 65536
+        assert self._debug_read(behavior, ctx2, 0) == first
+        assert self._debug_info(behavior, ctx2) == second_length
+        second = self._debug_read(behavior, ctx2, 0)
+        assert second == self._debug_read(behavior, ctx1, 0)
+
+        chunks = [self._debug_read(behavior, ctx1, offset) for offset in range(0, second_length, 103)]
+        assert all(len(chunk) == min(103, second_length - offset) for offset, chunk in zip(range(0, second_length, 103), chunks))
+        snapshot = b"".join(chunks)
+        assert len(snapshot) == second_length
+        assert self._debug_read(behavior, ctx1, second_length - 7) == snapshot[-7:]
+        assert self._debug_read(behavior, ctx1, 0) == snapshot[:103]
+
+        _get_reply(
+            behavior,
+            _request(CerberusCmdCodes.CLEAR_LOG, ClearLogRequestPacket(log_type=CerberusLogType.DEBUG)),
+            ctx1,
+        )
+        assert self._debug_read(behavior, ctx1, 0) == b""
+        assert self._debug_read(behavior, ctx1, 99) == b""
+        assert self._debug_read(behavior, ctx2, 0) == second
+        assert self._debug_info(behavior, ctx1) >= 62000
+        assert self._debug_read(behavior, ctx1, 0) != snapshot[:103]
+
+    def test_explicit_debug_bytes_remain_default_and_opt_in_replaces_them(self) -> None:
+        explicit = b"explicit log bytes"
+        regular = CerberusChallengeBehavior(debug_log=explicit)
+        opted = CerberusChallengeBehavior(
+            debug_log=explicit,
+            synthetic_debug_log=True,
+            synthetic_debug_log_seed=1,
+        )
+        assert self._debug_info(regular, _ctx()) == len(explicit)
+        assert self._debug_read(regular, _ctx(), 0) == explicit
+        ctx = _ctx()
+        initial = self._debug_read(opted, ctx, 0)
+        assert initial.startswith(b"\xcb")
+        assert initial != explicit
+        assert self._debug_info(opted, ctx) >= 32768
+        assert self._debug_read(opted, ctx, 0) != initial
+
+    @pytest.mark.parametrize(
+        "options",
+        [
+            {"synthetic_debug_log_min_size": 0},
+            {"synthetic_debug_log_max_size": 65537},
+            {"synthetic_debug_log_min_size": 100, "synthetic_debug_log_max_size": 99},
+        ],
+    )
+    def test_synthetic_debug_invalid_bounds_fail_explicitly(self, options: dict[str, int]) -> None:
+        with pytest.raises(ValueError, match="synthetic debug log sizes"):
+            CerberusResponderProfile(**options)
+
+    def test_synthetic_debug_rejects_noninteger_configuration(self) -> None:
+        for options in (
+            {"synthetic_debug_log_seed": True},
+            {"synthetic_debug_log_min_size": 32.5},
+            {"synthetic_debug_log_max_size": True},
+        ):
+            with pytest.raises(TypeError):
+                CerberusResponderProfile(**options)
+
+    def test_read_log_chunk_never_exceeds_wire_limit(self) -> None:
+        behavior = CerberusChallengeBehavior(debug_log=b"D" * 5000, max_log_chunk=5000)
+        assert len(self._debug_read(behavior, _ctx(), 0)) == 4091
+
     def test_get_log_info_returns_configured_lengths(self) -> None:
         behavior = CerberusChallengeBehavior(
             profile=CerberusResponderProfile(
