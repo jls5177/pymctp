@@ -79,8 +79,9 @@ class SimpleEndpointAM(AnsweringMachine):
     #: accepted on the socket and then dropped before the requester ever sees
     #: them -- every multi-packet reply silently disappears while single-packet
     #: replies keep working. There is no flow control on this link to wait for,
-    #: so the gap is the only means of pacing. Lower it only against a
-    #: transport you have shown can keep up.
+    #: so the gap is the only means of pacing for transports that send
+    #: immediately. Sockets that stage the full reply until EOM opt out
+    #: when used directly; all other transports retain the default.
     inter_packet_delay_s: float = 0.005
 
     def __init__(
@@ -251,7 +252,8 @@ class SimpleEndpointAM(AnsweringMachine):
 
         Packets are paced by ``inter_packet_delay_s``, because the emulated
         controllers on the other end take one frame at a time and drop the
-        rest of a burst.
+        rest of a burst. A socket that stages complete replies until EOM
+        does not need this gap when sending directly through the socket.
 
         @note This method does not wait for a response before sending the next reply
 
@@ -259,12 +261,15 @@ class SimpleEndpointAM(AnsweringMachine):
         :param send_function: An optional callable method to invoke to send each packet (instead of the socket)
         """
         packets = list(reply)
+        inter_packet_delay_s = self.inter_packet_delay_s
+        if send_function is None and getattr(self.socket, "stages_complete_replies", False):
+            inter_packet_delay_s = 0.0
         with self._send_lock:
             if self.response_delay_s:
                 time.sleep(self.response_delay_s)
             for index, p in enumerate(packets):
-                if index and self.inter_packet_delay_s:
-                    time.sleep(self.inter_packet_delay_s)
+                if index and inter_packet_delay_s:
+                    time.sleep(inter_packet_delay_s)
                 if self.session is not None:
                     self.session.observe_tx_packet(p)
                 if send_function is not None:

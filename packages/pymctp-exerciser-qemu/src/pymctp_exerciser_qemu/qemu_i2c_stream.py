@@ -17,18 +17,20 @@ Message types (minimal, new protocol — not shared with the UDP
     0x00 WRITE     — bytes written by the QEMU-side I2C/SMBUS master to us
                      (the slave/target). Delivered to callers as a parsed
                      :class:`~pymctp.layers.mctp.SmbusTransportPacket`.
-    0x01 READ_REQ  — body ``[u16 len BE]``. The QEMU-side master wants to
-                     read ``len`` bytes from us; we must answer with a
-                     READ_RSP frame. Handled internally by :meth:`recv`.
-    0x02 READ_RSP  — body is the bytes returned for a pending read. Sent by
-                     us in response to READ_REQ; never expected inbound.
+    0x01 READ_REQ  — body ``[u16 len BE]``. The QEMU-side master can receive
+                     packets of at most ``len`` bytes. Handled by :meth:`recv`.
+    0x02 READ_RSP  — body is one complete queued SMBus packet. We send one
+                     frame per packet in response to READ_REQ, never empty
+                     frames; never expected inbound.
     0x03 ALERT     — async notify from slave (us) to master, optional body.
                      Sent via :meth:`send_alert`.
     0x07 HELLO     — body ``[u32 proto_version BE]``, sent once on connect.
 
-Outbound data queued via :meth:`send` (already-wrapped SMBus/MCTP bytes) is
-buffered until the master issues a READ_REQ, matching real I2C/SMBus turn-
-around semantics where the slave cannot push data onto the bus unsolicited.
+Outbound data queued via :meth:`send` (already-wrapped SMBus/MCTP packets)
+waits until the master issues a READ_REQ; the slave cannot push data onto
+the bus unsolicited. Complete MCTP messages are published as a batch, so a
+READ_REQ cannot observe only the first packets of a paced reply.
+The slave holds at most 512 packets across complete and staged messages.
 
 Master mode
 ------------
@@ -62,6 +64,7 @@ import logging
 import select
 import socket
 import struct
+import threading
 import time
 from enum import IntEnum
 
@@ -71,7 +74,7 @@ from scapy.packet import Packet
 from scapy.supersocket import SuperSocket
 from scapy.utils import linehexdump
 
-from pymctp.layers.mctp import SmbusTransport
+from pymctp.layers.mctp import SmbusTransport, TransportHdrPacket
 
 from .stream_framing import FrameDecoder, encode_frame
 
@@ -87,6 +90,8 @@ _MIN_SMBUS_PAYLOAD_LEN = 4
 # Minimum length of a master-mode WRITE payload: the leading address byte
 # plus the same minimal SMBUS/MCTP transport header as slave mode.
 _MIN_MASTER_WRITE_PAYLOAD_LEN = 1 + _MIN_SMBUS_PAYLOAD_LEN
+_MAX_PACKETS_PER_READ = 512
+_MAX_PENDING_PACKETS = 512
 
 
 class I2CStreamMsgType(IntEnum):
@@ -113,6 +118,11 @@ class QemuI2CStreamSocket(SuperSocket):
     """
 
     desc = "read/write to a QEMU I2C remote-target TCP stream"
+
+    @property
+    def stages_complete_replies(self) -> bool:
+        """Slave replies are hidden from READ_REQ until the EOM packet is queued."""
+        return not self.master
 
     def __init__(
         self,
@@ -152,9 +162,12 @@ class QemuI2CStreamSocket(SuperSocket):
 
         self._decoder = FrameDecoder()
         self._pending_frames: collections.deque[tuple[int, bytes]] = collections.deque()
-        # Bytes queued by send() awaiting the next READ_REQ from the master.
         # Unused in master mode, where send() transmits immediately.
-        self._read_buffer = bytearray()
+        self._pending_packets: collections.deque[bytes] = collections.deque()
+        self._staged_messages: dict[tuple[int, int, int, int], list[bytes]] = {}
+        self._staged_packet_count = 0
+        self._queue_lock = threading.Lock()
+        self._send_lock = threading.Lock()
 
         fd = socket.create_connection((host, port), timeout=connect_timeout)
         fd.settimeout(None)
@@ -207,7 +220,41 @@ class QemuI2CStreamSocket(SuperSocket):
             self._send_master_write(sx)
             return len(sx)
 
-        self._read_buffer.extend(sx)
+        hdr = x.getlayer(TransportHdrPacket) if x.haslayer(TransportHdrPacket) else None
+        with self._queue_lock:
+            if hdr is not None:
+                key = (hdr.src, hdr.dst, hdr.tag, hdr.to)
+                if hdr.som:
+                    stale = self._staged_messages.pop(key, None)
+                    if stale is not None:
+                        self._staged_packet_count -= len(stale)
+                        logger.warning("%s: discarding incomplete MCTP message for %s on new SOM", self.id_str, key)
+                else:
+                    staged = self._staged_messages.get(key)
+                    if staged is None:
+                        msg = f"{self.id_str}: MCTP continuation without SOM for {key}"
+                        logger.error(msg)
+                        raise ValueError(msg)
+
+            if len(self._pending_packets) + self._staged_packet_count >= _MAX_PENDING_PACKETS:
+                if hdr is not None and not hdr.som:
+                    self._staged_packet_count -= len(self._staged_messages.pop(key))
+                msg = f"{self.id_str}: pending packet limit {_MAX_PENDING_PACKETS} exceeded"
+                logger.error(msg)
+                raise OverflowError(msg)
+
+            if hdr is None or (hdr.som and hdr.eom):
+                self._pending_packets.append(sx)
+            elif hdr.som:
+                self._staged_messages[key] = [sx]
+                self._staged_packet_count += 1
+            else:
+                staged.append(sx)
+                self._staged_packet_count += 1
+                if hdr.eom:
+                    self._pending_packets.extend(staged)
+                    self._staged_packet_count -= len(staged)
+                    del self._staged_messages[key]
         return len(sx)
 
     def recv(self, x: int = MTU) -> Packet | None:
@@ -313,25 +360,38 @@ class QemuI2CStreamSocket(SuperSocket):
         return None
 
     def _handle_read_req(self, payload: bytes) -> None:
-        """Answer a READ_REQ with up to ``len`` queued bytes as a READ_RSP.
+        """Flush up to 512 whole queued packets, one READ_RSP per packet.
 
-        QEMU deliberately requests the capacity of its receive buffer rather
-        than the exact response length: an I2C slave cannot know how many
-        bytes the master intends to read. Returning fewer bytes is therefore
-        the normal case for short MCTP responses, not a truncated transfer.
+        The requested length is the per-packet receive capacity, not a total
+        byte budget. A packet too large for this request stays at the head of
+        the queue until a later request can fit it; later packets cannot pass.
         """
-        if len(payload) < 2:
-            logger.warning("%s: READ_REQ frame too short (%d bytes)", self.id_str, len(payload))
+        if len(payload) != 2:
+            logger.warning("%s: malformed READ_REQ frame (%d bytes; expected 2)", self.id_str, len(payload))
             return
-        (length,) = struct.unpack(">H", payload[:2])
+        (length,) = struct.unpack(">H", payload)
+        if not length:
+            logger.warning("%s: invalid READ_REQ length 0", self.id_str)
+            return
 
-        available = len(self._read_buffer)
-        if available < length:
-            logger.debug("%s: READ_REQ for %d bytes; returning %d queued bytes", self.id_str, length, available)
-
-        chunk = bytes(self._read_buffer[:length])
-        del self._read_buffer[:length]
-        self.send_read_rsp(chunk)
+        sent = 0
+        with self._queue_lock:
+            while self._pending_packets and sent < _MAX_PACKETS_PER_READ:
+                packet = self._pending_packets[0]
+                if len(packet) > length:
+                    logger.warning(
+                        "%s: READ_REQ capacity %d smaller than next packet (%d bytes); retaining packet",
+                        self.id_str,
+                        length,
+                        len(packet),
+                    )
+                    break
+                if not self.send_read_rsp(packet):
+                    logger.error("%s: could not send READ_RSP; retaining packet", self.id_str)
+                    break
+                self._pending_packets.popleft()
+                sent += 1
+        logger.debug("%s: READ_REQ for %d bytes; returned %d queued packets", self.id_str, length, sent)
 
     def _parse_master_write(self, payload: bytes) -> Packet | None:
         """Parse a master-mode WRITE frame body: ``[addr_byte][smbus payload...]``.
@@ -390,11 +450,12 @@ class QemuI2CStreamSocket(SuperSocket):
             return 0
 
         frame = encode_frame(int(msg_type), body)
-        try:
-            self.outs.sendall(frame)
-        except Exception as e:
-            print(f"Failed sending data: {e}")
-            raise
+        with self._send_lock:
+            try:
+                self.outs.sendall(frame)
+            except OSError:
+                logger.exception("%s: failed sending frame type 0x%02X", self.id_str, msg_type)
+                raise
         return len(frame)
 
     def _send_hello(self) -> int:

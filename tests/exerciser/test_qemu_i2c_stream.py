@@ -16,10 +16,13 @@ from __future__ import annotations
 import socket
 import struct
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from pymctp.automaton.simple_endpoint import SimpleEndpointAM
 from pymctp.layers.mctp import SmbusTransport, TransportHdrPacket, MsgTypes
+from pymctp.layers.mctp.types import EndpointContext
 from pymctp_exerciser_qemu.qemu_i2c_stream import (
     PROTO_VERSION,
     I2CStreamMsgType,
@@ -87,6 +90,13 @@ def fake_qemu():
     server.close()
 
 
+def response_packet(body: bytes, *, som: int = 1, eom: int = 1, pkt_seq: int = 0, tag: int = 2):
+    hdr = TransportHdrPacket(
+        dst=0x08, src=0x10, som=som, eom=eom, pkt_seq=pkt_seq, to=0, tag=tag, msg_type=MsgTypes.CTRL.value
+    )
+    return SmbusTransport(dst_addr=0x08, src_addr=0x10, load=hdr / body)
+
+
 class TestQemuI2CStreamConnectAndHello:
     def test_connect_sends_hello_frame(self, fake_qemu):
         sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
@@ -139,6 +149,77 @@ class TestQemuI2CStreamWrite:
 
 
 class TestQemuI2CStreamReadRequestResponse:
+    def test_slave_reply_stages_18_packets_without_pacing_then_flushes_on_read(self, fake_qemu, monkeypatch):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            packets = [
+                response_packet(bytes([index]), som=int(index == 0), eom=int(index == 17), pkt_seq=index % 4)
+                for index in range(18)
+            ]
+            sleeps = []
+            monkeypatch.setattr("pymctp.automaton.simple_endpoint.time.sleep", sleeps.append)
+            am = SimpleEndpointAM(socket=sock, context=EndpointContext())
+
+            assert sock.stages_complete_replies
+            assert am.inter_packet_delay_s == 0.005
+            am.send_reply(packets)
+
+            assert sleeps == []
+            assert list(sock._pending_packets) == [bytes(packet) for packet in packets]
+            assert not sock._staged_messages
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", max(len(bytes(p)) for p in packets)))
+            assert sock.recv() is None
+            assert [fake_qemu.recv_frame() for _ in packets] == [
+                (I2CStreamMsgType.READ_RSP, bytes(packet)) for packet in packets
+            ]
+            assert not sock._pending_packets
+        finally:
+            sock.close()
+
+    def test_master_reply_still_paces_packets(self, fake_qemu, monkeypatch):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host, port=fake_qemu.port, dump_hex=False, master=True, target_address=0x10
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            packets = [response_packet(b"first", som=1, eom=0), response_packet(b"last", som=0, eom=1, pkt_seq=1)]
+            sleeps = []
+            monkeypatch.setattr("pymctp.automaton.simple_endpoint.time.sleep", sleeps.append)
+            am = SimpleEndpointAM(socket=sock, context=EndpointContext())
+
+            assert not sock.stages_complete_replies
+            am.send_reply(packets)
+
+            assert sleeps == [0.005]
+            assert [fake_qemu.recv_frame() for _ in packets] == [
+                (I2CStreamMsgType.WRITE, bytes(packet)) for packet in packets
+            ]
+        finally:
+            sock.close()
+
+    def test_custom_sender_keeps_pacing_even_with_slave_socket(self, fake_qemu, monkeypatch):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, dump_hex=False)
+        try:
+            packets = [response_packet(b"first", som=1, eom=0), response_packet(b"last", som=0, eom=1, pkt_seq=1)]
+            sent = []
+            sleeps = []
+            monkeypatch.setattr("pymctp.automaton.simple_endpoint.time.sleep", sleeps.append)
+            am = SimpleEndpointAM(socket=sock, context=EndpointContext())
+
+            am.send_reply(packets, send_function=sent.append)
+
+            assert sent == packets
+            assert sleeps == [0.005]
+            assert not sock._pending_packets
+        finally:
+            sock.close()
+
     def test_send_queues_bytes_for_next_read_req(self, fake_qemu):
         sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
         try:
@@ -157,6 +238,8 @@ class TestQemuI2CStreamReadRequestResponse:
             # Queue the response bytes (no network activity happens yet).
             n = sock.send(wire_pkt)
             assert n == len(wire_bytes)
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
 
             # QEMU master now issues a READ_REQ for the full length.
             fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(wire_bytes)))
@@ -168,39 +251,272 @@ class TestQemuI2CStreamReadRequestResponse:
         finally:
             sock.close()
 
-    def test_read_req_for_fewer_bytes_than_queued_leaves_remainder(self, fake_qemu):
+    def test_one_read_req_flushes_each_packet_in_order(self, fake_qemu):
         sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
         try:
             fake_qemu.wait_for_connection()
             fake_qemu.recv_frame()  # drain HELLO
 
-            sock._read_buffer.extend(b"0123456789")
+            packets = [response_packet(body, tag=tag) for tag, body in enumerate([b"first", b"second", b"third"])]
+            for packet in packets:
+                sock.send(packet)
+            wire_bytes = [bytes(packet) for packet in packets]
 
-            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 4))
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", max(map(len, wire_bytes))))
             assert sock.recv() is None
-            msg_type, body = fake_qemu.recv_frame()
-            assert msg_type == I2CStreamMsgType.READ_RSP
-            assert body == b"0123"
-            assert bytes(sock._read_buffer) == b"456789"
+            assert [fake_qemu.recv_frame() for _ in packets] == [
+                (I2CStreamMsgType.READ_RSP, data) for data in wire_bytes
+            ]
+            assert not sock._pending_packets
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
         finally:
             sock.close()
 
-    def test_read_req_more_than_queued_returns_available_bytes_and_logs_debug(self, fake_qemu, caplog):
+    def test_empty_read_req_sends_no_response(self, fake_qemu):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 64))
+            assert sock.recv() is None
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+        finally:
+            sock.close()
+
+    def test_small_read_req_retains_whole_packet_and_blocks_later_packets(self, fake_qemu, caplog):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            first = response_packet(b"0123456789")
+            second = response_packet(b"a", tag=3)
+            sock.send(first)
+            sock.send(second)
+
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(bytes(first)) - 1))
+            with caplog.at_level("WARNING"):
+                assert sock.recv() is None
+            assert "retaining packet" in caplog.text
+            assert list(sock._pending_packets) == [bytes(first), bytes(second)]
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(bytes(first))))
+            assert sock.recv() is None
+            assert fake_qemu.recv_frame() == (I2CStreamMsgType.READ_RSP, bytes(first))
+            assert fake_qemu.recv_frame() == (I2CStreamMsgType.READ_RSP, bytes(second))
+        finally:
+            sock.close()
+
+    def test_read_req_more_than_queued_returns_available_packet_and_logs_debug(self, fake_qemu, caplog):
         sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
         try:
             fake_qemu.wait_for_connection()
             fake_qemu.recv_frame()  # drain HELLO
 
-            sock._read_buffer.extend(b"ab")
-            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 10))
+            packet = response_packet(b"ab")
+            sock.send(packet)
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(bytes(packet)) + 10))
             with caplog.at_level("DEBUG"):
                 assert sock.recv() is None
-            assert any("returning 2 queued bytes" in rec.message for rec in caplog.records)
+            assert any("returned 1 queued packets" in rec.message for rec in caplog.records)
             assert not any(rec.levelname == "WARNING" for rec in caplog.records)
 
             msg_type, body = fake_qemu.recv_frame()
             assert msg_type == I2CStreamMsgType.READ_RSP
-            assert body == b"ab"
+            assert body == bytes(packet)
+        finally:
+            sock.close()
+
+    def test_paced_message_is_published_atomically_for_concurrent_pull(self, fake_qemu):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        continue_reply = threading.Event()
+        first_staged = threading.Event()
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            first = response_packet(b"first", som=1, eom=0)
+            last = response_packet(b"last", som=0, eom=1, pkt_seq=1)
+
+            def send_paced_reply():
+                sock.send(first)
+                first_staged.set()
+                assert continue_reply.wait(timeout=2)
+                sock.send(last)
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(send_paced_reply)
+                assert first_staged.wait(timeout=2)
+                fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 64))
+                assert sock.recv() is None
+                with pytest.raises(socket.timeout):
+                    fake_qemu.recv_frame(timeout=0.05)
+                assert not sock._pending_packets
+
+                continue_reply.set()
+                future.result(timeout=2)
+                fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 64))
+                assert sock.recv() is None
+                assert fake_qemu.recv_frame() == (I2CStreamMsgType.READ_RSP, bytes(first))
+                assert fake_qemu.recv_frame() == (I2CStreamMsgType.READ_RSP, bytes(last))
+        finally:
+            continue_reply.set()
+            sock.close()
+
+    def test_invalid_read_requests_and_orphan_continuation_are_reported(self, fake_qemu, caplog):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            packet = response_packet(b"still pending")
+            sock.send(packet)
+            with pytest.raises(ValueError, match="continuation without SOM"):
+                sock.send(response_packet(b"orphan", som=0, eom=1, pkt_seq=1))
+            for invalid_body in [b"\x10", b"\x00\x40\x00", b"\x00\x00"]:
+                fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, invalid_body)
+                with caplog.at_level("WARNING"):
+                    assert sock.recv() is None
+            assert "malformed READ_REQ" in caplog.text
+            assert "invalid READ_REQ length 0" in caplog.text
+            assert list(sock._pending_packets) == [bytes(packet)]
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+        finally:
+            sock.close()
+
+    def test_new_som_discards_stale_fragment_and_recovers(self, fake_qemu, caplog):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            sock.send(response_packet(b"stale", som=1, eom=0))
+            first = response_packet(b"new", som=1, eom=0)
+            with caplog.at_level("WARNING"):
+                sock.send(first)
+            assert "discarding incomplete MCTP message" in caplog.text
+            assert sock._staged_packet_count == 1
+            assert not sock._pending_packets
+            last = response_packet(b"last", som=0, eom=1, pkt_seq=1)
+            sock.send(last)
+            assert list(sock._pending_packets) == [bytes(first), bytes(last)]
+            assert not sock._staged_messages
+            assert sock._staged_packet_count == 0
+        finally:
+            sock.close()
+
+    def test_failed_read_rsp_retains_packet_for_retry(self, fake_qemu, monkeypatch):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            packet = response_packet(b"retry")
+            sock.send(packet)
+            with monkeypatch.context() as patch:
+                patch.setattr(sock, "send_read_rsp", lambda data: 0)
+                fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 64))
+                assert sock.recv() is None
+            assert list(sock._pending_packets) == [bytes(packet)]
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 64))
+            assert sock.recv() is None
+            assert fake_qemu.recv_frame() == (I2CStreamMsgType.READ_RSP, bytes(packet))
+        finally:
+            sock.close()
+
+    def test_pending_cap_across_read_requests_and_recovers(self, fake_qemu):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            packet = response_packet(b"cap")
+            wire_bytes = bytes(packet)
+            for _ in range(512):
+                sock.send(packet)
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(wire_bytes) - 1))
+            assert sock.recv() is None
+            with pytest.raises(OverflowError, match="pending packet limit 512"):
+                sock.send(packet)
+            assert len(sock._pending_packets) == 512
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(wire_bytes)))
+            assert sock.recv() is None
+            assert [fake_qemu.recv_frame() for _ in range(512)] == [(I2CStreamMsgType.READ_RSP, wire_bytes)] * 512
+            assert not sock._pending_packets
+
+            for _ in range(512):
+                sock.send(packet)
+            with pytest.raises(OverflowError, match="pending packet limit 512"):
+                sock.send(packet)
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(wire_bytes)))
+            assert sock.recv() is None
+            assert [fake_qemu.recv_frame() for _ in range(512)] == [(I2CStreamMsgType.READ_RSP, wire_bytes)] * 512
+            assert not sock._pending_packets
+        finally:
+            sock.close()
+
+    def test_staged_fragments_count_toward_cap_and_overflow_discards_message(self, fake_qemu):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            queued = response_packet(b"queued", tag=3)
+            for _ in range(510):
+                sock.send(queued)
+            first = response_packet(b"first", som=1, eom=0)
+            second = response_packet(b"second", som=0, eom=0, pkt_seq=1)
+            sock.send(first)
+            sock.send(second)
+            assert len(sock._pending_packets) + sock._staged_packet_count == 512
+            with pytest.raises(OverflowError, match="pending packet limit 512"):
+                sock.send(response_packet(b"last", som=0, eom=1, pkt_seq=2))
+            assert list(sock._pending_packets) == [bytes(queued)] * 510
+            assert not sock._staged_messages
+            assert sock._staged_packet_count == 0
+
+            recovered = response_packet(b"recovered")
+            sock.send(recovered)
+            fake_qemu.send_frame(
+                I2CStreamMsgType.READ_REQ, struct.pack(">H", max(len(bytes(queued)), len(bytes(recovered))))
+            )
+            assert sock.recv() is None
+            assert [fake_qemu.recv_frame() for _ in range(510)] == [(I2CStreamMsgType.READ_RSP, bytes(queued))] * 510
+            assert fake_qemu.recv_frame() == (I2CStreamMsgType.READ_RSP, bytes(recovered))
+            assert not sock._pending_packets
+        finally:
+            sock.close()
+
+    def test_staged_commit_at_exact_cap_rejects_other_admissions(self, fake_qemu):
+        sock = QemuI2CStreamSocket(host=fake_qemu.host, port=fake_qemu.port, id_str="test-i2c", dump_hex=False)
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()  # drain HELLO
+            queued = response_packet(b"queued", tag=3)
+            for _ in range(510):
+                sock.send(queued)
+            first = response_packet(b"first", som=1, eom=0)
+            last = response_packet(b"last", som=0, eom=1, pkt_seq=1)
+            sock.send(first)
+            sock.send(last)
+            assert len(sock._pending_packets) == 512
+            assert not sock._staged_messages
+            assert sock._staged_packet_count == 0
+            with pytest.raises(OverflowError, match="pending packet limit 512"):
+                sock.send(SmbusTransport(dst_addr=0x08, src_addr=0x10, load=b"plain"))
+            with pytest.raises(OverflowError, match="pending packet limit 512"):
+                sock.send(response_packet(b"other", som=1, eom=0))
+            assert len(sock._pending_packets) == 512
+            assert not sock._staged_messages
+
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 64))
+            assert sock.recv() is None
+            assert [fake_qemu.recv_frame() for _ in range(510)] == [(I2CStreamMsgType.READ_RSP, bytes(queued))] * 510
+            assert fake_qemu.recv_frame() == (I2CStreamMsgType.READ_RSP, bytes(first))
+            assert fake_qemu.recv_frame() == (I2CStreamMsgType.READ_RSP, bytes(last))
+            assert not sock._pending_packets
         finally:
             sock.close()
 
@@ -298,7 +614,7 @@ class TestQemuI2CStreamMasterModeSend:
             msg_type, body = fake_qemu.recv_frame()
             assert msg_type == I2CStreamMsgType.WRITE
             assert body[0] == (0x12 << 1)  # single SMBus address byte, not duplicated
-            assert body == wire_bytes      # transmitted unchanged (PEC stays valid)
+            assert body == wire_bytes  # transmitted unchanged (PEC stays valid)
         finally:
             sock.close()
 

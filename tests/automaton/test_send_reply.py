@@ -93,6 +93,20 @@ def test_fragmented_replies_are_paced_but_whole_replies_are_not_delayed() -> Non
     assert elapsed < am.inter_packet_delay_s + 0.05, "a single-packet reply must not wait"
 
 
+def test_ordinary_socket_keeps_inter_packet_pacing(monkeypatch) -> None:
+    socket = RecordingSocket()
+    sent = []
+    sleeps = []
+    monkeypatch.setattr(socket, "send", sent.append)
+    monkeypatch.setattr("pymctp.automaton.simple_endpoint.time.sleep", sleeps.append)
+    am = SimpleEndpointAM(socket=socket, context=EndpointContext())
+
+    am.send_reply(_message(0xCC, 3))
+
+    assert len(sent) == 3
+    assert sleeps == [0.005, 0.005]
+
+
 def test_send_function_is_used_when_supplied() -> None:
     """The parameter is documented, so it has to actually be honoured."""
     sent: list[object] = []

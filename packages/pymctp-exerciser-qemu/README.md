@@ -111,10 +111,25 @@ hcp0 = EndpointManager.from_config(hcp0_config)
 hsp1 = EndpointManager.from_config(hsp1_config)
 ```
 
-By default (`master=False`), the socket speaks the slave/target model
-described above: WRITE frames are dispatched as parsed
-`SmbusTransportPacket`s, and outbound data is buffered until a READ_REQ
-arrives (see [`qemu_i2c_stream.py`](src/pymctp_exerciser_qemu/qemu_i2c_stream.py)).
+By default (`master=False`), the socket speaks the slave/target model:
+WRITE frames are dispatched as parsed `SmbusTransportPacket`s. Each
+`send()` supplies one complete outbound SMBus packet, never unsolicited data.
+A READ_REQ with a two-byte big-endian length flushes up to 512 pending
+packets, in order, using **one READ_RSP frame per whole packet**. The length
+is a per-packet capacity, not a total byte budget; if the first pending
+packet does not fit, it and all packets behind it remain queued until a
+large enough request arrives. An empty queue produces no READ_RSP frame.
+Fragmented MCTP messages (SOM through EOM) become visible to READ_REQ only
+when the complete message has been queued. The socket advertises this
+staging to `SimpleEndpointAM`, which skips its usual 5 ms inter-packet
+gap only for direct replies on the slave-mode socket. Master mode and
+other transports retain the gap. Incomplete messages remain staged; orphan
+continuations are errors. A new SOM with the same EID/tag/direction
+discards the previous incomplete message with a warning, then starts fresh.
+The slave admits at most 512 packets total, including staged fragments.
+Exceeding that limit raises `OverflowError`; if a continuation overflows,
+its entire staged message is discarded without publishing any fragments.
+See [`qemu_i2c_stream.py`](src/pymctp_exerciser_qemu/qemu_i2c_stream.py).
 
 Setting `master=True` instead speaks QEMU's `i2c-target-remote` *master*
 mode (peer-as-master / multi-master, mirroring the old UDP `i2c-netdev`
@@ -127,12 +142,12 @@ WRITE (0x00) body := [addr_byte][data...]
 addr_byte        := (i2c_7bit_address << 1) | 0   # write, no R/W bit set
 ```
 
-* `send()` (peer -> QEMU) prefixes the outgoing SMBus/MCTP bytes with
-  `target_address` (the BMC-side SMBus address to master-write to, required
-  when `master=True`) and transmits the WRITE frame immediately.
-* `recv()` (QEMU -> peer) strips the leading `addr_byte` (this endpoint's own
-  address, as written to by the BMC mastering the bus) and parses the
-  remainder as a `SmbusTransportPacket`.
+* `send()` (peer -> QEMU) transmits the WRITE frame immediately. It keeps
+  an existing SMBus destination byte (which is covered by the PEC), or
+  prefixes `target_address` (required when `master=True`) only if the
+  outgoing packet has no destination byte.
+* `recv()` (QEMU -> peer) parses the leading `addr_byte` with the rest of
+  the frame as a `SmbusTransportPacket`, preserving its destination address.
 
 ```python
 hn_config = {
