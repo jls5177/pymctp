@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import fields, replace
 from typing import cast
 
 from scapy.ansmachine import AnsweringMachine
@@ -18,7 +19,8 @@ from scapy.supersocket import SuperSocket
 from ..layers import TransportHdrPacket
 from ..layers.interfaces import AnyPacketType
 from ..layers.mctp.control import ControlHdrPacket
-from ..layers.mctp.types import EndpointContext, ICanReply
+from ..layers.mctp.transport import SmbusTransportPacket
+from ..layers.mctp.types import EndpointContext, ICanReply, Smbus7bitAddress
 from .sessions import EndpointSession
 
 logger = logging.getLogger(__name__)
@@ -80,8 +82,9 @@ class SimpleEndpointAM(AnsweringMachine):
     #: them -- every multi-packet reply silently disappears while single-packet
     #: replies keep working. There is no flow control on this link to wait for,
     #: so the gap is the only means of pacing for transports that send
-    #: immediately. Sockets that stage the full reply until EOM opt out
-    #: when used directly; all other transports retain the default.
+    #: immediately. Direct replies staged until EOM opt out, including
+    #: replies to the slave-only alias on a hybrid I2C socket; all other
+    #: transports retain the default.
     inter_packet_delay_s: float = 0.005
 
     def __init__(
@@ -214,13 +217,37 @@ class SimpleEndpointAM(AnsweringMachine):
         return req.haslayer(ControlHdrPacket) and req.getlayer(ControlHdrPacket).rq == 1
 
     def get_context_for_endpoint(self, req: Packet):
-        if not req.haslayer(TransportHdrPacket):
-            return self.context
-        hdrPkt = req.getlayer(TransportHdrPacket)
-        dst_eid = hdrPkt.dst
-        if not dst_eid or self.context.eid == dst_eid or not self.downstream_endpoints:
-            return self.context
-        return self.downstream_endpoints.get(dst_eid, None)
+        ctx = self.context
+        if req.haslayer(TransportHdrPacket):
+            dst_eid = req.getlayer(TransportHdrPacket).dst
+            if dst_eid and ctx.eid != dst_eid and self.downstream_endpoints:
+                ctx = self.downstream_endpoints.get(dst_eid)
+        alias = getattr(self.socket, "slave_only_address", None)
+        if (
+            ctx is self.context
+            and isinstance(req, SmbusTransportPacket)
+            and isinstance(alias, int)
+            and isinstance(ctx.physical_address, Smbus7bitAddress)
+            and ctx.physical_address.address != alias
+            and req.dst_addr == alias << 1
+        ):
+            alias_ctx = replace(ctx, physical_address=Smbus7bitAddress(alias))
+            alias_ctx._alias_source = ctx
+            alias_ctx._alias_initial = {field.name: getattr(ctx, field.name) for field in fields(ctx)}
+            return alias_ctx
+        return ctx
+
+    @staticmethod
+    def _commit_alias_context(ctx: EndpointContext) -> None:
+        """Retain endpoint state changes without changing its primary address."""
+        source = getattr(ctx, "_alias_source", None)
+        if source is None:
+            return
+        initial = ctx._alias_initial
+        for field in fields(ctx):
+            name = field.name
+            if name != "physical_address" and getattr(ctx, name) != initial[name]:
+                setattr(source, name, getattr(ctx, name))
 
     def make_reply(self, req: Packet | ICanReply) -> _PacketIterable:
         """
@@ -233,7 +260,10 @@ class SimpleEndpointAM(AnsweringMachine):
         if isinstance(req, ICanReply):
             ctx = self.get_context_for_endpoint(req)
             if ctx:
-                rsp = req.make_reply(ctx)
+                try:
+                    rsp = req.make_reply(ctx)
+                finally:
+                    self._commit_alias_context(ctx)
         # TODO: add any custom responses here
         return rsp
 
@@ -252,8 +282,8 @@ class SimpleEndpointAM(AnsweringMachine):
 
         Packets are paced by ``inter_packet_delay_s``, because the emulated
         controllers on the other end take one frame at a time and drop the
-        rest of a burst. A socket that stages complete replies until EOM
-        does not need this gap when sending directly through the socket.
+        rest of a burst. A direct reply staged until EOM (including an
+        opt-in slave-only address on a hybrid socket) does not need this gap.
 
         @note This method does not wait for a response before sending the next reply
 
@@ -262,8 +292,13 @@ class SimpleEndpointAM(AnsweringMachine):
         """
         packets = list(reply)
         inter_packet_delay_s = self.inter_packet_delay_s
-        if send_function is None and getattr(self.socket, "stages_complete_replies", False):
-            inter_packet_delay_s = 0.0
+        if send_function is None:
+            stages_reply_packets = getattr(self.socket, "stages_reply_packets", None)
+            if callable(stages_reply_packets):
+                if stages_reply_packets(packets):
+                    inter_packet_delay_s = 0.0
+            elif getattr(self.socket, "stages_complete_replies", False):
+                inter_packet_delay_s = 0.0
         with self._send_lock:
             if self.response_delay_s:
                 time.sleep(self.response_delay_s)

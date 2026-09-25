@@ -92,7 +92,8 @@ hcp0_config = {
 }
 
 # I2CStreamSocketConfig fields: host, port, name, dump_hex=True,
-# dump_packet=False, connect_timeout=5.0, master=False, target_address=None.
+# dump_packet=False, connect_timeout=5.0, master=False, target_address=None,
+# slave_only_address=None.
 hsp1_config = {
     "context": {
         "physical_address": {"address": 0xB0 >> 1},
@@ -122,8 +123,9 @@ large enough request arrives. An empty queue produces no READ_RSP frame.
 Fragmented MCTP messages (SOM through EOM) become visible to READ_REQ only
 when the complete message has been queued. The socket advertises this
 staging to `SimpleEndpointAM`, which skips its usual 5 ms inter-packet
-gap only for direct replies on the slave-mode socket. Master mode and
-other transports retain the gap. Incomplete messages remain staged; orphan
+gap only for direct replies on the slave-mode socket (and alias replies in
+hybrid mode). Master-mode primary-address replies, custom send functions,
+and other transports retain the gap. Incomplete messages remain staged; orphan
 continuations are errors. A new SOM with the same EID/tag/direction
 discards the previous incomplete message with a warning, then starts fresh.
 The slave admits at most 512 packets total, including staged fragments.
@@ -148,6 +150,17 @@ addr_byte        := (i2c_7bit_address << 1) | 0   # write, no R/W bit set
   outgoing packet has no destination byte.
 * `recv()` (QEMU -> peer) parses the leading `addr_byte` with the rest of
   the frame as a `SmbusTransportPacket`, preserving its destination address.
+
+For a dual-address endpoint such as new C41A8 OMC, configure the QEMU device
+with primary address `0x54` and alternate address `0x53` on **one connection**.
+Set `master=True`, `target_address=0x10` (the BMC address), and opt in with
+`slave_only_address=0x53`. Requests to either address retain their physical
+destination byte. Replies sourced from `0x53` (`src_addr=0xA7`) are staged as
+whole messages and returned only on READ_REQ; no unsolicited WRITE is sent for
+this alias. Packets sourced from primary `0x54` continue to use immediate
+master WRITE and 5 ms interpacket pacing. The alias must be a distinct 7-bit
+address and requires master mode; without it, pure master and slave behavior
+is unchanged. Both staged and queued alias packets share the 512-packet cap.
 
 ```python
 hn_config = {

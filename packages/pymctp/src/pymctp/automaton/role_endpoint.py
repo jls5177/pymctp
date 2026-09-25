@@ -106,12 +106,15 @@ class RoleBasedEndpointAM(SimpleEndpointAM):
         """Check behaviors first, then fall back to the default reply path."""
         ctx = self.get_context_for_endpoint(req)
         if ctx:
-            for behavior in self._behaviors:
-                if behavior.can_handle(req, ctx):
-                    resp: HandlerResponse | None = behavior.handle(req, ctx)
-                    if resp and resp.reply:
-                        return resp.reply
-                    if resp and resp.stop_processing:
-                        return None
+            try:
+                for behavior in self._behaviors:
+                    if behavior.can_handle(req, ctx):
+                        resp: HandlerResponse | None = behavior.handle(req, ctx)
+                        if resp and resp.reply:
+                            return resp.reply
+                        if resp and resp.stop_processing:
+                            return None
+            finally:
+                self._commit_alias_context(ctx)
         # Fall back to default SimpleEndpointAM logic
         return super().make_reply(req)

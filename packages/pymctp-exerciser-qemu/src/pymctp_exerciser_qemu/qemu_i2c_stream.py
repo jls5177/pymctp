@@ -26,11 +26,11 @@ Message types (minimal, new protocol — not shared with the UDP
                      Sent via :meth:`send_alert`.
     0x07 HELLO     — body ``[u32 proto_version BE]``, sent once on connect.
 
-Outbound data queued via :meth:`send` (already-wrapped SMBus/MCTP packets)
-waits until the master issues a READ_REQ; the slave cannot push data onto
-the bus unsolicited. Complete MCTP messages are published as a batch, so a
-READ_REQ cannot observe only the first packets of a paced reply.
-The slave holds at most 512 packets across complete and staged messages.
+In slave mode, outbound data queued via :meth:`send` (already-wrapped
+SMBus/MCTP packets) waits until the master issues a READ_REQ; the slave
+cannot push data onto the bus unsolicited. Complete MCTP messages are
+published as a batch. The queue holds at most 512 packets across complete
+and staged messages.
 
 Master mode
 ------------
@@ -51,9 +51,13 @@ prefixed instead::
   the bus and writes ``data`` to ``target_address``.
 * :meth:`recv` (QEMU -> peer): the BMC has mastered the bus and written to
   this endpoint's own address. The leading ``addr_byte`` (this endpoint's own
-  address) is stripped and the remainder is parsed as a
+  address) is retained when parsing the whole frame as a
   :class:`~pymctp.layers.mctp.SmbusTransportPacket`, exactly as the old
   ``qemu_i2c_netdev`` transport parses its (unframed) UDP datagrams.
+
+With ``slave_only_address`` set, replies sourced from that 7-bit address
+are staged for READ_REQ even in master mode. Other packets continue to
+use immediate master WRITE with normal interpacket pacing.
 """
 
 from __future__ import annotations
@@ -75,6 +79,7 @@ from scapy.supersocket import SuperSocket
 from scapy.utils import linehexdump
 
 from pymctp.layers.mctp import SmbusTransport, TransportHdrPacket
+from pymctp.layers.mctp.transport import SmbusTransportPacket
 
 from .stream_framing import FrameDecoder, encode_frame
 
@@ -135,6 +140,7 @@ class QemuI2CStreamSocket(SuperSocket):
         connect_timeout: float = 5.0,
         master: bool = False,
         target_address: int | None = None,
+        slave_only_address: int | None = None,
         **kwargs,
     ):
         """Create the socket.
@@ -146,6 +152,9 @@ class QemuI2CStreamSocket(SuperSocket):
                 that master-mode WRITE frames should be addressed to (used to
                 build the leading ``addr_byte`` in :meth:`send`). Required
                 when ``master=True``; ignored otherwise.
+            slave_only_address: Optional 7-bit local alias whose replies
+                require slave READ_REQ/READ_RSP turn-around. Requires master
+                mode; all other traffic retains immediate master behavior.
         """
         self.id_str = id_str
         self.dump_hex = dump_hex
@@ -155,14 +164,24 @@ class QemuI2CStreamSocket(SuperSocket):
         self.port = port
         self.master = master
         self.target_address = target_address
+        self.slave_only_address = slave_only_address
 
         if self.master and self.target_address is None:
             msg = f"{id_str}: master=True requires a target_address (BMC SMBus address)"
             raise ValueError(msg)
+        if slave_only_address is not None:
+            if (
+                not master
+                or type(slave_only_address) is not int
+                or not 0 <= slave_only_address <= 0x7F
+                or slave_only_address == target_address
+            ):
+                msg = f"{id_str}: slave_only_address requires master=True and a distinct 7-bit address"
+                raise ValueError(msg)
 
         self._decoder = FrameDecoder()
         self._pending_frames: collections.deque[tuple[int, bytes]] = collections.deque()
-        # Unused in master mode, where send() transmits immediately.
+        # Also used for slave-only alias replies in master mode.
         self._pending_packets: collections.deque[bytes] = collections.deque()
         self._staged_messages: dict[tuple[int, int, int, int], list[bytes]] = {}
         self._staged_packet_count = 0
@@ -196,6 +215,17 @@ class QemuI2CStreamSocket(SuperSocket):
     # SuperSocket overrides
     # ------------------------------------------------------------------
 
+    def _is_slave_only_packet(self, packet: Packet) -> bool:
+        return (
+            self.slave_only_address is not None
+            and isinstance(packet, SmbusTransportPacket)
+            and packet.src_addr == (self.slave_only_address << 1 | 1)
+        )
+
+    def stages_reply_packets(self, packets: list[Packet]) -> bool:
+        """Whether direct replies can be staged without interpacket pacing."""
+        return not self.master or (bool(packets) and all(self._is_slave_only_packet(packet) for packet in packets))
+
     def send(self, x: Packet) -> int:
         """Send an already SMBus/MCTP-wrapped packet to the QEMU peer.
 
@@ -203,9 +233,9 @@ class QemuI2CStreamSocket(SuperSocket):
         this topology, so a response cannot be pushed onto the bus; it is
         only delivered once the master issues a READ_REQ (see :meth:`recv`).
 
-        In master mode, QEMU masters the bus on our behalf, so the frame is
-        transmitted immediately, address-prefixed with ``target_address``
-        (see the module docstring's "Master mode" section).
+        In master mode, packets sourced from the opt-in slave-only alias
+        still wait for READ_REQ. All others are transmitted immediately,
+        address-prefixed with ``target_address`` if needed.
         """
         sx = raw(x)
         with contextlib.suppress(AttributeError):
@@ -216,7 +246,7 @@ class QemuI2CStreamSocket(SuperSocket):
         if self.dump_packet:
             print(f"{self.id_str}>TX> {x.summary()}")
 
-        if self.master:
+        if self.master and not self._is_slave_only_packet(x):
             self._send_master_write(sx)
             return len(sx)
 

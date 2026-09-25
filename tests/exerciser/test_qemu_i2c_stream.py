@@ -21,8 +21,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from pymctp.automaton.simple_endpoint import SimpleEndpointAM
+from pymctp.automaton.role_endpoint import RoleBasedEndpointAM
 from pymctp.layers.mctp import SmbusTransport, TransportHdrPacket, MsgTypes
-from pymctp.layers.mctp.types import EndpointContext
+from pymctp.layers.mctp.control import ControlHdr, ContrlCmdCodes, GetEndpointID, SetEndpointIDRequestPacket
+from pymctp.layers.mctp.control.get_eid import GetEndpointIDRequestPacket
+from pymctp.layers.mctp.types import EndpointContext, Smbus7bitAddress
+from pymctp_exerciser_qemu.configs import I2CStreamSocketConfig
 from pymctp_exerciser_qemu.qemu_i2c_stream import (
     PROTO_VERSION,
     I2CStreamMsgType,
@@ -90,11 +94,21 @@ def fake_qemu():
     server.close()
 
 
-def response_packet(body: bytes, *, som: int = 1, eom: int = 1, pkt_seq: int = 0, tag: int = 2):
+def response_packet(
+    body: bytes, *, som: int = 1, eom: int = 1, pkt_seq: int = 0, tag: int = 2, src_addr: int = 0x10
+):
     hdr = TransportHdrPacket(
         dst=0x08, src=0x10, som=som, eom=eom, pkt_seq=pkt_seq, to=0, tag=tag, msg_type=MsgTypes.CTRL.value
     )
-    return SmbusTransport(dst_addr=0x08, src_addr=0x10, load=hdr / body)
+    return SmbusTransport(dst_addr=0x08, src_addr=src_addr, load=hdr / body)
+
+
+def control_request(address: int):
+    return SmbusTransport(
+        dst_addr=address << 1,
+        src_addr=0x20,
+        load=TransportHdrPacket(dst=8, src=9, to=1, som=1, eom=1) / ControlHdr(rq=True) / GetEndpointID(),
+    )
 
 
 class TestQemuI2CStreamConnectAndHello:
@@ -720,3 +734,255 @@ class TestQemuI2CStreamMasterModeRecv:
             assert any("too short" in rec.message for rec in caplog.records)
         finally:
             sock.close()
+
+
+class TestQemuI2CStreamSlaveOnlyAlias:
+    @pytest.mark.parametrize("am_type", [SimpleEndpointAM, RoleBasedEndpointAM])
+    def test_control_replies_use_request_address_and_correct_turnaround(self, fake_qemu, am_type):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host, port=fake_qemu.port, dump_hex=False,
+            master=True, target_address=0x10, slave_only_address=0x53,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()
+            ctx = EndpointContext(physical_address=Smbus7bitAddress(0x54), assigned_eid=8)
+            am = am_type(socket=sock, context=ctx)
+            for address, expected_type in ((0x53, I2CStreamMsgType.READ_RSP), (0x54, I2CStreamMsgType.WRITE)):
+                request = control_request(address)
+                fake_qemu.send_frame(I2CStreamMsgType.WRITE, bytes(request))
+                incoming = sock.recv()
+                assert incoming.dst_addr == address << 1
+                selected = am.get_context_for_endpoint(incoming)
+                assert selected.physical_address == Smbus7bitAddress(address)
+                if address == 0x53:
+                    assert selected is not ctx
+                else:
+                    assert selected is ctx
+                reply = list(am.make_reply(incoming))
+                assert len(reply) == 1
+                assert reply[0].src_addr == (address << 1 | 1)
+                am.send_reply(reply)
+                if address == 0x53:
+                    with pytest.raises(socket.timeout):
+                        fake_qemu.recv_frame(timeout=0.05)
+                    fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(bytes(reply[0]))))
+                    assert sock.recv() is None
+                assert fake_qemu.recv_frame() == (expected_type, bytes(reply[0]))
+                assert ctx.physical_address == Smbus7bitAddress(0x54)
+        finally:
+            sock.close()
+
+    @pytest.mark.parametrize("am_type", [SimpleEndpointAM, RoleBasedEndpointAM])
+    def test_legacy_set_eid_updates_shared_state_without_changing_primary_address(self, fake_qemu, am_type):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host, port=fake_qemu.port, dump_hex=False,
+            master=True, target_address=0x10, slave_only_address=0x53,
+        )
+        try:
+            ctx = EndpointContext(physical_address=Smbus7bitAddress(0x54), assigned_eid=8)
+            am = am_type(socket=sock, context=ctx)
+            request = SmbusTransport(
+                bytes(SmbusTransport(
+                    dst_addr=0xA6,
+                    src_addr=0x20,
+                    load=TransportHdrPacket(dst=8, src=9, to=1, som=1, eom=1)
+                    / ControlHdr(rq=True, cmd_code=ContrlCmdCodes.SetEndpointID)
+                    / SetEndpointIDRequestPacket(op=0, eid=10),
+                ))
+            )
+            reply = list(am.make_reply(request))
+            assert reply[0].src_addr == 0xA7
+            assert ctx.assigned_eid == 10
+            assert ctx.discovered is True
+            assert ctx.physical_address == Smbus7bitAddress(0x54)
+            primary = control_request(0x54)
+            primary.load.dst = 10
+            assert list(am.make_reply(primary))[0].src_addr == 0xA9
+        finally:
+            sock.close()
+
+    def test_fragmented_alias_reply_stages_all_18_without_pacing(self, fake_qemu, monkeypatch):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host, port=fake_qemu.port, dump_hex=False,
+            master=True, target_address=0x10, slave_only_address=0x53,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()
+            fake_qemu.send_frame(I2CStreamMsgType.WRITE, bytes(control_request(0x53)))
+            incoming = sock.recv()
+            assert incoming.dst_addr == 0xA6
+            large_payload = bytes(range(256)) + bytes(range(16))
+            monkeypatch.setattr(
+                GetEndpointIDRequestPacket, "make_ctrl_reply", lambda self, ctx: (0, large_payload)
+            )
+            sleeps = []
+            monkeypatch.setattr("pymctp.automaton.simple_endpoint.time.sleep", sleeps.append)
+            am = SimpleEndpointAM(
+                socket=sock,
+                context=EndpointContext(physical_address=Smbus7bitAddress(0x54), assigned_eid=8, mtu_size=16),
+            )
+            packets = list(am.make_reply(incoming))
+            assert len(packets) == 18
+            assert all(packet.src_addr == 0xA7 for packet in packets)
+            assert not sock.stages_complete_replies
+            assert sock.stages_reply_packets(packets)
+            am.send_reply(packets)
+            assert sleeps == []
+            assert list(sock._pending_packets) == [bytes(packet) for packet in packets]
+            assert not sock._staged_messages
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", max(len(bytes(p)) for p in packets)))
+            assert sock.recv() is None
+            assert [fake_qemu.recv_frame() for _ in packets] == [
+                (I2CStreamMsgType.READ_RSP, bytes(packet)) for packet in packets
+            ]
+        finally:
+            sock.close()
+
+    def test_primary_and_custom_sender_keep_pacing_and_master_write(self, fake_qemu, monkeypatch):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host, port=fake_qemu.port, dump_hex=False,
+            master=True, target_address=0x10, slave_only_address=0x53,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()
+            packets = [
+                response_packet(b"first", som=1, eom=0, src_addr=0xA9),
+                response_packet(b"last", som=0, eom=1, pkt_seq=1, src_addr=0xA9),
+            ]
+            sleeps = []
+            monkeypatch.setattr("pymctp.automaton.simple_endpoint.time.sleep", sleeps.append)
+            am = SimpleEndpointAM(socket=sock, context=EndpointContext())
+            assert not sock.stages_reply_packets(packets)
+            am.send_reply(packets)
+            assert sleeps == [0.005]
+            assert [fake_qemu.recv_frame() for _ in packets] == [
+                (I2CStreamMsgType.WRITE, bytes(packet)) for packet in packets
+            ]
+            sent = []
+            am.send_reply(
+                [response_packet(b"one", som=1, eom=0, src_addr=0xA7),
+                 response_packet(b"two", som=0, eom=1, pkt_seq=1, src_addr=0xA7)],
+                send_function=sent.append,
+            )
+            assert len(sent) == 2
+            assert sleeps == [0.005, 0.005]
+            assert not sock._pending_packets
+        finally:
+            sock.close()
+
+    def test_alias_queued_and_staged_packets_share_512_limit(self, fake_qemu):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host, port=fake_qemu.port, dump_hex=False,
+            master=True, target_address=0x10, slave_only_address=0x53,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()
+            queued = response_packet(b"queued", tag=3, src_addr=0xA7)
+            for _ in range(510):
+                sock.send(queued)
+            first = response_packet(b"first", som=1, eom=0, src_addr=0xA7)
+            second = response_packet(b"second", som=0, eom=0, pkt_seq=1, src_addr=0xA7)
+            sock.send(first)
+            sock.send(second)
+            assert len(sock._pending_packets) + sock._staged_packet_count == 512
+            with pytest.raises(OverflowError, match="pending packet limit 512"):
+                sock.send(response_packet(b"last", som=0, eom=1, pkt_seq=2, src_addr=0xA7))
+            assert len(sock._pending_packets) == 510
+            assert not sock._staged_messages
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", len(bytes(queued))))
+            assert sock.recv() is None
+            assert [fake_qemu.recv_frame() for _ in range(510)] == [
+                (I2CStreamMsgType.READ_RSP, bytes(queued))
+            ] * 510
+            assert not sock._pending_packets
+        finally:
+            sock.close()
+
+    def test_read_during_alias_fragmentation_cannot_see_partial_reply(self, fake_qemu):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host, port=fake_qemu.port, dump_hex=False,
+            master=True, target_address=0x10, slave_only_address=0x53,
+        )
+        try:
+            fake_qemu.wait_for_connection()
+            fake_qemu.recv_frame()
+            first = response_packet(b"first", som=1, eom=0, src_addr=0xA7)
+            last = response_packet(b"last", som=0, eom=1, pkt_seq=1, src_addr=0xA7)
+            sock.send(first)
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 64))
+            assert sock.recv() is None
+            with pytest.raises(socket.timeout):
+                fake_qemu.recv_frame(timeout=0.05)
+            sock.send(last)
+            fake_qemu.send_frame(I2CStreamMsgType.READ_REQ, struct.pack(">H", 64))
+            assert sock.recv() is None
+            assert [fake_qemu.recv_frame() for _ in range(2)] == [
+                (I2CStreamMsgType.READ_RSP, bytes(first)),
+                (I2CStreamMsgType.READ_RSP, bytes(last)),
+            ]
+        finally:
+            sock.close()
+
+    def test_unconfigured_and_wrong_address_do_not_get_alias_context(self, fake_qemu):
+        sock = QemuI2CStreamSocket(
+            host=fake_qemu.host, port=fake_qemu.port, dump_hex=False, master=True, target_address=0x10
+        )
+        try:
+            ctx = EndpointContext(physical_address=Smbus7bitAddress(0x54), assigned_eid=8)
+            am = SimpleEndpointAM(socket=sock, context=ctx)
+            request = control_request(0x53)
+            assert am.get_context_for_endpoint(request) is ctx
+            assert am.make_reply(request) is None
+        finally:
+            sock.close()
+
+        other_qemu = FakeQemuServer()
+        sock = QemuI2CStreamSocket(
+            host=other_qemu.host, port=other_qemu.port, dump_hex=False,
+            master=True, target_address=0x10, slave_only_address=0x53,
+        )
+        try:
+            am = SimpleEndpointAM(socket=sock, context=ctx)
+            assert am.get_context_for_endpoint(control_request(0x52)) is ctx
+            assert am.make_reply(control_request(0x52)) is None
+            downstream = EndpointContext(physical_address=Smbus7bitAddress(0x52), assigned_eid=9)
+            bridged = SimpleEndpointAM(socket=sock, context=ctx, downstream_endpoints={9: downstream})
+            request = control_request(0x53)
+            request.load.dst = 9
+            assert bridged.get_context_for_endpoint(request) is downstream
+            assert bridged.make_reply(request) is None
+            assert ctx.physical_address == Smbus7bitAddress(0x54)
+        finally:
+            sock.close()
+            other_qemu.close()
+
+    @pytest.mark.parametrize(
+        ("master", "target", "alias"),
+        [(False, None, 0x53), (True, 0x10, -1), (True, 0x10, 0x80),
+         (True, 0x10, True), (True, 0x53, 0x53)],
+    )
+    def test_invalid_alias_rejected_before_connection(self, fake_qemu, master, target, alias):
+        with pytest.raises(ValueError, match="slave_only_address"):
+            QemuI2CStreamSocket(
+                host=fake_qemu.host, port=fake_qemu.port, dump_hex=False,
+                master=master, target_address=target, slave_only_address=alias,
+            )
+
+    def test_config_passes_alias_to_socket(self, fake_qemu):
+        config = I2CStreamSocketConfig(
+            host=fake_qemu.host, port=fake_qemu.port, name="omc", dump_hex=False,
+            master=True, target_address=0x10, slave_only_address=0x53,
+        )
+        try:
+            assert config.socket.slave_only_address == 0x53
+            assert config.socket.master is True
+        finally:
+            config.close_socket()

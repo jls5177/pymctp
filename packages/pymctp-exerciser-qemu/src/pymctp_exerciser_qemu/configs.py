@@ -273,7 +273,8 @@ class I2CStreamSocketConfig(SupersocketConfig):
     wire format (mirroring the old UDP ``i2c-netdev`` transport): WRITE
     frames are address-prefixed and sent immediately, with no
     READ_REQ/READ_RSP turn-around. ``target_address`` (the BMC's own SMBus
-    address) is required in that mode.
+    address) is required in that mode. ``slave_only_address`` optionally
+    preserves READ_REQ/READ_RSP replies for a second local address.
     """
 
     type = "i2c-stream"
@@ -285,6 +286,7 @@ class I2CStreamSocketConfig(SupersocketConfig):
     connect_timeout: float = 5.0
     master: bool = False
     target_address: int | None = None
+    slave_only_address: int | None = None
 
     socket: Any | None = field(
         default=None, init=False, metadata={"serialize": pickle.dumps, "deserialize": pickle.loads}
@@ -300,6 +302,7 @@ class I2CStreamSocketConfig(SupersocketConfig):
             connect_timeout=self.connect_timeout,
             master=self.master,
             target_address=self.target_address,
+            slave_only_address=self.slave_only_address,
         )
 
     def close_socket(self):
