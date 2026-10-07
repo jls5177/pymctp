@@ -196,7 +196,7 @@ class EndpointContext(DataClassDictMixin):
     pool_size: int = 0
     mtu_size: int = 240 - (4 + 5)  # make room for transport and protocol headers
     allocated_pool: list[int] | None = None
-    endpoint_uuid: uuid.UUID = dataclasses.field(default_factory=lambda: uuid.uuid4())
+    endpoint_uuid: uuid.UUID | None = dataclasses.field(default_factory=lambda: uuid.uuid4())
     supported_msg_types: list[MsgTypes] = dataclasses.field(default_factory=lambda: [MsgTypes.CTRL])
     supported_vdm_msg_types: list[VendorCapabilitySet] = dataclasses.field(default_factory=list)
     mctp_responses: MctpResponseList | None = None
